@@ -37,6 +37,7 @@ dtb-$(CONFIG_ARCH_QCOM)	+= msm8916-wingtech-wt88047.dtb
 dtb-$(CONFIG_ARCH_QCOM)	+= msm8916-handsome-openstick-ufi001b.dtb
 dtb-$(CONFIG_ARCH_QCOM)	+= msm8916-handsome-openstick-ufi001c.dtb
 dtb-$(CONFIG_ARCH_QCOM)	+= msm8916-handsome-openstick-sp970.dtb
+dtb-$(CONFIG_ARCH_QCOM)	+= msm8916-handsome-openstick-uf896-v1_1.dtb
 dtb-$(CONFIG_ARCH_QCOM)	+= msm8916-handsome-openstick-uz801.dtb
 dtb-$(CONFIG_ARCH_QCOM)	+= msm8992-bullhead-rev-101.dtb
 dtb-$(CONFIG_ARCH_QCOM)	+= msm8992-msft-lumia-octagon-talkman.dtb
