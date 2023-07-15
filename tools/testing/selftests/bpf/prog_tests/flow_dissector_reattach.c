@@ -47,9 +47,9 @@ static int load_prog(enum bpf_prog_type type)
 	};
 	int fd;
 
-	fd = bpf_load_program(type, prog, ARRAY_SIZE(prog), "GPL", 0, NULL, 0);
+	fd = bpf_test_load_program(type, prog, ARRAY_SIZE(prog), "GPL", 0, NULL, 0);
 	if (CHECK_FAIL(fd < 0))
-		perror("bpf_load_program");
+		perror("bpf_test_load_program");
 
 	return fd;
 }
@@ -60,9 +60,9 @@ static __u32 query_prog_id(int prog)
 	__u32 info_len = sizeof(info);
 	int err;
 
-	err = bpf_obj_get_info_by_fd(prog, &info, &info_len);
+	err = bpf_prog_get_info_by_fd(prog, &info, &info_len);
 	if (CHECK_FAIL(err || info_len != sizeof(info))) {
-		perror("bpf_obj_get_info_by_fd");
+		perror("bpf_prog_get_info_by_fd");
 		return 0;
 	}
 
@@ -497,7 +497,7 @@ static void test_link_get_info(int netns, int prog1, int prog2)
 	}
 
 	info_len = sizeof(info);
-	err = bpf_obj_get_info_by_fd(link, &info, &info_len);
+	err = bpf_link_get_info_by_fd(link, &info, &info_len);
 	if (CHECK_FAIL(err)) {
 		perror("bpf_obj_get_info");
 		goto out_unlink;
@@ -521,7 +521,7 @@ static void test_link_get_info(int netns, int prog1, int prog2)
 
 	link_id = info.id;
 	info_len = sizeof(info);
-	err = bpf_obj_get_info_by_fd(link, &info, &info_len);
+	err = bpf_link_get_info_by_fd(link, &info, &info_len);
 	if (CHECK_FAIL(err)) {
 		perror("bpf_obj_get_info");
 		goto out_unlink;
@@ -546,7 +546,7 @@ static void test_link_get_info(int netns, int prog1, int prog2)
 	netns = -1;
 
 	info_len = sizeof(info);
-	err = bpf_obj_get_info_by_fd(link, &info, &info_len);
+	err = bpf_link_get_info_by_fd(link, &info, &info_len);
 	if (CHECK_FAIL(err)) {
 		perror("bpf_obj_get_info");
 		goto out_unlink;
@@ -628,7 +628,7 @@ out_close:
 	}
 }
 
-void test_flow_dissector_reattach(void)
+void serial_test_flow_dissector_reattach(void)
 {
 	int err, new_net, saved_net;
 

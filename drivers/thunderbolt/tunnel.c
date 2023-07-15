@@ -9,6 +9,7 @@
 #include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/list.h>
+#include <linux/ktime.h>
 
 #include "tunnel.h"
 #include "tb.h"
@@ -44,12 +45,17 @@
 /* Minimum number of credits for DMA path */
 #define TB_MIN_DMA_CREDITS		1U
 
+static bool bw_alloc_mode = true;
+module_param(bw_alloc_mode, bool, 0444);
+MODULE_PARM_DESC(bw_alloc_mode,
+		 "enable bandwidth allocation mode if supported (default: true)");
+
 static const char * const tb_tunnel_names[] = { "PCI", "DP", "DMA", "USB3" };
 
 #define __TB_TUNNEL_PRINT(level, tunnel, fmt, arg...)                   \
 	do {                                                            \
 		struct tb_tunnel *__tunnel = (tunnel);                  \
-		level(__tunnel->tb, "%llx:%x <-> %llx:%x (%s): " fmt,   \
+		level(__tunnel->tb, "%llx:%u <-> %llx:%u (%s): " fmt,   \
 		      tb_route(__tunnel->src_port->sw),                 \
 		      __tunnel->src_port->port,                         \
 		      tb_route(__tunnel->dst_port->sw),                 \
@@ -102,8 +108,11 @@ static unsigned int tb_available_credits(const struct tb_port *port,
 		 * Maximum number of DP streams possible through the
 		 * lane adapter.
 		 */
-		ndp = (credits - (usb3 + pcie + spare)) /
-		      (sw->min_dp_aux_credits + sw->min_dp_main_credits);
+		if (sw->min_dp_aux_credits + sw->min_dp_main_credits)
+			ndp = (credits - (usb3 + pcie + spare)) /
+			      (sw->min_dp_aux_credits + sw->min_dp_main_credits);
+		else
+			ndp = 0;
 	} else {
 		ndp = 0;
 	}
@@ -207,12 +216,14 @@ static int tb_pci_init_path(struct tb_path *path)
  * tb_tunnel_discover_pci() - Discover existing PCIe tunnels
  * @tb: Pointer to the domain structure
  * @down: PCIe downstream adapter
+ * @alloc_hopid: Allocate HopIDs from visited ports
  *
  * If @down adapter is active, follows the tunnel to the PCIe upstream
  * adapter and back. Returns the discovered tunnel or %NULL if there was
  * no tunnel.
  */
-struct tb_tunnel *tb_tunnel_discover_pci(struct tb *tb, struct tb_port *down)
+struct tb_tunnel *tb_tunnel_discover_pci(struct tb *tb, struct tb_port *down,
+					 bool alloc_hopid)
 {
 	struct tb_tunnel *tunnel;
 	struct tb_path *path;
@@ -233,7 +244,7 @@ struct tb_tunnel *tb_tunnel_discover_pci(struct tb *tb, struct tb_port *down)
 	 * case.
 	 */
 	path = tb_path_discover(down, TB_PCI_HOPID, NULL, -1,
-				&tunnel->dst_port, "PCIe Up");
+				&tunnel->dst_port, "PCIe Up", alloc_hopid);
 	if (!path) {
 		/* Just disable the downstream port */
 		tb_pci_port_enable(down, false);
@@ -244,7 +255,7 @@ struct tb_tunnel *tb_tunnel_discover_pci(struct tb *tb, struct tb_port *down)
 		goto err_free;
 
 	path = tb_path_discover(tunnel->dst_port, -1, down, TB_PCI_HOPID, NULL,
-				"PCIe Down");
+				"PCIe Down", alloc_hopid);
 	if (!path)
 		goto err_deactivate;
 	tunnel->paths[TB_PCI_PATH_DOWN] = path;
@@ -334,9 +345,10 @@ static bool tb_dp_is_usb4(const struct tb_switch *sw)
 	return tb_switch_is_usb4(sw) || tb_switch_is_titan_ridge(sw);
 }
 
-static int tb_dp_cm_handshake(struct tb_port *in, struct tb_port *out)
+static int tb_dp_cm_handshake(struct tb_port *in, struct tb_port *out,
+			      int timeout_msec)
 {
-	int timeout = 10;
+	ktime_t timeout = ktime_add_ms(ktime_get(), timeout_msec);
 	u32 val;
 	int ret;
 
@@ -363,8 +375,8 @@ static int tb_dp_cm_handshake(struct tb_port *in, struct tb_port *out)
 			return ret;
 		if (!(val & DP_STATUS_CTRL_CMHS))
 			return 0;
-		usleep_range(10, 100);
-	} while (timeout--);
+		usleep_range(100, 150);
+	} while (ktime_before(ktime_get(), timeout));
 
 	return -ETIMEDOUT;
 }
@@ -514,7 +526,7 @@ static int tb_dp_xchg_caps(struct tb_tunnel *tunnel)
 	 * Perform connection manager handshake between IN and OUT ports
 	 * before capabilities exchange can take place.
 	 */
-	ret = tb_dp_cm_handshake(in, out);
+	ret = tb_dp_cm_handshake(in, out, 1500);
 	if (ret)
 		return ret;
 
@@ -578,8 +590,145 @@ static int tb_dp_xchg_caps(struct tb_tunnel *tunnel)
 		out_dp_cap = tb_dp_cap_set_lanes(out_dp_cap, new_lanes);
 	}
 
+	/*
+	 * Titan Ridge does not disable AUX timers when it gets
+	 * SET_CONFIG with SET_LTTPR_MODE set. This causes problems with
+	 * DP tunneling.
+	 */
+	if (tb_route(out->sw) && tb_switch_is_titan_ridge(out->sw)) {
+		out_dp_cap |= DP_COMMON_CAP_LTTPR_NS;
+		tb_port_dbg(out, "disabling LTTPR\n");
+	}
+
 	return tb_port_write(in, &out_dp_cap, TB_CFG_PORT,
 			     in->cap_adap + DP_REMOTE_CAP, 1);
+}
+
+static int tb_dp_bw_alloc_mode_enable(struct tb_tunnel *tunnel)
+{
+	int ret, estimated_bw, granularity, tmp;
+	struct tb_port *out = tunnel->dst_port;
+	struct tb_port *in = tunnel->src_port;
+	u32 out_dp_cap, out_rate, out_lanes;
+	u32 in_dp_cap, in_rate, in_lanes;
+	u32 rate, lanes;
+
+	if (!bw_alloc_mode)
+		return 0;
+
+	ret = usb4_dp_port_set_cm_bw_mode_supported(in, true);
+	if (ret)
+		return ret;
+
+	ret = usb4_dp_port_set_group_id(in, in->group->index);
+	if (ret)
+		return ret;
+
+	/*
+	 * Get the non-reduced rate and lanes based on the lowest
+	 * capability of both adapters.
+	 */
+	ret = tb_port_read(in, &in_dp_cap, TB_CFG_PORT,
+			   in->cap_adap + DP_LOCAL_CAP, 1);
+	if (ret)
+		return ret;
+
+	ret = tb_port_read(out, &out_dp_cap, TB_CFG_PORT,
+			   out->cap_adap + DP_LOCAL_CAP, 1);
+	if (ret)
+		return ret;
+
+	in_rate = tb_dp_cap_get_rate(in_dp_cap);
+	in_lanes = tb_dp_cap_get_lanes(in_dp_cap);
+	out_rate = tb_dp_cap_get_rate(out_dp_cap);
+	out_lanes = tb_dp_cap_get_lanes(out_dp_cap);
+
+	rate = min(in_rate, out_rate);
+	lanes = min(in_lanes, out_lanes);
+	tmp = tb_dp_bandwidth(rate, lanes);
+
+	tb_port_dbg(in, "non-reduced bandwidth %u Mb/s x%u = %u Mb/s\n", rate,
+		    lanes, tmp);
+
+	ret = usb4_dp_port_set_nrd(in, rate, lanes);
+	if (ret)
+		return ret;
+
+	for (granularity = 250; tmp / granularity > 255 && granularity <= 1000;
+	     granularity *= 2)
+		;
+
+	tb_port_dbg(in, "granularity %d Mb/s\n", granularity);
+
+	/*
+	 * Returns -EINVAL if granularity above is outside of the
+	 * accepted ranges.
+	 */
+	ret = usb4_dp_port_set_granularity(in, granularity);
+	if (ret)
+		return ret;
+
+	/*
+	 * Bandwidth estimation is pretty much what we have in
+	 * max_up/down fields. For discovery we just read what the
+	 * estimation was set to.
+	 */
+	if (in->sw->config.depth < out->sw->config.depth)
+		estimated_bw = tunnel->max_down;
+	else
+		estimated_bw = tunnel->max_up;
+
+	tb_port_dbg(in, "estimated bandwidth %d Mb/s\n", estimated_bw);
+
+	ret = usb4_dp_port_set_estimated_bw(in, estimated_bw);
+	if (ret)
+		return ret;
+
+	/* Initial allocation should be 0 according the spec */
+	ret = usb4_dp_port_allocate_bw(in, 0);
+	if (ret)
+		return ret;
+
+	tb_port_dbg(in, "bandwidth allocation mode enabled\n");
+	return 0;
+}
+
+static int tb_dp_init(struct tb_tunnel *tunnel)
+{
+	struct tb_port *in = tunnel->src_port;
+	struct tb_switch *sw = in->sw;
+	struct tb *tb = in->sw->tb;
+	int ret;
+
+	ret = tb_dp_xchg_caps(tunnel);
+	if (ret)
+		return ret;
+
+	if (!tb_switch_is_usb4(sw))
+		return 0;
+
+	if (!usb4_dp_port_bw_mode_supported(in))
+		return 0;
+
+	tb_port_dbg(in, "bandwidth allocation mode supported\n");
+
+	ret = usb4_dp_port_set_cm_id(in, tb->index);
+	if (ret)
+		return ret;
+
+	return tb_dp_bw_alloc_mode_enable(tunnel);
+}
+
+static void tb_dp_deinit(struct tb_tunnel *tunnel)
+{
+	struct tb_port *in = tunnel->src_port;
+
+	if (!usb4_dp_port_bw_mode_supported(in))
+		return;
+	if (usb4_dp_port_bw_mode_enabled(in)) {
+		usb4_dp_port_set_cm_bw_mode_supported(in, false);
+		tb_port_dbg(in, "bandwidth allocation mode disabled\n");
+	}
 }
 
 static int tb_dp_activate(struct tb_tunnel *tunnel, bool active)
@@ -619,49 +768,275 @@ static int tb_dp_activate(struct tb_tunnel *tunnel, bool active)
 	return 0;
 }
 
+/* max_bw is rounded up to next granularity */
+static int tb_dp_nrd_bandwidth(struct tb_tunnel *tunnel, int *max_bw)
+{
+	struct tb_port *in = tunnel->src_port;
+	int ret, rate, lanes, nrd_bw;
+
+	ret = usb4_dp_port_nrd(in, &rate, &lanes);
+	if (ret)
+		return ret;
+
+	nrd_bw = tb_dp_bandwidth(rate, lanes);
+
+	if (max_bw) {
+		ret = usb4_dp_port_granularity(in);
+		if (ret < 0)
+			return ret;
+		*max_bw = roundup(nrd_bw, ret);
+	}
+
+	return nrd_bw;
+}
+
+static int tb_dp_bw_mode_consumed_bandwidth(struct tb_tunnel *tunnel,
+					    int *consumed_up, int *consumed_down)
+{
+	struct tb_port *out = tunnel->dst_port;
+	struct tb_port *in = tunnel->src_port;
+	int ret, allocated_bw, max_bw;
+
+	if (!usb4_dp_port_bw_mode_enabled(in))
+		return -EOPNOTSUPP;
+
+	if (!tunnel->bw_mode)
+		return -EOPNOTSUPP;
+
+	/* Read what was allocated previously if any */
+	ret = usb4_dp_port_allocated_bw(in);
+	if (ret < 0)
+		return ret;
+	allocated_bw = ret;
+
+	ret = tb_dp_nrd_bandwidth(tunnel, &max_bw);
+	if (ret < 0)
+		return ret;
+	if (allocated_bw == max_bw)
+		allocated_bw = ret;
+
+	tb_port_dbg(in, "consumed bandwidth through allocation mode %d Mb/s\n",
+		    allocated_bw);
+
+	if (in->sw->config.depth < out->sw->config.depth) {
+		*consumed_up = 0;
+		*consumed_down = allocated_bw;
+	} else {
+		*consumed_up = allocated_bw;
+		*consumed_down = 0;
+	}
+
+	return 0;
+}
+
+static int tb_dp_allocated_bandwidth(struct tb_tunnel *tunnel, int *allocated_up,
+				     int *allocated_down)
+{
+	struct tb_port *out = tunnel->dst_port;
+	struct tb_port *in = tunnel->src_port;
+
+	/*
+	 * If we have already set the allocated bandwidth then use that.
+	 * Otherwise we read it from the DPRX.
+	 */
+	if (usb4_dp_port_bw_mode_enabled(in) && tunnel->bw_mode) {
+		int ret, allocated_bw, max_bw;
+
+		ret = usb4_dp_port_allocated_bw(in);
+		if (ret < 0)
+			return ret;
+		allocated_bw = ret;
+
+		ret = tb_dp_nrd_bandwidth(tunnel, &max_bw);
+		if (ret < 0)
+			return ret;
+		if (allocated_bw == max_bw)
+			allocated_bw = ret;
+
+		if (in->sw->config.depth < out->sw->config.depth) {
+			*allocated_up = 0;
+			*allocated_down = allocated_bw;
+		} else {
+			*allocated_up = allocated_bw;
+			*allocated_down = 0;
+		}
+		return 0;
+	}
+
+	return tunnel->consumed_bandwidth(tunnel, allocated_up,
+					  allocated_down);
+}
+
+static int tb_dp_alloc_bandwidth(struct tb_tunnel *tunnel, int *alloc_up,
+				 int *alloc_down)
+{
+	struct tb_port *out = tunnel->dst_port;
+	struct tb_port *in = tunnel->src_port;
+	int max_bw, ret, tmp;
+
+	if (!usb4_dp_port_bw_mode_enabled(in))
+		return -EOPNOTSUPP;
+
+	ret = tb_dp_nrd_bandwidth(tunnel, &max_bw);
+	if (ret < 0)
+		return ret;
+
+	if (in->sw->config.depth < out->sw->config.depth) {
+		tmp = min(*alloc_down, max_bw);
+		ret = usb4_dp_port_allocate_bw(in, tmp);
+		if (ret)
+			return ret;
+		*alloc_down = tmp;
+		*alloc_up = 0;
+	} else {
+		tmp = min(*alloc_up, max_bw);
+		ret = usb4_dp_port_allocate_bw(in, tmp);
+		if (ret)
+			return ret;
+		*alloc_down = 0;
+		*alloc_up = tmp;
+	}
+
+	/* Now we can use BW mode registers to figure out the bandwidth */
+	/* TODO: need to handle discovery too */
+	tunnel->bw_mode = true;
+	return 0;
+}
+
+static int tb_dp_read_dprx(struct tb_tunnel *tunnel, u32 *rate, u32 *lanes,
+			   int timeout_msec)
+{
+	ktime_t timeout = ktime_add_ms(ktime_get(), timeout_msec);
+	struct tb_port *in = tunnel->src_port;
+
+	/*
+	 * Wait for DPRX done. Normally it should be already set for
+	 * active tunnel.
+	 */
+	do {
+		u32 val;
+		int ret;
+
+		ret = tb_port_read(in, &val, TB_CFG_PORT,
+				   in->cap_adap + DP_COMMON_CAP, 1);
+		if (ret)
+			return ret;
+
+		if (val & DP_COMMON_CAP_DPRX_DONE) {
+			*rate = tb_dp_cap_get_rate(val);
+			*lanes = tb_dp_cap_get_lanes(val);
+
+			tb_port_dbg(in, "consumed bandwidth through DPRX %d Mb/s\n",
+				    tb_dp_bandwidth(*rate, *lanes));
+			return 0;
+		}
+		usleep_range(100, 150);
+	} while (ktime_before(ktime_get(), timeout));
+
+	return -ETIMEDOUT;
+}
+
+/* Read cap from tunnel DP IN */
+static int tb_dp_read_cap(struct tb_tunnel *tunnel, unsigned int cap, u32 *rate,
+			  u32 *lanes)
+{
+	struct tb_port *in = tunnel->src_port;
+	u32 val;
+	int ret;
+
+	switch (cap) {
+	case DP_LOCAL_CAP:
+	case DP_REMOTE_CAP:
+		break;
+
+	default:
+		tb_tunnel_WARN(tunnel, "invalid capability index %#x\n", cap);
+		return -EINVAL;
+	}
+
+	/*
+	 * Read from the copied remote cap so that we take into account
+	 * if capabilities were reduced during exchange.
+	 */
+	ret = tb_port_read(in, &val, TB_CFG_PORT, in->cap_adap + cap, 1);
+	if (ret)
+		return ret;
+
+	*rate = tb_dp_cap_get_rate(val);
+	*lanes = tb_dp_cap_get_lanes(val);
+
+	tb_port_dbg(in, "bandwidth from %#x capability %d Mb/s\n", cap,
+		    tb_dp_bandwidth(*rate, *lanes));
+	return 0;
+}
+
+static int tb_dp_maximum_bandwidth(struct tb_tunnel *tunnel, int *max_up,
+				   int *max_down)
+{
+	struct tb_port *in = tunnel->src_port;
+	u32 rate, lanes;
+	int ret;
+
+	/*
+	 * DP IN adapter DP_LOCAL_CAP gets updated to the lowest AUX read
+	 * parameter values so this so we can use this to determine the
+	 * maximum possible bandwidth over this link.
+	 */
+	ret = tb_dp_read_cap(tunnel, DP_LOCAL_CAP, &rate, &lanes);
+	if (ret)
+		return ret;
+
+	if (in->sw->config.depth < tunnel->dst_port->sw->config.depth) {
+		*max_up = 0;
+		*max_down = tb_dp_bandwidth(rate, lanes);
+	} else {
+		*max_up = tb_dp_bandwidth(rate, lanes);
+		*max_down = 0;
+	}
+
+	return 0;
+}
+
 static int tb_dp_consumed_bandwidth(struct tb_tunnel *tunnel, int *consumed_up,
 				    int *consumed_down)
 {
 	struct tb_port *in = tunnel->src_port;
 	const struct tb_switch *sw = in->sw;
-	u32 val, rate = 0, lanes = 0;
+	u32 rate = 0, lanes = 0;
 	int ret;
 
 	if (tb_dp_is_usb4(sw)) {
-		int timeout = 20;
-
 		/*
-		 * Wait for DPRX done. Normally it should be already set
-		 * for active tunnel.
+		 * On USB4 routers check if the bandwidth allocation
+		 * mode is enabled first and then read the bandwidth
+		 * through those registers.
 		 */
-		do {
-			ret = tb_port_read(in, &val, TB_CFG_PORT,
-					   in->cap_adap + DP_COMMON_CAP, 1);
+		ret = tb_dp_bw_mode_consumed_bandwidth(tunnel, consumed_up,
+						       consumed_down);
+		if (ret < 0) {
+			if (ret != -EOPNOTSUPP)
+				return ret;
+		} else if (!ret) {
+			return 0;
+		}
+		/*
+		 * Then see if the DPRX negotiation is ready and if yes
+		 * return that bandwidth (it may be smaller than the
+		 * reduced one). Otherwise return the remote (possibly
+		 * reduced) caps.
+		 */
+		ret = tb_dp_read_dprx(tunnel, &rate, &lanes, 150);
+		if (ret) {
+			if (ret == -ETIMEDOUT)
+				ret = tb_dp_read_cap(tunnel, DP_REMOTE_CAP,
+						     &rate, &lanes);
 			if (ret)
 				return ret;
-
-			if (val & DP_COMMON_CAP_DPRX_DONE) {
-				rate = tb_dp_cap_get_rate(val);
-				lanes = tb_dp_cap_get_lanes(val);
-				break;
-			}
-			msleep(250);
-		} while (timeout--);
-
-		if (!timeout)
-			return -ETIMEDOUT;
+		}
 	} else if (sw->generation >= 2) {
-		/*
-		 * Read from the copied remote cap so that we take into
-		 * account if capabilities were reduced during exchange.
-		 */
-		ret = tb_port_read(in, &val, TB_CFG_PORT,
-				   in->cap_adap + DP_REMOTE_CAP, 1);
+		ret = tb_dp_read_cap(tunnel, DP_REMOTE_CAP, &rate, &lanes);
 		if (ret)
 			return ret;
-
-		rate = tb_dp_cap_get_rate(val);
-		lanes = tb_dp_cap_get_lanes(val);
 	} else {
 		/* No bandwidth management for legacy devices  */
 		*consumed_up = 0;
@@ -761,6 +1136,7 @@ static int tb_dp_init_video_path(struct tb_path *path)
  * tb_tunnel_discover_dp() - Discover existing Display Port tunnels
  * @tb: Pointer to the domain structure
  * @in: DP in adapter
+ * @alloc_hopid: Allocate HopIDs from visited ports
  *
  * If @in adapter is active, follows the tunnel to the DP out adapter
  * and back. Returns the discovered tunnel or %NULL if there was no
@@ -768,7 +1144,8 @@ static int tb_dp_init_video_path(struct tb_path *path)
  *
  * Return: DP tunnel or %NULL if no tunnel found.
  */
-struct tb_tunnel *tb_tunnel_discover_dp(struct tb *tb, struct tb_port *in)
+struct tb_tunnel *tb_tunnel_discover_dp(struct tb *tb, struct tb_port *in,
+					bool alloc_hopid)
 {
 	struct tb_tunnel *tunnel;
 	struct tb_port *port;
@@ -781,13 +1158,17 @@ struct tb_tunnel *tb_tunnel_discover_dp(struct tb *tb, struct tb_port *in)
 	if (!tunnel)
 		return NULL;
 
-	tunnel->init = tb_dp_xchg_caps;
+	tunnel->init = tb_dp_init;
+	tunnel->deinit = tb_dp_deinit;
 	tunnel->activate = tb_dp_activate;
+	tunnel->maximum_bandwidth = tb_dp_maximum_bandwidth;
+	tunnel->allocated_bandwidth = tb_dp_allocated_bandwidth;
+	tunnel->alloc_bandwidth = tb_dp_alloc_bandwidth;
 	tunnel->consumed_bandwidth = tb_dp_consumed_bandwidth;
 	tunnel->src_port = in;
 
 	path = tb_path_discover(in, TB_DP_VIDEO_HOPID, NULL, -1,
-				&tunnel->dst_port, "Video");
+				&tunnel->dst_port, "Video", alloc_hopid);
 	if (!path) {
 		/* Just disable the DP IN port */
 		tb_dp_port_enable(in, false);
@@ -797,14 +1178,15 @@ struct tb_tunnel *tb_tunnel_discover_dp(struct tb *tb, struct tb_port *in)
 	if (tb_dp_init_video_path(tunnel->paths[TB_DP_VIDEO_PATH_OUT]))
 		goto err_free;
 
-	path = tb_path_discover(in, TB_DP_AUX_TX_HOPID, NULL, -1, NULL, "AUX TX");
+	path = tb_path_discover(in, TB_DP_AUX_TX_HOPID, NULL, -1, NULL, "AUX TX",
+				alloc_hopid);
 	if (!path)
 		goto err_deactivate;
 	tunnel->paths[TB_DP_AUX_PATH_OUT] = path;
 	tb_dp_init_aux_path(tunnel->paths[TB_DP_AUX_PATH_OUT]);
 
 	path = tb_path_discover(tunnel->dst_port, -1, in, TB_DP_AUX_RX_HOPID,
-				&port, "AUX RX");
+				&port, "AUX RX", alloc_hopid);
 	if (!path)
 		goto err_deactivate;
 	tunnel->paths[TB_DP_AUX_PATH_IN] = path;
@@ -843,6 +1225,7 @@ err_free:
  * @tb: Pointer to the domain structure
  * @in: DP in adapter port
  * @out: DP out adapter port
+ * @link_nr: Preferred lane adapter when the link is not bonded
  * @max_up: Maximum available upstream bandwidth for the DP tunnel (%0
  *	    if not limited)
  * @max_down: Maximum available downstream bandwidth for the DP tunnel
@@ -854,8 +1237,8 @@ err_free:
  * Return: Returns a tb_tunnel on success or NULL on failure.
  */
 struct tb_tunnel *tb_tunnel_alloc_dp(struct tb *tb, struct tb_port *in,
-				     struct tb_port *out, int max_up,
-				     int max_down)
+				     struct tb_port *out, int link_nr,
+				     int max_up, int max_down)
 {
 	struct tb_tunnel *tunnel;
 	struct tb_path **paths;
@@ -868,8 +1251,12 @@ struct tb_tunnel *tb_tunnel_alloc_dp(struct tb *tb, struct tb_port *in,
 	if (!tunnel)
 		return NULL;
 
-	tunnel->init = tb_dp_xchg_caps;
+	tunnel->init = tb_dp_init;
+	tunnel->deinit = tb_dp_deinit;
 	tunnel->activate = tb_dp_activate;
+	tunnel->maximum_bandwidth = tb_dp_maximum_bandwidth;
+	tunnel->allocated_bandwidth = tb_dp_allocated_bandwidth;
+	tunnel->alloc_bandwidth = tb_dp_alloc_bandwidth;
 	tunnel->consumed_bandwidth = tb_dp_consumed_bandwidth;
 	tunnel->src_port = in;
 	tunnel->dst_port = out;
@@ -879,21 +1266,21 @@ struct tb_tunnel *tb_tunnel_alloc_dp(struct tb *tb, struct tb_port *in,
 	paths = tunnel->paths;
 
 	path = tb_path_alloc(tb, in, TB_DP_VIDEO_HOPID, out, TB_DP_VIDEO_HOPID,
-			     1, "Video");
+			     link_nr, "Video");
 	if (!path)
 		goto err_free;
 	tb_dp_init_video_path(path);
 	paths[TB_DP_VIDEO_PATH_OUT] = path;
 
 	path = tb_path_alloc(tb, in, TB_DP_AUX_TX_HOPID, out,
-			     TB_DP_AUX_TX_HOPID, 1, "AUX TX");
+			     TB_DP_AUX_TX_HOPID, link_nr, "AUX TX");
 	if (!path)
 		goto err_free;
 	tb_dp_init_aux_path(path);
 	paths[TB_DP_AUX_PATH_OUT] = path;
 
 	path = tb_path_alloc(tb, out, TB_DP_AUX_RX_HOPID, in,
-			     TB_DP_AUX_RX_HOPID, 1, "AUX RX");
+			     TB_DP_AUX_RX_HOPID, link_nr, "AUX RX");
 	if (!path)
 		goto err_free;
 	tb_dp_init_aux_path(path);
@@ -1256,7 +1643,7 @@ static void tb_usb3_reclaim_available_bandwidth(struct tb_tunnel *tunnel,
 		return;
 	} else if (!ret) {
 		/* Use maximum link rate if the link valid is not set */
-		ret = usb4_usb3_port_max_link_rate(tunnel->src_port);
+		ret = tb_usb3_max_link_rate(tunnel->dst_port, tunnel->src_port);
 		if (ret < 0) {
 			tb_tunnel_warn(tunnel, "failed to read maximum link rate\n");
 			return;
@@ -1343,12 +1730,14 @@ static void tb_usb3_init_path(struct tb_path *path)
  * tb_tunnel_discover_usb3() - Discover existing USB3 tunnels
  * @tb: Pointer to the domain structure
  * @down: USB3 downstream adapter
+ * @alloc_hopid: Allocate HopIDs from visited ports
  *
  * If @down adapter is active, follows the tunnel to the USB3 upstream
  * adapter and back. Returns the discovered tunnel or %NULL if there was
  * no tunnel.
  */
-struct tb_tunnel *tb_tunnel_discover_usb3(struct tb *tb, struct tb_port *down)
+struct tb_tunnel *tb_tunnel_discover_usb3(struct tb *tb, struct tb_port *down,
+					  bool alloc_hopid)
 {
 	struct tb_tunnel *tunnel;
 	struct tb_path *path;
@@ -1369,7 +1758,7 @@ struct tb_tunnel *tb_tunnel_discover_usb3(struct tb *tb, struct tb_port *down)
 	 * case.
 	 */
 	path = tb_path_discover(down, TB_USB3_HOPID, NULL, -1,
-				&tunnel->dst_port, "USB3 Down");
+				&tunnel->dst_port, "USB3 Down", alloc_hopid);
 	if (!path) {
 		/* Just disable the downstream port */
 		tb_usb3_port_enable(down, false);
@@ -1379,7 +1768,7 @@ struct tb_tunnel *tb_tunnel_discover_usb3(struct tb *tb, struct tb_port *down)
 	tb_usb3_init_path(tunnel->paths[TB_USB3_PATH_DOWN]);
 
 	path = tb_path_discover(tunnel->dst_port, -1, down, TB_USB3_HOPID, NULL,
-				"USB3 Up");
+				"USB3 Up", alloc_hopid);
 	if (!path)
 		goto err_deactivate;
 	tunnel->paths[TB_USB3_PATH_UP] = path;
@@ -1690,6 +2079,72 @@ static bool tb_tunnel_is_active(const struct tb_tunnel *tunnel)
 	}
 
 	return true;
+}
+
+/**
+ * tb_tunnel_maximum_bandwidth() - Return maximum possible bandwidth
+ * @tunnel: Tunnel to check
+ * @max_up: Maximum upstream bandwidth in Mb/s
+ * @max_down: Maximum downstream bandwidth in Mb/s
+ *
+ * Returns maximum possible bandwidth this tunnel can go if not limited
+ * by other bandwidth clients. If the tunnel does not support this
+ * returns %-EOPNOTSUPP.
+ */
+int tb_tunnel_maximum_bandwidth(struct tb_tunnel *tunnel, int *max_up,
+				int *max_down)
+{
+	if (!tb_tunnel_is_active(tunnel))
+		return -EINVAL;
+
+	if (tunnel->maximum_bandwidth)
+		return tunnel->maximum_bandwidth(tunnel, max_up, max_down);
+	return -EOPNOTSUPP;
+}
+
+/**
+ * tb_tunnel_allocated_bandwidth() - Return bandwidth allocated for the tunnel
+ * @tunnel: Tunnel to check
+ * @allocated_up: Currently allocated upstream bandwidth in Mb/s is stored here
+ * @allocated_down: Currently allocated downstream bandwidth in Mb/s is
+ *		    stored here
+ *
+ * Returns the bandwidth allocated for the tunnel. This may be higher
+ * than what the tunnel actually consumes.
+ */
+int tb_tunnel_allocated_bandwidth(struct tb_tunnel *tunnel, int *allocated_up,
+				  int *allocated_down)
+{
+	if (!tb_tunnel_is_active(tunnel))
+		return -EINVAL;
+
+	if (tunnel->allocated_bandwidth)
+		return tunnel->allocated_bandwidth(tunnel, allocated_up,
+						   allocated_down);
+	return -EOPNOTSUPP;
+}
+
+/**
+ * tb_tunnel_alloc_bandwidth() - Change tunnel bandwidth allocation
+ * @tunnel: Tunnel whose bandwidth allocation to change
+ * @alloc_up: New upstream bandwidth in Mb/s
+ * @alloc_down: New downstream bandwidth in Mb/s
+ *
+ * Tries to change tunnel bandwidth allocation. If succeeds returns %0
+ * and updates @alloc_up and @alloc_down to that was actually allocated
+ * (it may not be the same as passed originally). Returns negative errno
+ * in case of failure.
+ */
+int tb_tunnel_alloc_bandwidth(struct tb_tunnel *tunnel, int *alloc_up,
+			      int *alloc_down)
+{
+	if (!tb_tunnel_is_active(tunnel))
+		return -EINVAL;
+
+	if (tunnel->alloc_bandwidth)
+		return tunnel->alloc_bandwidth(tunnel, alloc_up, alloc_down);
+
+	return -EOPNOTSUPP;
 }
 
 /**

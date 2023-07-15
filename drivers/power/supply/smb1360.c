@@ -192,7 +192,7 @@
 #define IRQ_E_USBIN_OV_BIT		BIT(2)
 #define IRQ_E_USBIN_UV_BIT		BIT(0)
 
-#define IRQ_F_REG			0x54
+#define IRQ_F_REG			0x55
 #define IRQ_F_OTG_OC_BIT		BIT(6)
 #define IRQ_F_OTG_FAIL_BIT		BIT(4)
 #define IRQ_F_POWER_OK_BIT		BIT(0)
@@ -474,7 +474,7 @@ static int smb1360_read_voltage(struct smb1360 *smb, u8 reg,
 	if (ret)
 		return ret;
 
-	*voltage = div_u64(le16_to_cpu(val) * 5000, S16_MAX);
+	*voltage = div_u64(le16_to_cpu(val) * 5000000ULL, S16_MAX);
 	return 0;
 }
 

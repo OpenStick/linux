@@ -223,9 +223,10 @@ static int ml86v7667_get_mbus_config(struct v4l2_subdev *sd,
 				     unsigned int pad,
 				     struct v4l2_mbus_config *cfg)
 {
-	cfg->flags = V4L2_MBUS_MASTER | V4L2_MBUS_PCLK_SAMPLE_RISING |
-		     V4L2_MBUS_DATA_ACTIVE_HIGH;
 	cfg->type = V4L2_MBUS_BT656;
+	cfg->bus.parallel.flags = V4L2_MBUS_MASTER |
+				  V4L2_MBUS_PCLK_SAMPLE_RISING |
+				  V4L2_MBUS_DATA_ACTIVE_HIGH;
 
 	return 0;
 }
@@ -358,8 +359,7 @@ static int ml86v7667_init(struct ml86v7667_priv *priv)
 	return ret;
 }
 
-static int ml86v7667_probe(struct i2c_client *client,
-			   const struct i2c_device_id *did)
+static int ml86v7667_probe(struct i2c_client *client)
 {
 	struct ml86v7667_priv *priv;
 	int ret;
@@ -414,15 +414,13 @@ cleanup:
 	return ret;
 }
 
-static int ml86v7667_remove(struct i2c_client *client)
+static void ml86v7667_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct ml86v7667_priv *priv = to_ml86v7667(sd);
 
 	v4l2_ctrl_handler_free(&priv->hdl);
 	v4l2_device_unregister_subdev(&priv->sd);
-
-	return 0;
 }
 
 static const struct i2c_device_id ml86v7667_id[] = {
@@ -435,7 +433,7 @@ static struct i2c_driver ml86v7667_i2c_driver = {
 	.driver = {
 		.name	= DRV_NAME,
 	},
-	.probe		= ml86v7667_probe,
+	.probe_new	= ml86v7667_probe,
 	.remove		= ml86v7667_remove,
 	.id_table	= ml86v7667_id,
 };

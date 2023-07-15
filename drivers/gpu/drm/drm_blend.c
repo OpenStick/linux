@@ -80,7 +80,7 @@
  *
  * Note that the source rectangle must fully lie within the bounds of the
  * &drm_framebuffer. The destination rectangle can lie outside of the visible
- * area of the current mode of the CRTC. It must be apprpriately clipped by the
+ * area of the current mode of the CRTC. It must be appropriately clipped by the
  * driver, which can be done by calling drm_plane_helper_check_update(). Drivers
  * are also allowed to round the subpixel sampling positions appropriately, but
  * only to the next full pixel. No pixel outside of the source rectangle may
@@ -317,7 +317,7 @@ EXPORT_SYMBOL(drm_plane_create_rotation_property);
  *                       DRM_MODE_ROTATE_90 | DRM_MODE_ROTATE_180 |
  *                       DRM_MODE_ROTATE_270 | DRM_MODE_REFLECT_Y);
  *
- * to eliminate the DRM_MODE_ROTATE_X flag. Depending on what kind of
+ * to eliminate the DRM_MODE_REFLECT_X flag. Depending on what kind of
  * transforms the hardware supports, this function may not
  * be able to produce a supported transform, so the caller should
  * check the result afterwards.
@@ -450,8 +450,8 @@ static int drm_atomic_helper_crtc_normalize_zpos(struct drm_crtc *crtc,
 	int i, n = 0;
 	int ret = 0;
 
-	DRM_DEBUG_ATOMIC("[CRTC:%d:%s] calculating normalized zpos values\n",
-			 crtc->base.id, crtc->name);
+	drm_dbg_atomic(dev, "[CRTC:%d:%s] calculating normalized zpos values\n",
+		       crtc->base.id, crtc->name);
 
 	states = kmalloc_array(total_planes, sizeof(*states), GFP_KERNEL);
 	if (!states)
@@ -469,9 +469,8 @@ static int drm_atomic_helper_crtc_normalize_zpos(struct drm_crtc *crtc,
 			goto done;
 		}
 		states[n++] = plane_state;
-		DRM_DEBUG_ATOMIC("[PLANE:%d:%s] processing zpos value %d\n",
-				 plane->base.id, plane->name,
-				 plane_state->zpos);
+		drm_dbg_atomic(dev, "[PLANE:%d:%s] processing zpos value %d\n",
+			       plane->base.id, plane->name, plane_state->zpos);
 	}
 
 	sort(states, n, sizeof(*states), drm_atomic_state_zpos_cmp, NULL);
@@ -480,8 +479,8 @@ static int drm_atomic_helper_crtc_normalize_zpos(struct drm_crtc *crtc,
 		plane = states[i]->plane;
 
 		states[i]->normalized_zpos = i;
-		DRM_DEBUG_ATOMIC("[PLANE:%d:%s] normalized zpos value %d\n",
-				 plane->base.id, plane->name, i);
+		drm_dbg_atomic(dev, "[PLANE:%d:%s] normalized zpos value %d\n",
+			       plane->base.id, plane->name, i);
 	}
 	crtc_state->zpos_changed = true;
 

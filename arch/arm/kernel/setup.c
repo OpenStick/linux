@@ -141,10 +141,10 @@ EXPORT_SYMBOL(outer_cache);
 int __cpu_architecture __read_mostly = CPU_ARCH_UNKNOWN;
 
 struct stack {
-	u32 irq[3];
-	u32 abt[3];
-	u32 und[3];
-	u32 fiq[3];
+	u32 irq[4];
+	u32 abt[4];
+	u32 und[4];
+	u32 fiq[4];
 } ____cacheline_aligned;
 
 #ifndef CONFIG_CPU_V7M
@@ -450,6 +450,8 @@ static void __init cpuid_init_hwcaps(void)
 {
 	int block;
 	u32 isar5;
+	u32 isar6;
+	u32 pfr2;
 
 	if (cpu_architecture() < CPU_ARCH_ARMv7)
 		return;
@@ -485,6 +487,18 @@ static void __init cpuid_init_hwcaps(void)
 	block = cpuid_feature_extract_field(isar5, 16);
 	if (block >= 1)
 		elf_hwcap2 |= HWCAP2_CRC32;
+
+	/* Check for Speculation barrier instruction */
+	isar6 = read_cpuid_ext(CPUID_EXT_ISAR6);
+	block = cpuid_feature_extract_field(isar6, 12);
+	if (block >= 1)
+		elf_hwcap2 |= HWCAP2_SB;
+
+	/* Check for Speculative Store Bypassing control */
+	pfr2 = read_cpuid_ext(CPUID_EXT_PFR2);
+	block = cpuid_feature_extract_field(pfr2, 4);
+	if (block >= 1)
+		elf_hwcap2 |= HWCAP2_SSBS;
 }
 
 static void __init elf_hwcap_fixup(void)
@@ -1004,7 +1018,8 @@ static void __init reserve_crashkernel(void)
 	total_mem = get_total_mem();
 	ret = parse_crashkernel(boot_command_line, total_mem,
 				&crash_size, &crash_base);
-	if (ret)
+	/* invalid value specified or crashkernel=0 */
+	if (ret || !crash_size)
 		return;
 
 	if (crash_base <= 0) {
@@ -1140,7 +1155,7 @@ void __init setup_arch(char **cmdline_p)
 #endif
 	setup_dma_zone(mdesc);
 	xen_early_init();
-	efi_init();
+	arm_efi_init();
 	/*
 	 * Make sure the calculation for lowmem/highmem is set appropriately
 	 * before reserving/allocating any memory
@@ -1248,6 +1263,12 @@ static const char *hwcap_str[] = {
 	"vfpd32",
 	"lpae",
 	"evtstrm",
+	"fphp",
+	"asimdhp",
+	"asimddp",
+	"asimdfhm",
+	"asimdbf16",
+	"i8mm",
 	NULL
 };
 
@@ -1257,6 +1278,8 @@ static const char *hwcap2_str[] = {
 	"sha1",
 	"sha2",
 	"crc32",
+	"sb",
+	"ssbs",
 	NULL
 };
 

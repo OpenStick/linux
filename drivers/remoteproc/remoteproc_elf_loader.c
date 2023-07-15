@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Remote Processor Framework Elf loader
+ * Remote Processor Framework ELF loader
  *
  * Copyright (C) 2011 Texas Instruments, Inc.
  * Copyright (C) 2011 Google, Inc.
@@ -39,7 +39,7 @@ int rproc_elf_sanity_check(struct rproc *rproc, const struct firmware *fw)
 	const char *name = rproc->firmware;
 	struct device *dev = &rproc->dev;
 	/*
-	 * Elf files are beginning with the same structure. Thus, to simplify
+	 * ELF files are beginning with the same structure. Thus, to simplify
 	 * header parsing, we can use the elf32_hdr one for both elf64 and
 	 * elf32.
 	 */
@@ -178,10 +178,10 @@ int rproc_elf_load_segments(struct rproc *rproc, const struct firmware *fw)
 		u64 filesz = elf_phdr_get_p_filesz(class, phdr);
 		u64 offset = elf_phdr_get_p_offset(class, phdr);
 		u32 type = elf_phdr_get_p_type(class, phdr);
+		bool is_iomem = false;
 		void *ptr;
-		bool is_iomem;
 
-		if (type != PT_LOAD)
+		if (type != PT_LOAD || !memsz)
 			continue;
 
 		dev_dbg(dev, "phdr: type %d da 0x%llx memsz 0x%llx filesz 0x%llx\n",
@@ -220,7 +220,7 @@ int rproc_elf_load_segments(struct rproc *rproc, const struct firmware *fw)
 		/* put the segment where the remote processor expects it */
 		if (filesz) {
 			if (is_iomem)
-				memcpy_fromio(ptr, (void __iomem *)(elf_data + offset), filesz);
+				memcpy_toio((void __iomem *)ptr, elf_data + offset, filesz);
 			else
 				memcpy(ptr, elf_data + offset, filesz);
 		}

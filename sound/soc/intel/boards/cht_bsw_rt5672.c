@@ -221,12 +221,12 @@ static int cht_codec_init(struct snd_soc_pcm_runtime *runtime)
 	if (ret)
 		return ret;
 
-        ret = snd_soc_card_jack_new(runtime->card, "Headset",
-				    SND_JACK_HEADSET | SND_JACK_BTN_0 |
-				    SND_JACK_BTN_1 | SND_JACK_BTN_2,
-				    &ctx->headset,
-				    cht_bsw_headset_pins,
-				    ARRAY_SIZE(cht_bsw_headset_pins));
+	ret = snd_soc_card_jack_new_pins(runtime->card, "Headset",
+					 SND_JACK_HEADSET | SND_JACK_BTN_0 |
+					 SND_JACK_BTN_1 | SND_JACK_BTN_2,
+					 &ctx->headset,
+					 cht_bsw_headset_pins,
+					 ARRAY_SIZE(cht_bsw_headset_pins));
         if (ret)
                 return ret;
 
@@ -270,7 +270,7 @@ static int cht_codec_fixup(struct snd_soc_pcm_runtime *rtd,
 						SNDRV_PCM_HW_PARAM_CHANNELS);
 	int ret, bits;
 
-	/* The DSP will covert the FE rate to 48k, stereo, 24bits */
+	/* The DSP will convert the FE rate to 48k, stereo, 24bits */
 	rate->min = rate->max = 48000;
 	channels->min = channels->max = 2;
 
@@ -300,7 +300,7 @@ static int cht_codec_fixup(struct snd_soc_pcm_runtime *rtd,
 	ret = snd_soc_dai_set_fmt(asoc_rtd_to_cpu(rtd, 0),
 				  SND_SOC_DAIFMT_I2S     |
 				  SND_SOC_DAIFMT_NB_NF   |
-				  SND_SOC_DAIFMT_CBS_CFS);
+				  SND_SOC_DAIFMT_BP_FP);
 	if (ret < 0) {
 		dev_err(rtd->dev, "can't set format to I2S, err %d\n", ret);
 		return ret;
@@ -473,9 +473,9 @@ static int snd_cht_mc_probe(struct platform_device *pdev)
 	if (adev) {
 		snprintf(drv->codec_name, sizeof(drv->codec_name),
 			 "i2c-%s", acpi_dev_name(adev));
-		put_device(&adev->dev);
 		cht_dailink[dai_index].codecs->name = drv->codec_name;
 	}
+	acpi_dev_put(adev);
 
 	/* Use SSP0 on Bay Trail CR devices */
 	if (soc_intel_is_byt() && mach->mach_params.acpi_ipc_irq_index == 0) {
@@ -483,7 +483,7 @@ static int snd_cht_mc_probe(struct platform_device *pdev)
 		drv->use_ssp0 = true;
 	}
 
-	/* override plaform name, if required */
+	/* override platform name, if required */
 	snd_soc_card_cht.dev = &pdev->dev;
 	platform_name = mach->mach_params.platform;
 

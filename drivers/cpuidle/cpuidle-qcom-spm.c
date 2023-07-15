@@ -11,13 +11,12 @@
 #include <linux/io.h>
 #include <linux/slab.h>
 #include <linux/of.h>
-#include <linux/of_address.h>
-#include <linux/of_device.h>
+#include <linux/of_platform.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
 #include <linux/cpuidle.h>
 #include <linux/cpu_pm.h>
-#include <linux/qcom_scm.h>
+#include <linux/firmware/qcom/qcom_scm.h>
 #include <soc/qcom/spm.h>
 
 #include <asm/proc-fns.h>
@@ -46,7 +45,11 @@ static int qcom_cpu_spc(struct spm_driver_data *drv)
 	int ret;
 
 	spm_set_low_power_mode(drv, PM_SLEEP_MODE_SPC);
+	if (!IS_ENABLED(CONFIG_ARM64))
+		ct_cpuidle_enter();
 	ret = cpu_suspend(0, qcom_pm_collapse);
+	if (!IS_ENABLED(CONFIG_ARM64))
+		ct_cpuidle_exit();
 	/*
 	 * ARM common code executes WFI without calling into our driver and
 	 * if the SPM mode is not reset, then we may accidently power down the
@@ -58,13 +61,13 @@ static int qcom_cpu_spc(struct spm_driver_data *drv)
 	return ret;
 }
 
-static int spm_enter_idle_state(struct cpuidle_device *dev,
-				struct cpuidle_driver *drv, int idx)
+static __cpuidle int spm_enter_idle_state(struct cpuidle_device *dev,
+					  struct cpuidle_driver *drv, int idx)
 {
 	struct cpuidle_qcom_spm_data *data = container_of(drv, struct cpuidle_qcom_spm_data,
 							  cpuidle_driver);
 
-	return CPU_PM_CPU_IDLE_ENTER_PARAM(qcom_cpu_spc, idx, data->spm);
+	return CPU_PM_CPU_IDLE_ENTER_PARAM_RCU(qcom_cpu_spc, idx, data->spm);
 }
 
 static struct cpuidle_driver qcom_spm_idle_driver = {
@@ -90,7 +93,6 @@ static int spm_cpuidle_register(struct device *cpuidle_dev, int cpu)
 	struct platform_device *pdev = NULL;
 	struct device_node *cpu_node, *saw_node;
 	struct cpuidle_qcom_spm_data *data = NULL;
-	void *entry;
 	int ret;
 
 	cpu_node = of_cpu_device_node_get(cpu);
@@ -123,24 +125,25 @@ static int spm_cpuidle_register(struct device *cpuidle_dev, int cpu)
 	if (ret <= 0)
 		return ret ? : -ENODEV;
 
-#ifdef CONFIG_ARM64
-	entry = cpu_resume;
-#else
-	entry = cpu_resume_arm;
-#endif
-	ret = qcom_scm_set_warm_boot_addr(entry, cpumask_of(cpu));
-	if (ret)
-		return ret;
-
 	return cpuidle_register(&data->cpuidle_driver, NULL);
 }
 
 static int spm_cpuidle_drv_probe(struct platform_device *pdev)
 {
 	int cpu, ret;
+	void *entry;
 
 	if (!qcom_scm_is_available())
 		return -EPROBE_DEFER;
+
+#ifdef CONFIG_ARM64
+	entry = cpu_resume;
+#else
+	entry = cpu_resume_arm;
+#endif
+	ret = qcom_scm_set_warm_boot_addr(entry);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret, "set warm boot addr failed");
 
 	for_each_possible_cpu(cpu) {
 		ret = spm_cpuidle_register(&pdev->dev, cpu);
@@ -161,6 +164,22 @@ static struct platform_driver spm_cpuidle_driver = {
 	},
 };
 
+static bool __init qcom_spm_find_any_cpu(void)
+{
+	struct device_node *cpu_node, *saw_node;
+
+	for_each_of_cpu_node(cpu_node) {
+		saw_node = of_parse_phandle(cpu_node, "qcom,saw", 0);
+		if (of_device_is_available(saw_node)) {
+			of_node_put(saw_node);
+			of_node_put(cpu_node);
+			return true;
+		}
+		of_node_put(saw_node);
+	}
+	return false;
+}
+
 static int __init qcom_spm_cpuidle_init(void)
 {
 	struct platform_device *pdev;
@@ -169,6 +188,10 @@ static int __init qcom_spm_cpuidle_init(void)
 	ret = platform_driver_register(&spm_cpuidle_driver);
 	if (ret)
 		return ret;
+
+	/* Make sure there is actually any CPU managed by the SPM */
+	if (!qcom_spm_find_any_cpu())
+		return 0;
 
 	pdev = platform_device_register_simple("qcom-spm-cpuidle",
 					       -1, NULL, 0);

@@ -122,6 +122,8 @@ int watchdog_nmi_probe(void);
 int watchdog_nmi_enable(unsigned int cpu);
 void watchdog_nmi_disable(unsigned int cpu);
 
+void lockup_detector_reconfigure(void);
+
 /**
  * touch_nmi_watchdog - restart NMI watchdog timeout.
  *
@@ -210,6 +212,14 @@ int proc_watchdog_cpumask(struct ctl_table *, int, void *, size_t *, loff_t *);
 
 #ifdef CONFIG_HAVE_ACPI_APEI_NMI
 #include <asm/nmi.h>
+#endif
+
+#ifdef CONFIG_NMI_CHECK_CPU
+void nmi_backtrace_stall_snap(const struct cpumask *btp);
+void nmi_backtrace_stall_check(const struct cpumask *btp);
+#else
+static inline void nmi_backtrace_stall_snap(const struct cpumask *btp) {}
+static inline void nmi_backtrace_stall_check(const struct cpumask *btp) {}
 #endif
 
 #endif

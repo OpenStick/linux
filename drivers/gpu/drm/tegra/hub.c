@@ -5,6 +5,7 @@
 
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/dma-mapping.h>
 #include <linux/host1x.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -16,7 +17,9 @@
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_blend.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_framebuffer.h>
 #include <drm/drm_probe_helper.h>
 
 #include "drm.h"
@@ -540,8 +543,8 @@ static void tegra_shared_plane_atomic_update(struct drm_plane *plane,
 	struct tegra_plane *p = to_tegra_plane(plane);
 	u32 value, min_width, bypass = 0;
 	dma_addr_t base, addr_flag = 0;
-	unsigned int bpc;
-	bool yuv, planar;
+	unsigned int bpc, planes;
+	bool yuv;
 	int err;
 
 	/* rien ne va plus */
@@ -559,7 +562,7 @@ static void tegra_shared_plane_atomic_update(struct drm_plane *plane,
 		return;
 	}
 
-	yuv = tegra_plane_format_is_yuv(tegra_plane_state->format, &planar, &bpc);
+	yuv = tegra_plane_format_is_yuv(tegra_plane_state->format, &planes, &bpc);
 
 	tegra_dc_assign_shared_plane(dc, p);
 
@@ -660,20 +663,26 @@ static void tegra_shared_plane_atomic_update(struct drm_plane *plane,
 	value = PITCH(fb->pitches[0]);
 	tegra_plane_writel(p, value, DC_WIN_PLANAR_STORAGE);
 
-	if (yuv && planar) {
+	if (yuv && planes > 1) {
 		base = tegra_plane_state->iova[1] + fb->offsets[1];
 		base |= addr_flag;
 
 		tegra_plane_writel(p, upper_32_bits(base), DC_WINBUF_START_ADDR_HI_U);
 		tegra_plane_writel(p, lower_32_bits(base), DC_WINBUF_START_ADDR_U);
 
-		base = tegra_plane_state->iova[2] + fb->offsets[2];
-		base |= addr_flag;
+		if (planes > 2) {
+			base = tegra_plane_state->iova[2] + fb->offsets[2];
+			base |= addr_flag;
 
-		tegra_plane_writel(p, upper_32_bits(base), DC_WINBUF_START_ADDR_HI_V);
-		tegra_plane_writel(p, lower_32_bits(base), DC_WINBUF_START_ADDR_V);
+			tegra_plane_writel(p, upper_32_bits(base), DC_WINBUF_START_ADDR_HI_V);
+			tegra_plane_writel(p, lower_32_bits(base), DC_WINBUF_START_ADDR_V);
+		}
 
-		value = PITCH_U(fb->pitches[2]) | PITCH_V(fb->pitches[2]);
+		value = PITCH_U(fb->pitches[1]);
+
+		if (planes > 2)
+			value |= PITCH_V(fb->pitches[2]);
+
 		tegra_plane_writel(p, value, DC_WIN_PLANAR_STORAGE_UV);
 	} else {
 		tegra_plane_writel(p, 0, DC_WINBUF_START_ADDR_U);
@@ -1165,17 +1174,12 @@ unregister:
 	return err;
 }
 
-static int tegra_display_hub_remove(struct platform_device *pdev)
+static void tegra_display_hub_remove(struct platform_device *pdev)
 {
 	struct tegra_display_hub *hub = platform_get_drvdata(pdev);
 	unsigned int i;
-	int err;
 
-	err = host1x_client_unregister(&hub->client);
-	if (err < 0) {
-		dev_err(&pdev->dev, "failed to unregister host1x client: %d\n",
-			err);
-	}
+	host1x_client_unregister(&hub->client);
 
 	for (i = 0; i < hub->soc->num_wgrps; i++) {
 		struct tegra_windowgroup *wgrp = &hub->wgrps[i];
@@ -1184,8 +1188,6 @@ static int tegra_display_hub_remove(struct platform_device *pdev)
 	}
 
 	pm_runtime_disable(&pdev->dev);
-
-	return err;
 }
 
 static const struct tegra_display_hub_soc tegra186_display_hub = {
@@ -1217,5 +1219,5 @@ struct platform_driver tegra_display_hub_driver = {
 		.of_match_table = tegra_display_hub_of_match,
 	},
 	.probe = tegra_display_hub_probe,
-	.remove = tegra_display_hub_remove,
+	.remove_new = tegra_display_hub_remove,
 };

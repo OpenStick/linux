@@ -150,10 +150,10 @@ static void enic_set_affinity_hint(struct enic *enic)
 		    !cpumask_available(enic->msix[i].affinity_mask) ||
 		    cpumask_empty(enic->msix[i].affinity_mask))
 			continue;
-		err = irq_set_affinity_hint(enic->msix_entry[i].vector,
-					    enic->msix[i].affinity_mask);
+		err = irq_update_affinity_hint(enic->msix_entry[i].vector,
+					       enic->msix[i].affinity_mask);
 		if (err)
-			netdev_warn(enic->netdev, "irq_set_affinity_hint failed, err %d\n",
+			netdev_warn(enic->netdev, "irq_update_affinity_hint failed, err %d\n",
 				    err);
 	}
 
@@ -173,7 +173,7 @@ static void enic_unset_affinity_hint(struct enic *enic)
 	int i;
 
 	for (i = 0; i < enic->intr_count; i++)
-		irq_set_affinity_hint(enic->msix_entry[i].vector, NULL);
+		irq_update_affinity_hint(enic->msix_entry[i].vector, NULL);
 }
 
 static int enic_udp_tunnel_set_port(struct net_device *netdev,
@@ -448,9 +448,9 @@ static irqreturn_t enic_isr_legacy(int irq, void *data)
 {
 	struct net_device *netdev = data;
 	struct enic *enic = netdev_priv(netdev);
-	unsigned int io_intr = enic_legacy_io_intr();
-	unsigned int err_intr = enic_legacy_err_intr();
-	unsigned int notify_intr = enic_legacy_notify_intr();
+	unsigned int io_intr = ENIC_LEGACY_IO_INTR;
+	unsigned int err_intr = ENIC_LEGACY_ERR_INTR;
+	unsigned int notify_intr = ENIC_LEGACY_NOTIFY_INTR;
 	u32 pba;
 
 	vnic_intr_mask(&enic->intr[io_intr]);
@@ -680,11 +680,10 @@ static int enic_queue_wq_skb_tso(struct enic *enic, struct vnic_wq *wq,
 	skb_frag_t *frag;
 
 	if (skb->encapsulation) {
-		hdr_len = skb_inner_transport_header(skb) - skb->data;
-		hdr_len += inner_tcp_hdrlen(skb);
+		hdr_len = skb_inner_tcp_all_headers(skb);
 		enic_preload_tcp_csum_encap(skb);
 	} else {
-		hdr_len = skb_transport_offset(skb) + tcp_hdrlen(skb);
+		hdr_len = skb_tcp_all_headers(skb);
 		enic_preload_tcp_csum(skb);
 	}
 
@@ -882,7 +881,7 @@ static void enic_get_stats(struct net_device *netdev,
 	int err;
 
 	err = enic_dev_stats_dump(enic, &stats);
-	/* return only when pci_zalloc_consistent fails in vnic_dev_stats_dump
+	/* return only when dma_alloc_coherent fails in vnic_dev_stats_dump
 	 * For other failures, like devcmd failure, we return previously
 	 * recorded stats.
 	 */
@@ -985,7 +984,7 @@ static int enic_set_mac_addr(struct net_device *netdev, char *addr)
 			return -EADDRNOTAVAIL;
 	}
 
-	memcpy(netdev->dev_addr, addr, netdev->addr_len);
+	eth_hw_addr_set(netdev, addr);
 
 	return 0;
 }
@@ -1098,6 +1097,7 @@ static int enic_set_vf_mac(struct net_device *netdev, int vf, u8 *mac)
 static int enic_set_vf_port(struct net_device *netdev, int vf,
 	struct nlattr *port[])
 {
+	static const u8 zero_addr[ETH_ALEN] = {};
 	struct enic *enic = netdev_priv(netdev);
 	struct enic_port_profile prev_pp;
 	struct enic_port_profile *pp;
@@ -1162,7 +1162,7 @@ static int enic_set_vf_port(struct net_device *netdev, int vf,
 		} else {
 			memset(pp, 0, sizeof(*pp));
 			if (vf == PORT_SELF_VF)
-				eth_zero_addr(netdev->dev_addr);
+				eth_hw_addr_set(netdev, zero_addr);
 		}
 	} else {
 		/* Set flag to indicate that the port assoc/disassoc
@@ -1174,7 +1174,7 @@ static int enic_set_vf_port(struct net_device *netdev, int vf,
 		if (pp->request == PORT_REQUEST_DISASSOCIATE) {
 			eth_zero_addr(pp->mac_addr);
 			if (vf == PORT_SELF_VF)
-				eth_zero_addr(netdev->dev_addr);
+				eth_hw_addr_set(netdev, zero_addr);
 		}
 	}
 
@@ -1507,7 +1507,7 @@ static int enic_poll(struct napi_struct *napi, int budget)
 	struct enic *enic = netdev_priv(netdev);
 	unsigned int cq_rq = enic_cq_rq(enic, 0);
 	unsigned int cq_wq = enic_cq_wq(enic, 0);
-	unsigned int intr = enic_legacy_io_intr();
+	unsigned int intr = ENIC_LEGACY_IO_INTR;
 	unsigned int rq_work_to_do = budget;
 	unsigned int wq_work_to_do = ENIC_WQ_NAPI_BUDGET;
 	unsigned int  work_done, rq_work_done = 0, wq_work_done;
@@ -1856,8 +1856,7 @@ static int enic_dev_notify_set(struct enic *enic)
 	spin_lock_bh(&enic->devcmd_lock);
 	switch (vnic_dev_get_intr_mode(enic->vdev)) {
 	case VNIC_DEV_INTR_MODE_INTX:
-		err = vnic_dev_notify_set(enic->vdev,
-			enic_legacy_notify_intr());
+		err = vnic_dev_notify_set(enic->vdev, ENIC_LEGACY_NOTIFY_INTR);
 		break;
 	case VNIC_DEV_INTR_MODE_MSIX:
 		err = vnic_dev_notify_set(enic->vdev,
@@ -2633,16 +2632,17 @@ static int enic_dev_init(struct enic *enic)
 
 	switch (vnic_dev_get_intr_mode(enic->vdev)) {
 	default:
-		netif_napi_add(netdev, &enic->napi[0], enic_poll, 64);
+		netif_napi_add(netdev, &enic->napi[0], enic_poll);
 		break;
 	case VNIC_DEV_INTR_MODE_MSIX:
 		for (i = 0; i < enic->rq_count; i++) {
 			netif_napi_add(netdev, &enic->napi[i],
-				enic_poll_msix_rq, NAPI_POLL_WEIGHT);
+				       enic_poll_msix_rq);
 		}
 		for (i = 0; i < enic->wq_count; i++)
-			netif_napi_add(netdev, &enic->napi[enic_cq_wq(enic, i)],
-				       enic_poll_msix_wq, NAPI_POLL_WEIGHT);
+			netif_napi_add(netdev,
+				       &enic->napi[enic_cq_wq(enic, i)],
+				       enic_poll_msix_wq);
 		break;
 	}
 
@@ -2717,26 +2717,14 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 * fail to 32-bit.
 	 */
 
-	err = dma_set_mask(&pdev->dev, DMA_BIT_MASK(47));
+	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(47));
 	if (err) {
-		err = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
+		err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 		if (err) {
 			dev_err(dev, "No usable DMA configuration, aborting\n");
 			goto err_out_release_regions;
 		}
-		err = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
-		if (err) {
-			dev_err(dev, "Unable to obtain %u-bit DMA "
-				"for consistent allocations, aborting\n", 32);
-			goto err_out_release_regions;
-		}
 	} else {
-		err = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(47));
-		if (err) {
-			dev_err(dev, "Unable to obtain %u-bit DMA "
-				"for consistent allocations, aborting\n", 47);
-			goto err_out_release_regions;
-		}
 		using_dac = 1;
 	}
 

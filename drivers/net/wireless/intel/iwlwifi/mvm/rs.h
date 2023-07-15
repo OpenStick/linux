@@ -1,15 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /******************************************************************************
  *
- * Copyright(c) 2003 - 2014 Intel Corporation. All rights reserved.
  * Copyright(c) 2015 Intel Mobile Communications GmbH
  * Copyright(c) 2017 Intel Deutschland GmbH
- * Copyright(c) 2018 - 2019 Intel Corporation
- *
- * Contact Information:
- *  Intel Linux Wireless <linuxwifi@intel.com>
- * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
- *
+ * Copyright (C) 2003 - 2014, 2018 - 2022 Intel Corporation
  *****************************************************************************/
 
 #ifndef __rs_h__
@@ -35,11 +29,6 @@ struct iwl_rs_rate_info {
 };
 
 #define IWL_RATE_60M_PLCP 3
-
-enum {
-	IWL_RATE_INVM_INDEX = IWL_RATE_COUNT,
-	IWL_RATE_INVALID = IWL_RATE_COUNT,
-};
 
 #define LINK_QUAL_MAX_RETRY_NUM 16
 
@@ -211,16 +200,10 @@ struct rs_rate {
 #define is_ht80(rate)         ((rate)->bw == RATE_MCS_CHAN_WIDTH_80)
 #define is_ht160(rate)        ((rate)->bw == RATE_MCS_CHAN_WIDTH_160)
 
-#define IWL_MAX_MCS_DISPLAY_SIZE	12
-
-struct iwl_rate_mcs_info {
-	char	mbps[IWL_MAX_MCS_DISPLAY_SIZE];
-	char	mcs[IWL_MAX_MCS_DISPLAY_SIZE];
-};
-
 /**
  * struct iwl_lq_sta_rs_fw - rate and related statistics for RS in FW
  * @last_rate_n_flags: last rate reported by FW
+ * @max_agg_bufsize: the maximal size of the AGG buffer for this station
  * @sta_id: the id of the station
 #ifdef CONFIG_MAC80211_DEBUGFS
  * @dbg_fixed_rate: for debug, use fixed rate if not 0
@@ -370,6 +353,7 @@ struct iwl_lq_sta {
 
 	/* last tx rate_n_flags */
 	u32 last_rate_n_flags;
+
 	/* packets destined for this STA are aggregated */
 	u8 is_agg;
 
@@ -388,6 +372,7 @@ struct iwl_lq_sta {
 		u8 chains;
 		s8 chain_signal[IEEE80211_MAX_CHAINS];
 		s8 last_rssi;
+		u16 max_agg_bufsize;
 		struct rs_rate_stats tx_stats[RS_COLUMN_COUNT][IWL_RATE_COUNT];
 		struct iwl_mvm *drv;
 		spinlock_t lock; /* for races in reinit/update table */
@@ -409,8 +394,12 @@ struct iwl_lq_sta {
 				   ((_c) << RS_DRV_DATA_LQ_COLOR_POS)))
 
 /* Initialize station's rate scaling information after adding station */
-void iwl_mvm_rs_rate_init(struct iwl_mvm *mvm, struct ieee80211_sta *sta,
-			  enum nl80211_band band, bool init);
+void iwl_mvm_rs_rate_init(struct iwl_mvm *mvm,
+			  struct ieee80211_vif *vif,
+			  struct ieee80211_sta *sta,
+			  struct ieee80211_bss_conf *link_conf,
+			  struct ieee80211_link_sta *link_sta,
+			  enum nl80211_band band);
 
 /* Notify RS about Tx status */
 void iwl_mvm_rs_tx_status(struct iwl_mvm *mvm, struct ieee80211_sta *sta,
@@ -445,13 +434,24 @@ int iwl_mvm_tx_protection(struct iwl_mvm *mvm, struct iwl_mvm_sta *mvmsta,
 void iwl_mvm_reset_frame_stats(struct iwl_mvm *mvm);
 #endif
 
+struct iwl_mvm_link_sta;
+
 void iwl_mvm_rs_add_sta(struct iwl_mvm *mvm, struct iwl_mvm_sta *mvmsta);
-void rs_fw_rate_init(struct iwl_mvm *mvm, struct ieee80211_sta *sta,
-		     enum nl80211_band band, bool update);
+void iwl_mvm_rs_add_sta_link(struct iwl_mvm *mvm,
+			     struct iwl_mvm_link_sta *link_sta);
+
+void iwl_mvm_rs_fw_rate_init(struct iwl_mvm *mvm,
+			     struct ieee80211_vif *vif,
+			     struct ieee80211_sta *sta,
+			     struct ieee80211_bss_conf *link_conf,
+			     struct ieee80211_link_sta *link_sta,
+			     enum nl80211_band band);
 int rs_fw_tx_protection(struct iwl_mvm *mvm, struct iwl_mvm_sta *mvmsta,
 			bool enable);
 void iwl_mvm_tlc_update_notif(struct iwl_mvm *mvm,
 			      struct iwl_rx_cmd_buffer *rxb);
 
-u16 rs_fw_get_max_amsdu_len(struct ieee80211_sta *sta);
+u16 rs_fw_get_max_amsdu_len(struct ieee80211_sta *sta,
+			    struct ieee80211_bss_conf *link_conf,
+			    struct ieee80211_link_sta *link_sta);
 #endif /* __rs__ */

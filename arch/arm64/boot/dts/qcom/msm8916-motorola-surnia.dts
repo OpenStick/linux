@@ -37,12 +37,12 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&gpio_keys_default>;
+		pinctrl-names = "default";
 
 		label = "GPIO Buttons";
 
-		volume-up {
+		volume-up-button {
 			label = "Volume Up";
 			gpios = <&msmgpio 107 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEUP>;
@@ -53,9 +53,9 @@
 	usb_id: usb-id {
 		compatible = "linux,extcon-usb-gpio";
 		id-gpio = <&msmgpio 91 GPIO_ACTIVE_HIGH>;
-		pinctrl-names = "default", "sleep";
 		pinctrl-0 = <&usb_id_default>;
 		pinctrl-1 = <&usb_id_sleep>;
+		pinctrl-names = "default", "sleep";
 	};
 };
 
@@ -74,8 +74,8 @@
 		vdd-supply = <&pm8916_l16>;
 		vio-supply = <&pm8916_l6>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&ts_int_default>;
+		pinctrl-names = "default";
 
 		syna,startup-delay-ms = <100>;
 
@@ -107,8 +107,8 @@
 		interrupt-parent = <&msmgpio>;
 		interrupts = <12 IRQ_TYPE_EDGE_FALLING>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&battery_alert_default>;
+		pinctrl-names = "default";
 	};
 };
 
@@ -117,9 +117,9 @@
 };
 
 &dsi0 {
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&mdss_default>;
 	pinctrl-1 = <&mdss_sleep>;
+	pinctrl-names = "default", "sleep";
 
 	panel@0 {
 		compatible = "motorola,surnia-panel";
@@ -150,46 +150,42 @@
 };
 
 &pm8916_resin {
-	status = "okay";
 	linux,code = <KEY_VOLUMEDOWN>;
+	status = "okay";
 };
 
 &pm8916_vib {
 	status = "okay";
 };
 
-&pronto {
-	status = "okay";
-};
-
 &sdhc_1 {
-	status = "okay";
-
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&sdc1_clk_on &sdc1_cmd_on &sdc1_data_on>;
 	pinctrl-1 = <&sdc1_clk_off &sdc1_cmd_off &sdc1_data_off>;
+	pinctrl-names = "default", "sleep";
+
+	status = "okay";
 };
 
 &sdhc_2 {
-	status = "okay";
-
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&sdc2_clk_on &sdc2_cmd_on &sdc2_data_on &sdc2_cd_on>;
 	pinctrl-1 = <&sdc2_clk_off &sdc2_cmd_off &sdc2_data_off &sdc2_cd_off>;
+	pinctrl-names = "default", "sleep";
 
 	cd-gpios = <&msmgpio 25 GPIO_ACTIVE_LOW>;
+
+	status = "okay";
 };
 
 &sound {
-	status = "okay";
 	audio-routing =
 		"AMIC1", "MIC BIAS External1",
 		"AMIC3", "MIC BIAS External1";
+	status = "okay";
 };
 
 &usb {
-	status = "okay";
 	extcon = <&usb_id>, <&usb_id>;
+	status = "okay";
 };
 
 &usb_hs_phy {
@@ -199,6 +195,14 @@
 &wcd_codec {
 	qcom,micbias1-ext-cap;
 	qcom,micbias2-ext-cap;
+};
+
+&wcnss {
+	status = "okay";
+};
+
+&wcnss_iris {
+	compatible = "qcom,wcn3620";
 };
 
 &smd_rpm_regulators {
@@ -264,8 +268,8 @@
 	l11 {
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <2950000>;
-		regulator-allow-set-load;
 		regulator-system-load = <200000>;
+		regulator-allow-set-load;
 	};
 
 	l12 {
@@ -313,61 +317,52 @@
 };
 
 &msmgpio {
-	battery_alert_default: battery-alert-default {
+	battery_alert_default: battery-alert-default-state {
 		pins = "gpio12";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-pull-up;
 	};
 
-	gpio_keys_default: gpio-keys-default {
+	gpio_keys_default: gpio-keys-default-state {
 		pins = "gpio107";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-pull-up;
 	};
 
-	mdss {
-		mdss_default: mdss-default {
-			pins = "gpio78";
-			function = "gpio";
-
-			drive-strength = <8>;
-			bias-disable;
-		};
-		mdss_sleep: mdss-sleep {
-			pins = "gpio78";
-			function = "gpio";
-
-			drive-strength = <2>;
-			bias-pull-down;
-		};
+	mdss_default: mdss-default-state {
+		pins = "gpio78";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
 	};
 
-	ts_int_default: ts-int-default {
+	mdss_sleep: mdss-sleep-state {
+		pins = "gpio78";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	ts_int_default: ts-int-default-state {
 		pins = "gpio21";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	usb-id {
-		usb_id_default: id-default {
-			pins = "gpio91";
-			function = "gpio";
+	usb_id_default: usb-id-default-state {
+		pins = "gpio91";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-pull-up;
+	};
 
-			drive-strength = <8>;
-			bias-pull-up;
-		};
-		usb_id_sleep: id-sleep {
-			pins = "gpio91";
-			function = "gpio";
-
-			drive-strength = <8>;
-			bias-disable;
-		};
+	usb_id_sleep: usb-id-sleep-state {
+		pins = "gpio91";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
 	};
 };

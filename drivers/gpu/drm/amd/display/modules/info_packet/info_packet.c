@@ -100,7 +100,8 @@ enum vsc_packet_revision {
 //PB7 = MD0
 #define MASK_VTEM_MD0__VRR_EN         0x01
 #define MASK_VTEM_MD0__M_CONST        0x02
-#define MASK_VTEM_MD0__RESERVED2      0x0C
+#define MASK_VTEM_MD0__QMS_EN         0x04
+#define MASK_VTEM_MD0__RESERVED2      0x08
 #define MASK_VTEM_MD0__FVA_FACTOR_M1  0xF0
 
 //MD1
@@ -109,7 +110,7 @@ enum vsc_packet_revision {
 //MD2
 #define MASK_VTEM_MD2__BASE_REFRESH_RATE_98  0x03
 #define MASK_VTEM_MD2__RB                    0x04
-#define MASK_VTEM_MD2__RESERVED3             0xF8
+#define MASK_VTEM_MD2__NEXT_TFR              0xF8
 
 //MD3
 #define MASK_VTEM_MD3__BASE_REFRESH_RATE_07  0xFF
@@ -130,7 +131,9 @@ enum ColorimetryYCCDP {
 };
 
 void mod_build_vsc_infopacket(const struct dc_stream_state *stream,
-		struct dc_info_packet *info_packet)
+		struct dc_info_packet *info_packet,
+		enum dc_color_space cs,
+		enum color_transfer_func tf)
 {
 	unsigned int vsc_packet_revision = vsc_packet_undefined;
 	unsigned int i;
@@ -143,8 +146,10 @@ void mod_build_vsc_infopacket(const struct dc_stream_state *stream,
 		stereo3dSupport = true;
 	}
 
-	/*VSC packet set to 2 when DP revision >= 1.2*/
-	if (stream->link->psr_settings.psr_version != DC_PSR_VERSION_UNSUPPORTED)
+	/* VSC packet set to 4 for PSR-SU, or 2 for PSR1 */
+	if (stream->link->psr_settings.psr_version == DC_PSR_VERSION_SU_1)
+		vsc_packet_revision = vsc_packet_rev4;
+	else if (stream->link->psr_settings.psr_version == DC_PSR_VERSION_1)
 		vsc_packet_revision = vsc_packet_rev2;
 
 	/* Update to revision 5 for extended colorimetry support */
@@ -156,6 +161,29 @@ void mod_build_vsc_infopacket(const struct dc_stream_state *stream,
 	 */
 	if (vsc_packet_revision == vsc_packet_undefined)
 		return;
+
+	if (vsc_packet_revision == vsc_packet_rev4) {
+		/* Secondary-data Packet ID = 0*/
+		info_packet->hb0 = 0x00;
+		/* 07h - Packet Type Value indicating Video
+		 * Stream Configuration packet
+		 */
+		info_packet->hb1 = 0x07;
+		/* 04h = VSC SDP supporting 3D stereo + PSR/PSR2 + Y-coordinate
+		 * (applies to eDP v1.4 or higher).
+		 */
+		info_packet->hb2 = 0x04;
+		/* 0Eh = VSC SDP supporting 3D stereo + PSR2
+		 * (HB2 = 04h), with Y-coordinate of first scan
+		 * line of the SU region
+		 */
+		info_packet->hb3 = 0x0E;
+
+		for (i = 0; i < 28; i++)
+			info_packet->sb[i] = 0;
+
+		info_packet->valid = true;
+	}
 
 	if (vsc_packet_revision == vsc_packet_rev2) {
 		/* Secondary-data Packet ID = 0*/
@@ -331,13 +359,13 @@ void mod_build_vsc_infopacket(const struct dc_stream_state *stream,
 		/* Set Colorimetry format based on pixel encoding */
 		switch (stream->timing.pixel_encoding) {
 		case PIXEL_ENCODING_RGB:
-			if ((stream->output_color_space == COLOR_SPACE_SRGB) ||
-					(stream->output_color_space == COLOR_SPACE_SRGB_LIMITED))
+			if ((cs == COLOR_SPACE_SRGB) ||
+					(cs == COLOR_SPACE_SRGB_LIMITED))
 				colorimetryFormat = ColorimetryRGB_DP_sRGB;
-			else if (stream->output_color_space == COLOR_SPACE_ADOBERGB)
+			else if (cs == COLOR_SPACE_ADOBERGB)
 				colorimetryFormat = ColorimetryRGB_DP_AdobeRGB;
-			else if ((stream->output_color_space == COLOR_SPACE_2020_RGB_FULLRANGE) ||
-					(stream->output_color_space == COLOR_SPACE_2020_RGB_LIMITEDRANGE))
+			else if ((cs == COLOR_SPACE_2020_RGB_FULLRANGE) ||
+					(cs == COLOR_SPACE_2020_RGB_LIMITEDRANGE))
 				colorimetryFormat = ColorimetryRGB_DP_ITU_R_BT2020RGB;
 			break;
 
@@ -347,14 +375,17 @@ void mod_build_vsc_infopacket(const struct dc_stream_state *stream,
 			/* Note: xvYCC probably not supported correctly here on DP since colorspace translation
 			 * loses distinction between BT601 vs xvYCC601 in translation
 			 */
-			if (stream->output_color_space == COLOR_SPACE_YCBCR601)
+			if (cs == COLOR_SPACE_YCBCR601)
 				colorimetryFormat = ColorimetryYCC_DP_ITU601;
-			else if (stream->output_color_space == COLOR_SPACE_YCBCR709)
+			else if (cs == COLOR_SPACE_YCBCR709)
 				colorimetryFormat = ColorimetryYCC_DP_ITU709;
-			else if (stream->output_color_space == COLOR_SPACE_ADOBERGB)
+			else if (cs == COLOR_SPACE_ADOBERGB)
 				colorimetryFormat = ColorimetryYCC_DP_AdobeYCC;
-			else if (stream->output_color_space == COLOR_SPACE_2020_YCBCR)
+			else if (cs == COLOR_SPACE_2020_YCBCR)
 				colorimetryFormat = ColorimetryYCC_DP_ITU2020YCbCr;
+
+			if (cs == COLOR_SPACE_2020_YCBCR && tf == TRANSFER_FUNC_GAMMA_22)
+				colorimetryFormat = ColorimetryYCC_DP_ITU709;
 			break;
 
 		default:
@@ -391,8 +422,8 @@ void mod_build_vsc_infopacket(const struct dc_stream_state *stream,
 		}
 
 		/* all YCbCr are always limited range */
-		if ((stream->output_color_space == COLOR_SPACE_SRGB_LIMITED) ||
-				(stream->output_color_space == COLOR_SPACE_2020_RGB_LIMITEDRANGE) ||
+		if ((cs == COLOR_SPACE_SRGB_LIMITED) ||
+				(cs == COLOR_SPACE_2020_RGB_LIMITEDRANGE) ||
 				(pixelEncoding != 0x0)) {
 			info_packet->sb[17] |= 0x80; /* DB17 bit 7 set to 1 for CEA timing. */
 		}
@@ -486,5 +517,60 @@ void mod_build_hf_vsif_infopacket(const struct dc_stream_state *stream,
 		info_packet->sb[0] = (uint8_t) (0x100 - checksum);
 
 		info_packet->valid = true;
+}
+
+void mod_build_adaptive_sync_infopacket(const struct dc_stream_state *stream,
+		enum adaptive_sync_type asType,
+		const struct AS_Df_params *param,
+		struct dc_info_packet *info_packet)
+{
+	info_packet->valid = false;
+
+	memset(info_packet, 0, sizeof(struct dc_info_packet));
+
+	switch (asType) {
+	case ADAPTIVE_SYNC_TYPE_DP:
+		if (stream != NULL)
+			mod_build_adaptive_sync_infopacket_v2(stream, param, info_packet);
+		break;
+	case FREESYNC_TYPE_PCON_IN_WHITELIST:
+		mod_build_adaptive_sync_infopacket_v1(info_packet);
+		break;
+	case ADAPTIVE_SYNC_TYPE_NONE:
+	case FREESYNC_TYPE_PCON_NOT_IN_WHITELIST:
+	default:
+		break;
+	}
+}
+
+void mod_build_adaptive_sync_infopacket_v1(struct dc_info_packet *info_packet)
+{
+	info_packet->valid = true;
+	// HEADER {HB0, HB1, HB2, HB3} = {00, Type, Version, Length}
+	info_packet->hb0 = 0x00;
+	info_packet->hb1 = 0x22;
+	info_packet->hb2 = AS_SDP_VER_1;
+	info_packet->hb3 = 0x00;
+}
+
+void mod_build_adaptive_sync_infopacket_v2(const struct dc_stream_state *stream,
+		const struct AS_Df_params *param,
+		struct dc_info_packet *info_packet)
+{
+	info_packet->valid = true;
+	// HEADER {HB0, HB1, HB2, HB3} = {00, Type, Version, Length}
+	info_packet->hb0 = 0x00;
+	info_packet->hb1 = 0x22;
+	info_packet->hb2 = AS_SDP_VER_2;
+	info_packet->hb3 = AS_DP_SDP_LENGTH;
+
+	//Payload
+	info_packet->sb[0] = param->supportMode; //1: AVT; 0: FAVT
+	info_packet->sb[1] = (stream->timing.v_total & 0x00FF);
+	info_packet->sb[2] = (stream->timing.v_total & 0xFF00) >> 8;
+	//info_packet->sb[3] = 0x00; Target RR, not use fot AVT
+	info_packet->sb[4] = (param->increase.support << 6 | param->decrease.support << 7);
+	info_packet->sb[5] = param->increase.frame_duration_hex;
+	info_packet->sb[6] = param->decrease.frame_duration_hex;
 }
 

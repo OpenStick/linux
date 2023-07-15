@@ -63,14 +63,7 @@ static inline psched_time_t psched_get_time(void)
 	return PSCHED_NS2TICKS(ktime_get_ns());
 }
 
-static inline psched_tdiff_t
-psched_tdiff_bounded(psched_time_t tv1, psched_time_t tv2, psched_time_t bound)
-{
-	return min(tv1 - tv2, bound);
-}
-
 struct qdisc_watchdog {
-	u64		last_expires;
 	struct hrtimer	timer;
 	struct Qdisc	*qdisc;
 };
@@ -106,7 +99,7 @@ struct Qdisc *fifo_create_dflt(struct Qdisc *sch, struct Qdisc_ops *ops,
 			       struct netlink_ext_ack *extack);
 
 int register_qdisc(struct Qdisc_ops *qops);
-int unregister_qdisc(struct Qdisc_ops *qops);
+void unregister_qdisc(struct Qdisc_ops *qops);
 void qdisc_get_default(char *id, size_t len);
 int qdisc_set_default(const char *id);
 
@@ -147,6 +140,11 @@ static inline struct net *qdisc_net(struct Qdisc *q)
 	return dev_net(q->dev_queue->dev);
 }
 
+struct tc_query_caps_base {
+	enum tc_setup_type type;
+	void *caps;
+};
+
 struct tc_cbs_qopt_offload {
 	u8 enable;
 	s32 queue;
@@ -161,6 +159,32 @@ struct tc_etf_qopt_offload {
 	s32 queue;
 };
 
+struct tc_mqprio_caps {
+	bool validate_queue_counts:1;
+};
+
+struct tc_mqprio_qopt_offload {
+	/* struct tc_mqprio_qopt must always be the first element */
+	struct tc_mqprio_qopt qopt;
+	struct netlink_ext_ack *extack;
+	u16 mode;
+	u16 shaper;
+	u32 flags;
+	u64 min_rate[TC_QOPT_MAX_QUEUE];
+	u64 max_rate[TC_QOPT_MAX_QUEUE];
+	unsigned long preemptible_tcs;
+};
+
+struct tc_taprio_caps {
+	bool supports_queue_max_sdu:1;
+	bool gate_mask_per_txq:1;
+	/* Device expects lower TXQ numbers to have higher priority over higher
+	 * TXQs, regardless of their TC mapping. DO NOT USE FOR NEW DRIVERS,
+	 * INSTEAD ENFORCE A PROPER TC:TXQ MAPPING COMING FROM USER SPACE.
+	 */
+	bool broken_mqprio:1;
+};
+
 struct tc_taprio_sched_entry {
 	u8 command; /* TC_TAPRIO_CMD_* */
 
@@ -170,19 +194,39 @@ struct tc_taprio_sched_entry {
 };
 
 struct tc_taprio_qopt_offload {
+	struct tc_mqprio_qopt_offload mqprio;
+	struct netlink_ext_ack *extack;
 	u8 enable;
 	ktime_t base_time;
 	u64 cycle_time;
 	u64 cycle_time_extension;
+	u32 max_sdu[TC_MAX_QUEUE];
 
 	size_t num_entries;
 	struct tc_taprio_sched_entry entries[];
 };
 
+#if IS_ENABLED(CONFIG_NET_SCH_TAPRIO)
+
 /* Reference counting */
 struct tc_taprio_qopt_offload *taprio_offload_get(struct tc_taprio_qopt_offload
 						  *offload);
 void taprio_offload_free(struct tc_taprio_qopt_offload *offload);
+
+#else
+
+/* Reference counting */
+static inline struct tc_taprio_qopt_offload *
+taprio_offload_get(struct tc_taprio_qopt_offload *offload)
+{
+	return NULL;
+}
+
+static inline void taprio_offload_free(struct tc_taprio_qopt_offload *offload)
+{
+}
+
+#endif
 
 /* Ensure skb_mstamp_ns, which might have been populated with the txtime, is
  * not mistaken for a software timestamp, because this will otherwise prevent
@@ -191,6 +235,37 @@ void taprio_offload_free(struct tc_taprio_qopt_offload *offload);
 static inline void skb_txtime_consumed(struct sk_buff *skb)
 {
 	skb->tstamp = ktime_set(0, 0);
+}
+
+struct tc_skb_cb {
+	struct qdisc_skb_cb qdisc_cb;
+
+	u16 mru;
+	u8 post_ct:1;
+	u8 post_ct_snat:1;
+	u8 post_ct_dnat:1;
+	u16 zone; /* Only valid if post_ct = true */
+};
+
+static inline struct tc_skb_cb *tc_skb_cb(const struct sk_buff *skb)
+{
+	struct tc_skb_cb *cb = (struct tc_skb_cb *)skb->cb;
+
+	BUILD_BUG_ON(sizeof(*cb) > sizeof_field(struct sk_buff, cb));
+	return cb;
+}
+
+static inline bool tc_qdisc_stats_dump(struct Qdisc *sch,
+				       unsigned long cl,
+				       struct qdisc_walker *arg)
+{
+	if (arg->count >= arg->skip && arg->fn(sch, cl, arg) < 0) {
+		arg->stop = 1;
+		return false;
+	}
+
+	arg->count++;
+	return true;
 }
 
 #endif

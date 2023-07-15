@@ -2,6 +2,8 @@
 //
 // Copyright (C) 2015 Freescale Semiconductor, Inc.
 
+#include <dt-bindings/media/video-interfaces.h>
+
 / {
 	chosen {
 		stdout-path = &uart1;
@@ -82,7 +84,7 @@
 			"AMIC", "MICB";
 	};
 
-	spi4 {
+	spi-4 {
 		compatible = "spi-gpio";
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_spi4>;
@@ -170,7 +172,7 @@
 	port {
 		parallel_from_ov5640: endpoint {
 			remote-endpoint = <&ov5640_to_parallel>;
-			bus-type = <5>; /* Parallel bus */
+			bus-type = <MEDIA_BUS_TYPE_PARALLEL>;
 		};
 	};
 };
@@ -286,7 +288,7 @@
 	pinctrl-0 = <&pinctrl_qspi>;
 	status = "okay";
 
-	flash0: n25q256a@0 {
+	flash0: flash@0 {
 		#address-cells = <1>;
 		#size-cells = <1>;
 		compatible = "micron,n25q256a", "jedec,spi-nor";

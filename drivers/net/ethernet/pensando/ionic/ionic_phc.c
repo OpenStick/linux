@@ -268,7 +268,7 @@ static u64 ionic_hwstamp_read(struct ionic *ionic,
 	u32 tick_high_before, tick_high, tick_low;
 
 	/* read and discard low part to defeat hw staging of high part */
-	(void)ioread32(&ionic->idev.hwstamp_regs->tick_low);
+	ioread32(&ionic->idev.hwstamp_regs->tick_low);
 
 	tick_high_before = ioread32(&ionic->idev.hwstamp_regs->tick_high);
 
@@ -348,7 +348,7 @@ static int ionic_phc_adjfine(struct ptp_clock_info *info, long scaled_ppm)
 
 	spin_unlock_irqrestore(&phc->lock, irqflags);
 
-	return ionic_adminq_wait(phc->lif, &ctx, err);
+	return ionic_adminq_wait(phc->lif, &ctx, err, true);
 }
 
 static int ionic_phc_adjtime(struct ptp_clock_info *info, s64 delta)
@@ -373,7 +373,7 @@ static int ionic_phc_adjtime(struct ptp_clock_info *info, s64 delta)
 
 	spin_unlock_irqrestore(&phc->lock, irqflags);
 
-	return ionic_adminq_wait(phc->lif, &ctx, err);
+	return ionic_adminq_wait(phc->lif, &ctx, err, true);
 }
 
 static int ionic_phc_settime64(struct ptp_clock_info *info,
@@ -402,7 +402,7 @@ static int ionic_phc_settime64(struct ptp_clock_info *info,
 
 	spin_unlock_irqrestore(&phc->lock, irqflags);
 
-	return ionic_adminq_wait(phc->lif, &ctx, err);
+	return ionic_adminq_wait(phc->lif, &ctx, err, true);
 }
 
 static int ionic_phc_gettimex64(struct ptp_clock_info *info,
@@ -459,7 +459,7 @@ static long ionic_phc_aux_work(struct ptp_clock_info *info)
 
 	spin_unlock_irqrestore(&phc->lock, irqflags);
 
-	ionic_adminq_wait(phc->lif, &ctx, err);
+	ionic_adminq_wait(phc->lif, &ctx, err, true);
 
 	return phc->aux_work_delay;
 }
@@ -579,11 +579,10 @@ void ionic_lif_alloc_phc(struct ionic_lif *lif)
 	diff |= diff >> 16;
 	diff |= diff >> 32;
 
-	/* constrain to the hardware bitmask, and use this as the bitmask */
+	/* constrain to the hardware bitmask */
 	diff &= phc->cc.mask;
-	phc->cc.mask = diff;
 
-	/* the wrap period is now defined by diff (or phc->cc.mask)
+	/* the wrap period is now defined by diff
 	 *
 	 * we will update the time basis at about 1/4 the wrap period, so
 	 * should not see a difference of more than +/- diff/4.

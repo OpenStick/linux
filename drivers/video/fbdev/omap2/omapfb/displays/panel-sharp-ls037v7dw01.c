@@ -7,10 +7,9 @@
  */
 
 #include <linux/delay.h>
-#include <linux/gpio.h>
+#include <linux/gpio/consumer.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_gpio.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/regulator/consumer.h>
@@ -211,10 +210,9 @@ static int sharp_ls_probe_of(struct platform_device *pdev)
 	int r;
 
 	ddata->vcc = devm_regulator_get(&pdev->dev, "envdd");
-	if (IS_ERR(ddata->vcc)) {
-		dev_err(&pdev->dev, "failed to get regulator\n");
-		return PTR_ERR(ddata->vcc);
-	}
+	if (IS_ERR(ddata->vcc))
+		return dev_err_probe(&pdev->dev, PTR_ERR(ddata->vcc),
+				     "failed to get regulator\n");
 
 	/* lcd INI */
 	r = sharp_ls_get_gpio_of(&pdev->dev, 0, 0, "enable", &ddata->ini_gpio);

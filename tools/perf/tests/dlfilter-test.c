@@ -33,6 +33,7 @@
 #include "archinsn.h"
 #include "dlfilter.h"
 #include "tests.h"
+#include "util/sample.h"
 
 #define MAP_START 0x400000
 
@@ -87,7 +88,7 @@ static __printf(1, 2) int system_cmd(const char *fmt, ...)
 	if (ret <= 0 || ret >= MAXCMD)
 		return -1;
 
-	if (!verbose)
+	if (verbose <= 0)
 		strcat(cmd, REDIRECT_TO_DEV_NULL);
 
 	pr_debug("Command: %s\n", cmd);
@@ -398,7 +399,7 @@ static void test_data__free(struct test_data *td)
 	}
 }
 
-int test__dlfilter(struct test *test __maybe_unused, int subtest __maybe_unused)
+static int test__dlfilter(struct test_suite *test __maybe_unused, int subtest __maybe_unused)
 {
 	struct test_data td = {.fd = -1};
 	int pid = getpid();
@@ -414,3 +415,5 @@ int test__dlfilter(struct test *test __maybe_unused, int subtest __maybe_unused)
 	test_data__free(&td);
 	return err;
 }
+
+DEFINE_SUITE("dlfilter C API", dlfilter);

@@ -11,6 +11,7 @@
 
 struct dp_panel_private {
 	struct device *dev;
+	struct drm_device *drm_dev;
 	struct dp_panel dp_panel;
 	struct drm_dp_aux *aux;
 	struct dp_link *link;
@@ -18,6 +19,27 @@ struct dp_panel_private {
 	bool panel_on;
 	bool aux_cfg_update_done;
 };
+
+static void dp_panel_read_psr_cap(struct dp_panel_private *panel)
+{
+	ssize_t rlen;
+	struct dp_panel *dp_panel;
+
+	dp_panel = &panel->dp_panel;
+
+	/* edp sink */
+	if (dp_panel->dpcd[DP_EDP_CONFIGURATION_CAP]) {
+		rlen = drm_dp_dpcd_read(panel->aux, DP_PSR_SUPPORT,
+				&dp_panel->psr_cap, sizeof(dp_panel->psr_cap));
+		if (rlen == sizeof(dp_panel->psr_cap)) {
+			drm_dbg_dp(panel->drm_dev,
+				"psr version: 0x%x, psr_cap: 0x%x\n",
+				dp_panel->psr_cap.version,
+				dp_panel->psr_cap.capabilities);
+		} else
+			DRM_ERROR("failed to read psr info, rlen=%zd\n", rlen);
+	}
+}
 
 static int dp_panel_read_dpcd(struct dp_panel *dp_panel)
 {
@@ -50,7 +72,8 @@ static int dp_panel_read_dpcd(struct dp_panel *dp_panel)
 
 	/* check for EXTENDED_RECEIVER_CAPABILITY_FIELD_PRESENT */
 	if (temp & BIT(7)) {
-		DRM_DEBUG_DP("using EXTENDED_RECEIVER_CAPABILITY_FIELD\n");
+		drm_dbg_dp(panel->drm_dev,
+				"using EXTENDED_RECEIVER_CAPABILITY_FIELD\n");
 		offset = DPRX_EXTENDED_DPCD_FIELD;
 	}
 
@@ -73,16 +96,17 @@ static int dp_panel_read_dpcd(struct dp_panel *dp_panel)
 	link_info->rate = drm_dp_bw_code_to_link_rate(dpcd[DP_MAX_LINK_RATE]);
 	link_info->num_lanes = dpcd[DP_MAX_LANE_COUNT] & DP_MAX_LANE_COUNT_MASK;
 
+	/* Limit data lanes from data-lanes of endpoint property of dtsi */
 	if (link_info->num_lanes > dp_panel->max_dp_lanes)
 		link_info->num_lanes = dp_panel->max_dp_lanes;
 
-	/* Limit support upto HBR2 until HBR3 support is added */
-	if (link_info->rate >= (drm_dp_bw_code_to_link_rate(DP_LINK_BW_5_4)))
-		link_info->rate = drm_dp_bw_code_to_link_rate(DP_LINK_BW_5_4);
+	/* Limit link rate from link-frequencies of endpoint property of dtsi */
+	if (link_info->rate > dp_panel->max_dp_link_rate)
+		link_info->rate = dp_panel->max_dp_link_rate;
 
-	DRM_DEBUG_DP("version: %d.%d\n", major, minor);
-	DRM_DEBUG_DP("link_rate=%d\n", link_info->rate);
-	DRM_DEBUG_DP("lane_count=%d\n", link_info->num_lanes);
+	drm_dbg_dp(panel->drm_dev, "version: %d.%d\n", major, minor);
+	drm_dbg_dp(panel->drm_dev, "link_rate=%d\n", link_info->rate);
+	drm_dbg_dp(panel->drm_dev, "lane_count=%d\n", link_info->num_lanes);
 
 	if (drm_dp_enhanced_frame_cap(dpcd))
 		link_info->capabilities |= DP_LINK_CAP_ENHANCED_FRAMING;
@@ -104,6 +128,7 @@ static int dp_panel_read_dpcd(struct dp_panel *dp_panel)
 		}
 	}
 
+	dp_panel_read_psr_cap(panel);
 end:
 	return rc;
 }
@@ -206,16 +231,11 @@ int dp_panel_read_sink_caps(struct dp_panel *dp_panel,
 			rc = -ETIMEDOUT;
 			goto end;
 		}
-
-		/* fail safe edid */
-		mutex_lock(&connector->dev->mode_config.mutex);
-		if (drm_add_modes_noedid(connector, 640, 480))
-			drm_set_preferred_mode(connector, 640, 480);
-		mutex_unlock(&connector->dev->mode_config.mutex);
 	}
 
 	if (panel->aux_cfg_update_done) {
-		DRM_DEBUG_DP("read DPCD with updated AUX config\n");
+		drm_dbg_dp(panel->drm_dev,
+				"read DPCD with updated AUX config\n");
 		rc = dp_panel_read_dpcd(dp_panel);
 		bw_code = drm_dp_link_rate_to_bw_code(dp_panel->link_info.rate);
 		if (rc || !is_link_rate_valid(bw_code) ||
@@ -234,7 +254,7 @@ u32 dp_panel_get_mode_bpp(struct dp_panel *dp_panel,
 		u32 mode_edid_bpp, u32 mode_pclk_khz)
 {
 	struct dp_panel_private *panel;
-	u32 bpp = mode_edid_bpp;
+	u32 bpp;
 
 	if (!dp_panel || !mode_edid_bpp || !mode_pclk_khz) {
 		DRM_ERROR("invalid input\n");
@@ -254,7 +274,7 @@ u32 dp_panel_get_mode_bpp(struct dp_panel *dp_panel,
 }
 
 int dp_panel_get_modes(struct dp_panel *dp_panel,
-	struct drm_connector *connector, struct dp_display_mode *mode)
+	struct drm_connector *connector)
 {
 	if (!dp_panel) {
 		DRM_ERROR("invalid input\n");
@@ -329,7 +349,8 @@ void dp_panel_tpg_config(struct dp_panel *dp_panel, bool enable)
 	catalog = panel->catalog;
 
 	if (!panel->panel_on) {
-		DRM_DEBUG_DP("DP panel not enabled, handle TPG on next on\n");
+		drm_dbg_dp(panel->drm_dev,
+				"DP panel not enabled, handle TPG on next on\n");
 		return;
 	}
 
@@ -338,7 +359,7 @@ void dp_panel_tpg_config(struct dp_panel *dp_panel, bool enable)
 		return;
 	}
 
-	DRM_DEBUG_DP("%s: calling catalog tpg_enable\n", __func__);
+	drm_dbg_dp(panel->drm_dev, "calling catalog tpg_enable\n");
 	dp_catalog_panel_tpg_enable(catalog, &panel->dp_panel.dp_mode.drm_mode);
 }
 
@@ -364,12 +385,12 @@ int dp_panel_timing_cfg(struct dp_panel *dp_panel)
 	catalog = panel->catalog;
 	drm_mode = &panel->dp_panel.dp_mode.drm_mode;
 
-	DRM_DEBUG_DP("width=%d hporch= %d %d %d\n",
+	drm_dbg_dp(panel->drm_dev, "width=%d hporch= %d %d %d\n",
 		drm_mode->hdisplay, drm_mode->htotal - drm_mode->hsync_end,
 		drm_mode->hsync_start - drm_mode->hdisplay,
 		drm_mode->hsync_end - drm_mode->hsync_start);
 
-	DRM_DEBUG_DP("height=%d vporch= %d %d %d\n",
+	drm_dbg_dp(panel->drm_dev, "height=%d vporch= %d %d %d\n",
 		drm_mode->vdisplay, drm_mode->vtotal - drm_mode->vsync_end,
 		drm_mode->vsync_start - drm_mode->vdisplay,
 		drm_mode->vsync_end - drm_mode->vsync_start);
@@ -413,30 +434,37 @@ int dp_panel_timing_cfg(struct dp_panel *dp_panel)
 int dp_panel_init_panel_info(struct dp_panel *dp_panel)
 {
 	struct drm_display_mode *drm_mode;
+	struct dp_panel_private *panel;
 
 	drm_mode = &dp_panel->dp_mode.drm_mode;
+
+	panel = container_of(dp_panel, struct dp_panel_private, dp_panel);
 
 	/*
 	 * print resolution info as this is a result
 	 * of user initiated action of cable connection
 	 */
-	DRM_DEBUG_DP("SET NEW RESOLUTION:\n");
-	DRM_DEBUG_DP("%dx%d@%dfps\n", drm_mode->hdisplay,
-		drm_mode->vdisplay, drm_mode_vrefresh(drm_mode));
-	DRM_DEBUG_DP("h_porches(back|front|width) = (%d|%d|%d)\n",
+	drm_dbg_dp(panel->drm_dev, "SET NEW RESOLUTION:\n");
+	drm_dbg_dp(panel->drm_dev, "%dx%d@%dfps\n",
+		drm_mode->hdisplay, drm_mode->vdisplay, drm_mode_vrefresh(drm_mode));
+	drm_dbg_dp(panel->drm_dev,
+			"h_porches(back|front|width) = (%d|%d|%d)\n",
 			drm_mode->htotal - drm_mode->hsync_end,
 			drm_mode->hsync_start - drm_mode->hdisplay,
 			drm_mode->hsync_end - drm_mode->hsync_start);
-	DRM_DEBUG_DP("v_porches(back|front|width) = (%d|%d|%d)\n",
+	drm_dbg_dp(panel->drm_dev,
+			"v_porches(back|front|width) = (%d|%d|%d)\n",
 			drm_mode->vtotal - drm_mode->vsync_end,
 			drm_mode->vsync_start - drm_mode->vdisplay,
 			drm_mode->vsync_end - drm_mode->vsync_start);
-	DRM_DEBUG_DP("pixel clock (KHz)=(%d)\n", drm_mode->clock);
-	DRM_DEBUG_DP("bpp = %d\n", dp_panel->dp_mode.bpp);
+	drm_dbg_dp(panel->drm_dev, "pixel clock (KHz)=(%d)\n",
+				drm_mode->clock);
+	drm_dbg_dp(panel->drm_dev, "bpp = %d\n", dp_panel->dp_mode.bpp);
 
 	dp_panel->dp_mode.bpp = max_t(u32, 18,
-					min_t(u32, dp_panel->dp_mode.bpp, 30));
-	DRM_DEBUG_DP("updated bpp = %d\n", dp_panel->dp_mode.bpp);
+				min_t(u32, dp_panel->dp_mode.bpp, 30));
+	drm_dbg_dp(panel->drm_dev, "updated bpp = %d\n",
+				dp_panel->dp_mode.bpp);
 
 	return 0;
 }

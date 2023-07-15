@@ -338,31 +338,11 @@ static ssize_t driver_override_store(struct device *dev,
 				     const char *buf, size_t count)
 {
 	struct subchannel *sch = to_subchannel(dev);
-	char *driver_override, *old, *cp;
+	int ret;
 
-	/* We need to keep extra room for a newline */
-	if (count >= (PAGE_SIZE - 1))
-		return -EINVAL;
-
-	driver_override = kstrndup(buf, count, GFP_KERNEL);
-	if (!driver_override)
-		return -ENOMEM;
-
-	cp = strchr(driver_override, '\n');
-	if (cp)
-		*cp = '\0';
-
-	device_lock(dev);
-	old = sch->driver_override;
-	if (strlen(driver_override)) {
-		sch->driver_override = driver_override;
-	} else {
-		kfree(driver_override);
-		sch->driver_override = NULL;
-	}
-	device_unlock(dev);
-
-	kfree(old);
+	ret = driver_set_override(dev, &sch->driver_override, buf, count);
+	if (ret)
+		return ret;
 
 	return count;
 }
@@ -437,8 +417,8 @@ static ssize_t dev_busid_show(struct device *dev,
 	struct subchannel *sch = to_subchannel(dev);
 	struct pmcw *pmcw = &sch->schib.pmcw;
 
-	if ((pmcw->st == SUBCHANNEL_TYPE_IO ||
-	     pmcw->st == SUBCHANNEL_TYPE_MSG) && pmcw->dnv)
+	if ((pmcw->st == SUBCHANNEL_TYPE_IO && pmcw->dnv) ||
+	    (pmcw->st == SUBCHANNEL_TYPE_MSG && pmcw->w))
 		return sysfs_emit(buf, "0.%x.%04x\n", sch->schid.ssid,
 				  pmcw->dev);
 	else
@@ -470,16 +450,6 @@ int css_register_subchannel(struct subchannel *sch)
 	if (sch->st == SUBCHANNEL_TYPE_IO)
 		sch->dev.type = &io_subchannel_type;
 
-	/*
-	 * We don't want to generate uevents for I/O subchannels that don't
-	 * have a working ccw device behind them since they will be
-	 * unregistered before they can be used anyway, so we delay the add
-	 * uevent until after device recognition was successful.
-	 * Note that we suppress the uevent for all subchannel types;
-	 * the subchannel driver can decide itself when it wants to inform
-	 * userspace of its existence.
-	 */
-	dev_set_uevent_suppress(&sch->dev, 1);
 	css_update_ssd_info(sch);
 	/* make it known to the system */
 	ret = css_sch_device_register(sch);
@@ -487,15 +457,6 @@ int css_register_subchannel(struct subchannel *sch)
 		CIO_MSG_EVENT(0, "Could not register sch 0.%x.%04x: %d\n",
 			      sch->schid.ssid, sch->schid.sch_no, ret);
 		return ret;
-	}
-	if (!sch->driver) {
-		/*
-		 * No driver matched. Generate the uevent now so that
-		 * a fitting driver module may be loaded based on the
-		 * modalias.
-		 */
-		dev_set_uevent_suppress(&sch->dev, 0);
-		kobject_uevent(&sch->dev.kobj, KOBJ_ADD);
 	}
 	return ret;
 }
@@ -779,12 +740,21 @@ void css_schedule_eval_all(void)
 	spin_unlock_irqrestore(&slow_subchannel_lock, flags);
 }
 
-static int __unset_registered(struct device *dev, void *data)
+static int __unset_validpath(struct device *dev, void *data)
 {
 	struct idset *set = data;
 	struct subchannel *sch = to_subchannel(dev);
+	struct pmcw *pmcw = &sch->schib.pmcw;
 
-	idset_sch_del(set, sch->schid);
+	/* Here we want to make sure that we are considering only those subchannels
+	 * which do not have an operational device attached to it. This can be found
+	 * with the help of PAM and POM values of pmcw. OPM provides the information
+	 * about any path which is currently vary-off, so that we should not consider.
+	 */
+	if (sch->st == SUBCHANNEL_TYPE_IO &&
+	    (sch->opm & pmcw->pam & pmcw->pom))
+		idset_sch_del(set, sch->schid);
+
 	return 0;
 }
 
@@ -792,9 +762,8 @@ static int __unset_online(struct device *dev, void *data)
 {
 	struct idset *set = data;
 	struct subchannel *sch = to_subchannel(dev);
-	struct ccw_device *cdev = sch_get_cdev(sch);
 
-	if (cdev && cdev->online)
+	if (sch->st == SUBCHANNEL_TYPE_IO && sch->config.ena)
 		idset_sch_del(set, sch->schid);
 
 	return 0;
@@ -814,8 +783,8 @@ void css_schedule_eval_cond(enum css_eval_cond cond, unsigned long delay)
 	}
 	idset_fill(set);
 	switch (cond) {
-	case CSS_EVAL_UNREG:
-		bus_for_each_dev(&css_bus_type, NULL, set, __unset_registered);
+	case CSS_EVAL_NO_PATH:
+		bus_for_each_dev(&css_bus_type, NULL, set, __unset_validpath);
 		break;
 	case CSS_EVAL_NOT_ONLINE:
 		bus_for_each_dev(&css_bus_type, NULL, set, __unset_online);
@@ -838,11 +807,11 @@ void css_wait_for_slow_path(void)
 	flush_workqueue(cio_work_q);
 }
 
-/* Schedule reprobing of all unregistered subchannels. */
+/* Schedule reprobing of all subchannels with no valid operational path. */
 void css_schedule_reprobe(void)
 {
 	/* Schedule with a delay to allow merging of subsequent calls. */
-	css_schedule_eval_cond(CSS_EVAL_UNREG, 1 * HZ);
+	css_schedule_eval_cond(CSS_EVAL_NO_PATH, 1 * HZ);
 }
 EXPORT_SYMBOL_GPL(css_schedule_reprobe);
 
@@ -1442,9 +1411,9 @@ static void css_shutdown(struct device *dev)
 		sch->driver->shutdown(sch);
 }
 
-static int css_uevent(struct device *dev, struct kobj_uevent_env *env)
+static int css_uevent(const struct device *dev, struct kobj_uevent_env *env)
 {
-	struct subchannel *sch = to_subchannel(dev);
+	const struct subchannel *sch = to_subchannel(dev);
 	int ret;
 
 	ret = add_uevent_var(env, "ST=%01X", sch->st);

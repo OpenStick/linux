@@ -25,7 +25,7 @@ struct smb1360_regset {
 static const struct smb1360_regset smb1360_cfg = {
 	.name	= "configuration",
 	.start	= 0x00,
-	.end	= 0x1C,
+	.end	= 0x1c,
 	.regs	= {
 		{ 0x00, "CFG_BATT_CHG_REG", 1 },
 		{ 0x05, "CFG_BATT_CHG_ICL_REG", 1 },
@@ -33,10 +33,10 @@ static const struct smb1360_regset smb1360_cfg = {
 		{ 0x07, "CFG_CHG_MISC_REG", 1 },
 		{ 0x08, "CFG_CHG_FUNC_CTRL_REG", 1 },
 		{ 0x09, "CFG_STAT_CTRL_REG", 1 },
-		{ 0x0A, "CFG_SFY_TIMER_CTRL_REG", 1 },
-		{ 0x0D, "CFG_BATT_MISSING_REG", 1 },
-		{ 0x0E, "CFG_FG_BATT_CTRL_REG", 1 },
-		{ 0x0F, "IRQ_CFG_REG", 1 },
+		{ 0x0a, "CFG_SFY_TIMER_CTRL_REG", 1 },
+		{ 0x0d, "CFG_BATT_MISSING_REG", 1 },
+		{ 0x0e, "CFG_FG_BATT_CTRL_REG", 1 },
+		{ 0x0f, "IRQ_CFG_REG", 1 },
 		{ 0x10, "IRQ2_CFG_REG", 1 },
 		{ 0x11, "IRQ3_CFG_REG", 1 },
 		{ 0x12, "PRE_TO_FAST_REG", 1 },
@@ -44,8 +44,8 @@ static const struct smb1360_regset smb1360_cfg = {
 		{ 0x14, "CHG_CMP_CFG", 1 },
 		{ 0x15, "BATT_CHG_FLT_VTG_REG", 1 },
 		{ 0x16, "CFG_FVC_REG", 1 },
-		{ 0x1A, "SHDN_CTRL_REG", 1 },
-		{ 0x1C, "TRIM_1C_REG", 1 },
+		{ 0x1a, "SHDN_CTRL_REG", 1 },
+		{ 0x1c, "TRIM_1C_REG", 1 },
 		{ }
 	}
 };
@@ -53,7 +53,7 @@ static const struct smb1360_regset smb1360_cfg = {
 static const struct smb1360_regset smb1360_fg_cfg = {
 	.name	= "fg configuration",
 	.start	= 0x20,
-	.end	= 0x2F,
+	.end	= 0x2f,
 	.regs	= {
 		{ 0x20, "SHDW_FG_ESR_ACTUAL", 2 },
 		{ 0x24, "SOC_MAX_REG", 1 },
@@ -62,9 +62,9 @@ static const struct smb1360_regset smb1360_fg_cfg = {
 		{ 0x27, "Temp_external", 1 },
 		{ 0x28, "SOC_DELTA_REG", 1 },
 		{ 0x29, "JEITA_SOFT_COLD_REG", 1 },
-		{ 0x2A, "JEITA_SOFT_HOT_REG", 1 },
-		{ 0x2B, "VTG_MIN_REG", 1 },
-		{ 0x2E, "ESR_sys_replace", 2 },
+		{ 0x2a, "JEITA_SOFT_HOT_REG", 1 },
+		{ 0x2b, "VTG_MIN_REG", 1 },
+		{ 0x2e, "ESR_sys_replace", 2 },
 		{ }
 	}
 };
@@ -84,12 +84,12 @@ static const struct smb1360_regset smb1360_cmd = {
 static const struct smb1360_regset smb1360_status = {
 	.name	= "status",
 	.start	= 0x48,
-	.end	= 0x4F,
+	.end	= 0x4f,
 	.regs	= {
 		{ 0x48, "STATUS_1_REG", 1 },
-		{ 0x4B, "STATUS_3_REG", 1 },
-		{ 0x4C, "STATUS_4_REG", 1 },
-		{ 0x4F, "REVISION_CTRL_REG", 1 },
+		{ 0x4b, "STATUS_3_REG", 1 },
+		{ 0x4c, "STATUS_4_REG", 1 },
+		{ 0x4f, "REVISION_CTRL_REG", 1 },
 		{ }
 	}
 };
@@ -115,7 +115,7 @@ static const struct smb1360_regset smb1360_irq_status = {
 static const struct smb1360_regset smb1360_fg_shdw = {
 	.name	= "fg shadow",
 	.start	= 0x60,
-	.end	= 0x6F,
+	.end	= 0x6f,
 	.regs	= {
 		{ 0x60, "SHDW_FG_BATT_STATUS", 1 },
 		{ 0x61, "SHDW_FG_MSYS_SOC", 1 },
@@ -125,9 +125,9 @@ static const struct smb1360_regset smb1360_fg_shdw = {
 		{ 0x67, "Latest_Cutoff_SOC", 1 },
 		{ 0x68, "Latest_full_SOC", 1 },
 		{ 0x69, "SHDW_FG_VTG_NOW", 2 },
-		{ 0x6B, "SHDW_FG_CURR_NOW", 2 },
-		{ 0x6D, "SHDW_FG_BATT_TEMP", 2 },
-		{ 0x6F, "Latest_system_sbits", 1 },
+		{ 0x6b, "SHDW_FG_CURR_NOW", 2 },
+		{ 0x6d, "SHDW_FG_BATT_TEMP", 2 },
+		{ 0x6f, "Latest_system_sbits", 1 },
 		{ }
 	}
 };
@@ -135,46 +135,46 @@ static const struct smb1360_regset smb1360_fg_shdw = {
 static const struct smb1360_regset smb1360_fg_scratch = {
 	.name	= "fg scratch pad",
 	.start	= 0x80,
-	.end	= 0xDC,
+	.end	= 0xdc,
 	.regs	= {
 		{ 0x80, "VOLTAGE_PREDICTED_REG", 2 },
 		{ 0x82, "v_cutoff_predicted", 2 },
 		{ 0x84, "v_full_predicted", 2 },
 		{ 0x86, "ocv_estimate", 2 },
 		{ 0x88, "rslow_drop", 2 },
-		{ 0x8A, "voltage_old", 2 },
-		{ 0x8C, "current_old", 2 },
-		{ 0x8E, "current_average_full", 4 },
+		{ 0x8a, "voltage_old", 2 },
+		{ 0x8c, "current_old", 2 },
+		{ 0x8e, "current_average_full", 4 },
 		{ 0x92, "temperature", 2 },
 		{ 0x94, "temp_last_track", 2 },
 		{ 0x96, "ESR_nominal", 2 },
-		{ 0x9A, "Rslow", 2 },
-		{ 0x9C, "counter_imptr", 2 },
-		{ 0x9E, "counter_pulse", 2 },
-		{ 0xA0, "IRQ_delta_prev", 1 },
-		{ 0xA1, "cap_learning_counter", 1 },
-		{ 0xA2, "Vact_int_error", 4 },
-		{ 0xA6, "SOC_cutoff", 3 },
-		{ 0xA9, "SOC_full", 3 },
-		{ 0xAC, "SOC_auto_rechrge_temp", 3 },
-		{ 0xAF, "Battery_SOC", 3 },
-		{ 0xB2, "CC_SOC", 4 },
-		{ 0xB6, "SOC_filtered", 2 },
-		{ 0xB8, "SOC_Monotonic", 2 },
-		{ 0xBA, "CC_TO_SOC_COEFF", 2 },
-		{ 0xBC, "NOMINAL_CAPACITY_REG", 2 },
-		{ 0xBE, "ACTUAL_CAPACITY_REG", 2 },
-		{ 0xC4, "temperature_counter", 1 },
-		{ 0xC5, "Vbatt_filtered", 3 },
-		{ 0xC8, "Ibatt_filtered", 3 },
-		{ 0xCB, "Current_CC_shadow", 2 },
-		{ 0xCF, "FG_IBATT_STANDBY_REG", 2 },
-		{ 0xD2, "FG_AUTO_RECHARGE_SOC", 1 },
-		{ 0xD3, "FG_SYS_CUTOFF_V_REG", 2 },
-		{ 0xD5, "FG_CC_TO_CV_V_REG", 2 },
-		{ 0xD7, "System_term_current", 2 },
-		{ 0xD9, "System_fake_term_current", 2 },
-		{ 0xDB, "FG_THERM_C1_COEFF_REG", 2 },
+		{ 0x9a, "Rslow", 2 },
+		{ 0x9c, "counter_imptr", 2 },
+		{ 0x9e, "counter_pulse", 2 },
+		{ 0xa0, "IRQ_delta_prev", 1 },
+		{ 0xa1, "cap_learning_counter", 1 },
+		{ 0xa2, "Vact_int_error", 4 },
+		{ 0xa6, "SOC_cutoff", 3 },
+		{ 0xa9, "SOC_full", 3 },
+		{ 0xac, "SOC_auto_rechrge_temp", 3 },
+		{ 0xaf, "Battery_SOC", 3 },
+		{ 0xb2, "CC_SOC", 4 },
+		{ 0xb6, "SOC_filtered", 2 },
+		{ 0xb8, "SOC_Monotonic", 2 },
+		{ 0xba, "CC_TO_SOC_COEFF", 2 },
+		{ 0xbc, "NOMINAL_CAPACITY_REG", 2 },
+		{ 0xbe, "ACTUAL_CAPACITY_REG", 2 },
+		{ 0xc4, "temperature_counter", 1 },
+		{ 0xc5, "Vbatt_filtered", 3 },
+		{ 0xc8, "Ibatt_filtered", 3 },
+		{ 0xcb, "Current_CC_shadow", 2 },
+		{ 0xcf, "FG_IBATT_STANDBY_REG", 2 },
+		{ 0xd2, "FG_AUTO_RECHARGE_SOC", 1 },
+		{ 0xd3, "FG_SYS_CUTOFF_V_REG", 2 },
+		{ 0xd5, "FG_CC_TO_CV_V_REG", 2 },
+		{ 0xd7, "System_term_current", 2 },
+		{ 0xd9, "System_fake_term_current", 2 },
+		{ 0xdb, "FG_THERM_C1_COEFF_REG", 2 },
 		{ }
 	}
 };
@@ -183,22 +183,22 @@ static const struct smb1360_regset smb1360_fg_scratch = {
 static const struct smb1360_regset smb1360_fg_otp = {
 	.name	= "fg otp",
 	.start	= 0x12,
-	.end	= 0x1E,
+	.end	= 0x1e,
 	.regs	= {
 		{ 0x12, "JEITA_HARD_COLD_REG", 1 },
 		{ 0x13, "JEITA_HARD_HOT_REG", 1 },
-		{ 0x1D, "CURRENT_GAIN_REG", 2 },
+		{ 0x1d, "CURRENT_GAIN_REG", 2 },
 		{ }
 	}
 };
 
 static const struct smb1360_regset smb1360_fg_otp_backup = {
 	.name	= "fg otp backup",
-	.start	= 0xE0,
-	.end	= 0xF1,
+	.start	= 0xe0,
+	.end	= 0xf1,
 	.regs	= {
-		{ 0xE0, "OTP_BACKUP_REG", 16, RAW },
-		{ 0xF0, "OTP_BACKUP_WA_ALG", 2, BIG_ENDIAN },
+		{ 0xe0, "OTP_BACKUP_REG", 16, RAW },
+		{ 0xf0, "OTP_BACKUP_WA_ALG", 2, BIG_ENDIAN },
 		{ }
 	}
 };
@@ -210,7 +210,7 @@ static void smb1360_reg_dump(const struct smb1360_reg *reg, const u8 val[])
 
 	switch (reg->type) {
 	case RAW:
-		pr_info("\t<%#x> %s %*ph\n", reg->addr, reg->name, reg->size, val);
+		pr_info("\t<0x%02x> %s %*ph\n", reg->addr, reg->name, reg->size, val);
 		return;
 	case LITTLE_ENDIAN:
 		for (i = 0; i < reg->size; ++i) {
@@ -225,7 +225,7 @@ static void smb1360_reg_dump(const struct smb1360_reg *reg, const u8 val[])
 		break;
 	}
 
-	pr_info("\t<%#x> %s %0*x\n", reg->addr, reg->name, 2 * reg->size, num);
+	pr_info("\t<0x%02x> %s %0*x\n", reg->addr, reg->name, 2 * reg->size, num);
 }
 
 static void smb1360_regset_dump(struct i2c_client *client, const struct smb1360_regset *set)
@@ -242,9 +242,9 @@ static void smb1360_regset_dump(struct i2c_client *client, const struct smb1360_
 		int i = r - set->start;
 
 		ret = i2c_smbus_read_i2c_block_data(client, r, len, &val[i]);
-		pr_info("\tread %s at %#x len %d, ret %d\n", set->name, r, len, ret);
+		pr_info("\tread %s at 0x%02x len %d, ret %d\n", set->name, r, len, ret);
 		if (ret < 0) {
-			pr_err("\tFailed to read %d %s registers at %#x: %d\n",
+			pr_err("\tFailed to read %d %s registers at 0x%02x: %d\n",
 			       len, set->name, r, ret);
 			return;
 		}
@@ -268,7 +268,7 @@ static void smb1360_regset_dump(struct i2c_client *client, const struct smb1360_
 			next = set->end + 1;
 		}
 
-		pr_info("\t<%#x> %*ph\n", r, next - r, &val[i]);
+		pr_info("\t<0x%02x> %*ph\n", r, next - r, &val[i]);
 		r = next;
 	}
 }

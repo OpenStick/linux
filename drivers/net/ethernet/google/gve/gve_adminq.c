@@ -38,7 +38,8 @@ void gve_parse_device_option(struct gve_priv *priv,
 			     struct gve_device_option *option,
 			     struct gve_device_option_gqi_rda **dev_op_gqi_rda,
 			     struct gve_device_option_gqi_qpl **dev_op_gqi_qpl,
-			     struct gve_device_option_dqo_rda **dev_op_dqo_rda)
+			     struct gve_device_option_dqo_rda **dev_op_dqo_rda,
+			     struct gve_device_option_jumbo_frames **dev_op_jumbo_frames)
 {
 	u32 req_feat_mask = be32_to_cpu(option->required_features_mask);
 	u16 option_length = be16_to_cpu(option->option_length);
@@ -111,6 +112,24 @@ void gve_parse_device_option(struct gve_priv *priv,
 		}
 		*dev_op_dqo_rda = (void *)(option + 1);
 		break;
+	case GVE_DEV_OPT_ID_JUMBO_FRAMES:
+		if (option_length < sizeof(**dev_op_jumbo_frames) ||
+		    req_feat_mask != GVE_DEV_OPT_REQ_FEAT_MASK_JUMBO_FRAMES) {
+			dev_warn(&priv->pdev->dev, GVE_DEVICE_OPTION_ERROR_FMT,
+				 "Jumbo Frames",
+				 (int)sizeof(**dev_op_jumbo_frames),
+				 GVE_DEV_OPT_REQ_FEAT_MASK_JUMBO_FRAMES,
+				 option_length, req_feat_mask);
+			break;
+		}
+
+		if (option_length > sizeof(**dev_op_jumbo_frames)) {
+			dev_warn(&priv->pdev->dev,
+				 GVE_DEVICE_OPTION_TOO_BIG_FMT,
+				 "Jumbo Frames");
+		}
+		*dev_op_jumbo_frames = (void *)(option + 1);
+		break;
 	default:
 		/* If we don't recognize the option just continue
 		 * without doing anything.
@@ -126,7 +145,8 @@ gve_process_device_options(struct gve_priv *priv,
 			   struct gve_device_descriptor *descriptor,
 			   struct gve_device_option_gqi_rda **dev_op_gqi_rda,
 			   struct gve_device_option_gqi_qpl **dev_op_gqi_qpl,
-			   struct gve_device_option_dqo_rda **dev_op_dqo_rda)
+			   struct gve_device_option_dqo_rda **dev_op_dqo_rda,
+			   struct gve_device_option_jumbo_frames **dev_op_jumbo_frames)
 {
 	const int num_options = be16_to_cpu(descriptor->num_device_options);
 	struct gve_device_option *dev_opt;
@@ -146,7 +166,7 @@ gve_process_device_options(struct gve_priv *priv,
 
 		gve_parse_device_option(priv, descriptor, dev_opt,
 					dev_op_gqi_rda, dev_op_gqi_qpl,
-					dev_op_dqo_rda);
+					dev_op_dqo_rda, dev_op_jumbo_frames);
 		dev_opt = next_opt;
 	}
 
@@ -269,7 +289,7 @@ static int gve_adminq_parse_err(struct gve_priv *priv, u32 status)
 	case GVE_ADMINQ_COMMAND_ERROR_RESOURCE_EXHAUSTED:
 		return -ENOMEM;
 	case GVE_ADMINQ_COMMAND_ERROR_UNIMPLEMENTED:
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	default:
 		dev_err(&priv->pdev->dev, "parse_aq_err: unknown status code %d\n", status);
 		return -EINVAL;
@@ -281,7 +301,7 @@ static int gve_adminq_parse_err(struct gve_priv *priv, u32 status)
  */
 static int gve_adminq_kick_and_wait(struct gve_priv *priv)
 {
-	u32 tail, head;
+	int tail, head;
 	int i;
 
 	tail = ioread32be(&priv->reg_bar0->adminq_event_counter);
@@ -387,6 +407,9 @@ static int gve_adminq_issue_cmd(struct gve_priv *priv,
 	case GVE_ADMINQ_GET_PTYPE_MAP:
 		priv->adminq_get_ptype_map_cnt++;
 		break;
+	case GVE_ADMINQ_VERIFY_DRIVER_COMPATIBILITY:
+		priv->adminq_verify_driver_compatibility_cnt++;
+		break;
 	default:
 		dev_err(&priv->pdev->dev, "unknown AQ command opcode %d\n", opcode);
 	}
@@ -442,7 +465,7 @@ int gve_adminq_configure_device_resources(struct gve_priv *priv,
 		.num_counters = cpu_to_be32(num_counters),
 		.irq_db_addr = cpu_to_be64(db_array_bus_addr),
 		.num_irq_dbs = cpu_to_be32(num_ntfy_blks),
-		.irq_db_stride = cpu_to_be32(sizeof(priv->ntfy_blocks[0])),
+		.irq_db_stride = cpu_to_be32(sizeof(*priv->irq_db_indices)),
 		.ntfy_blk_msix_base_idx =
 					cpu_to_be32(GVE_NTFY_BLK_BASE_MSIX_IDX),
 		.queue_format = priv->queue_format,
@@ -493,12 +516,12 @@ static int gve_adminq_create_tx_queue(struct gve_priv *priv, u32 queue_index)
 	return gve_adminq_issue_cmd(priv, &cmd);
 }
 
-int gve_adminq_create_tx_queues(struct gve_priv *priv, u32 num_queues)
+int gve_adminq_create_tx_queues(struct gve_priv *priv, u32 start_id, u32 num_queues)
 {
 	int err;
 	int i;
 
-	for (i = 0; i < num_queues; i++) {
+	for (i = start_id; i < start_id + num_queues; i++) {
 		err = gve_adminq_create_tx_queue(priv, i);
 		if (err)
 			return err;
@@ -530,6 +553,7 @@ static int gve_adminq_create_rx_queue(struct gve_priv *priv, u32 queue_index)
 			cpu_to_be64(rx->data.data_bus),
 		cmd.create_rx_queue.index = cpu_to_be32(queue_index);
 		cmd.create_rx_queue.queue_page_list_id = cpu_to_be32(qpl_id);
+		cmd.create_rx_queue.packet_buffer_size = cpu_to_be16(rx->packet_buffer_size);
 	} else {
 		cmd.create_rx_queue.rx_ring_size =
 			cpu_to_be16(priv->rx_desc_cnt);
@@ -580,12 +604,12 @@ static int gve_adminq_destroy_tx_queue(struct gve_priv *priv, u32 queue_index)
 	return 0;
 }
 
-int gve_adminq_destroy_tx_queues(struct gve_priv *priv, u32 num_queues)
+int gve_adminq_destroy_tx_queues(struct gve_priv *priv, u32 start_id, u32 num_queues)
 {
 	int err;
 	int i;
 
-	for (i = 0; i < num_queues; i++) {
+	for (i = start_id; i < start_id + num_queues; i++) {
 		err = gve_adminq_destroy_tx_queue(priv, i);
 		if (err)
 			return err;
@@ -660,12 +684,31 @@ gve_set_desc_cnt_dqo(struct gve_priv *priv,
 	return 0;
 }
 
+static void gve_enable_supported_features(struct gve_priv *priv,
+					  u32 supported_features_mask,
+					  const struct gve_device_option_jumbo_frames
+						  *dev_op_jumbo_frames)
+{
+	/* Before control reaches this point, the page-size-capped max MTU from
+	 * the gve_device_descriptor field has already been stored in
+	 * priv->dev->max_mtu. We overwrite it with the true max MTU below.
+	 */
+	if (dev_op_jumbo_frames &&
+	    (supported_features_mask & GVE_SUP_JUMBO_FRAMES_MASK)) {
+		dev_info(&priv->pdev->dev,
+			 "JUMBO FRAMES device option enabled.\n");
+		priv->dev->max_mtu = be16_to_cpu(dev_op_jumbo_frames->max_mtu);
+	}
+}
+
 int gve_adminq_describe_device(struct gve_priv *priv)
 {
+	struct gve_device_option_jumbo_frames *dev_op_jumbo_frames = NULL;
 	struct gve_device_option_gqi_rda *dev_op_gqi_rda = NULL;
 	struct gve_device_option_gqi_qpl *dev_op_gqi_qpl = NULL;
 	struct gve_device_option_dqo_rda *dev_op_dqo_rda = NULL;
 	struct gve_device_descriptor *descriptor;
+	u32 supported_features_mask = 0;
 	union gve_adminq_command cmd;
 	dma_addr_t descriptor_bus;
 	int err = 0;
@@ -689,7 +732,8 @@ int gve_adminq_describe_device(struct gve_priv *priv)
 		goto free_device_descriptor;
 
 	err = gve_process_device_options(priv, descriptor, &dev_op_gqi_rda,
-					 &dev_op_gqi_qpl, &dev_op_dqo_rda);
+					 &dev_op_gqi_qpl, &dev_op_dqo_rda,
+					 &dev_op_jumbo_frames);
 	if (err)
 		goto free_device_descriptor;
 
@@ -697,19 +741,26 @@ int gve_adminq_describe_device(struct gve_priv *priv)
 	 * is not set to GqiRda, choose the queue format in a priority order:
 	 * DqoRda, GqiRda, GqiQpl. Use GqiQpl as default.
 	 */
-	if (priv->queue_format == GVE_GQI_RDA_FORMAT) {
-		dev_info(&priv->pdev->dev,
-			 "Driver is running with GQI RDA queue format.\n");
-	} else if (dev_op_dqo_rda) {
+	if (dev_op_dqo_rda) {
 		priv->queue_format = GVE_DQO_RDA_FORMAT;
 		dev_info(&priv->pdev->dev,
 			 "Driver is running with DQO RDA queue format.\n");
+		supported_features_mask =
+			be32_to_cpu(dev_op_dqo_rda->supported_features_mask);
 	} else if (dev_op_gqi_rda) {
 		priv->queue_format = GVE_GQI_RDA_FORMAT;
 		dev_info(&priv->pdev->dev,
 			 "Driver is running with GQI RDA queue format.\n");
+		supported_features_mask =
+			be32_to_cpu(dev_op_gqi_rda->supported_features_mask);
+	} else if (priv->queue_format == GVE_GQI_RDA_FORMAT) {
+		dev_info(&priv->pdev->dev,
+			 "Driver is running with GQI RDA queue format.\n");
 	} else {
 		priv->queue_format = GVE_GQI_QPL_FORMAT;
+		if (dev_op_gqi_qpl)
+			supported_features_mask =
+				be32_to_cpu(dev_op_gqi_qpl->supported_features_mask);
 		dev_info(&priv->pdev->dev,
 			 "Driver is running with GQI QPL queue format.\n");
 	}
@@ -733,7 +784,7 @@ int gve_adminq_describe_device(struct gve_priv *priv)
 	}
 	priv->dev->max_mtu = mtu;
 	priv->num_event_counters = be16_to_cpu(descriptor->counters);
-	ether_addr_copy(priv->dev->dev_addr, descriptor->mac);
+	eth_hw_addr_set(priv->dev, descriptor->mac);
 	mac = descriptor->mac;
 	dev_info(&priv->pdev->dev, "MAC addr: %pM\n", mac);
 	priv->tx_pages_per_qpl = be16_to_cpu(descriptor->tx_pages_per_qpl);
@@ -745,6 +796,9 @@ int gve_adminq_describe_device(struct gve_priv *priv)
 		priv->rx_desc_cnt = priv->rx_data_slot_cnt;
 	}
 	priv->default_num_queues = be16_to_cpu(descriptor->default_num_queues);
+
+	gve_enable_supported_features(priv, supported_features_mask,
+				      dev_op_jumbo_frames);
 
 free_device_descriptor:
 	dma_free_coherent(&priv->pdev->dev, PAGE_SIZE, descriptor,
@@ -822,6 +876,22 @@ int gve_adminq_report_stats(struct gve_priv *priv, u64 stats_report_len,
 		.stats_report_len = cpu_to_be64(stats_report_len),
 		.stats_report_addr = cpu_to_be64(stats_report_addr),
 		.interval = cpu_to_be64(interval),
+	};
+
+	return gve_adminq_execute_cmd(priv, &cmd);
+}
+
+int gve_adminq_verify_driver_compatibility(struct gve_priv *priv,
+					   u64 driver_info_len,
+					   dma_addr_t driver_info_addr)
+{
+	union gve_adminq_command cmd;
+
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.opcode = cpu_to_be32(GVE_ADMINQ_VERIFY_DRIVER_COMPATIBILITY);
+	cmd.verify_driver_compatibility = (struct gve_adminq_verify_driver_compatibility) {
+		.driver_info_len = cpu_to_be64(driver_info_len),
+		.driver_info_addr = cpu_to_be64(driver_info_addr),
 	};
 
 	return gve_adminq_execute_cmd(priv, &cmd);

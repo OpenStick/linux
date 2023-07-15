@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2021 FIXME
+// Copyright (c) 2023 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -26,14 +26,6 @@ static inline struct nt35521s *to_nt35521s(struct drm_panel *panel)
 	return container_of(panel, struct nt35521s, panel);
 }
 
-#define dsi_generic_write_seq(dsi, seq...) do {				\
-		static const u8 d[] = { seq };				\
-		int ret;						\
-		ret = mipi_dsi_generic_write(dsi, d, ARRAY_SIZE(d));	\
-		if (ret < 0)						\
-			return ret;					\
-	} while (0)
-
 static void nt35521s_reset(struct nt35521s *ctx)
 {
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
@@ -52,13 +44,13 @@ static int nt35521s_on(struct nt35521s *ctx)
 
 	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
-	dsi_generic_write_seq(dsi, 0xff, 0xaa, 0x55, 0x25, 0x01);
-	dsi_generic_write_seq(dsi, 0x6f, 0x21);
-	dsi_generic_write_seq(dsi, 0xf7, 0x01);
-	dsi_generic_write_seq(dsi, 0x6f, 0x21);
-	dsi_generic_write_seq(dsi, 0xf7, 0x00);
-	dsi_generic_write_seq(dsi, 0xff, 0xaa, 0x55, 0x25, 0x00);
-	dsi_generic_write_seq(dsi, 0x35, 0x00);
+	mipi_dsi_generic_write_seq(dsi, 0xff, 0xaa, 0x55, 0x25, 0x01);
+	mipi_dsi_generic_write_seq(dsi, 0x6f, 0x21);
+	mipi_dsi_generic_write_seq(dsi, 0xf7, 0x01);
+	mipi_dsi_generic_write_seq(dsi, 0x6f, 0x21);
+	mipi_dsi_generic_write_seq(dsi, 0xf7, 0x00);
+	mipi_dsi_generic_write_seq(dsi, 0xff, 0xaa, 0x55, 0x25, 0x00);
+	mipi_dsi_generic_write_seq(dsi, 0x35, 0x00);
 
 	ret = mipi_dsi_dcs_exit_sleep_mode(dsi);
 	if (ret < 0) {
@@ -236,7 +228,7 @@ static int nt35521s_probe(struct mipi_dsi_device *dsi)
 	return 0;
 }
 
-static int nt35521s_remove(struct mipi_dsi_device *dsi)
+static void nt35521s_remove(struct mipi_dsi_device *dsi)
 {
 	struct nt35521s *ctx = mipi_dsi_get_drvdata(dsi);
 	int ret;
@@ -246,8 +238,6 @@ static int nt35521s_remove(struct mipi_dsi_device *dsi)
 		dev_err(&dsi->dev, "Failed to detach from DSI host: %d\n", ret);
 
 	drm_panel_remove(&ctx->panel);
-
-	return 0;
 }
 
 static const struct of_device_id nt35521s_of_match[] = {
@@ -268,4 +258,4 @@ module_mipi_dsi_driver(nt35521s_driver);
 
 MODULE_AUTHOR("linux-mdss-dsi-panel-driver-generator <fix@me>"); // FIXME
 MODULE_DESCRIPTION("DRM driver for nt35521s_HD720p_video_BOE");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

@@ -8,11 +8,11 @@
 #include <drm/drm_gem_ttm_helper.h>
 #include <drm/drm_ioctl.h>
 #include <drm/drm_modes.h>
-#include <drm/ttm/ttm_bo_api.h>
-#include <drm/ttm/ttm_bo_driver.h>
+#include <drm/ttm/ttm_bo.h>
+#include <drm/ttm/ttm_placement.h>
 
-#include <linux/dma-buf-map.h>
-#include <linux/kernel.h> /* for container_of() */
+#include <linux/container_of.h>
+#include <linux/iosys-map.h>
 
 struct drm_mode_create_dumb;
 struct drm_plane;
@@ -51,7 +51,7 @@ struct vm_area_struct;
  */
 struct drm_gem_vram_object {
 	struct ttm_buffer_object bo;
-	struct dma_buf_map map;
+	struct iosys_map map;
 
 	/**
 	 * @vmap_use_count:
@@ -97,8 +97,9 @@ void drm_gem_vram_put(struct drm_gem_vram_object *gbo);
 s64 drm_gem_vram_offset(struct drm_gem_vram_object *gbo);
 int drm_gem_vram_pin(struct drm_gem_vram_object *gbo, unsigned long pl_flag);
 int drm_gem_vram_unpin(struct drm_gem_vram_object *gbo);
-int drm_gem_vram_vmap(struct drm_gem_vram_object *gbo, struct dma_buf_map *map);
-void drm_gem_vram_vunmap(struct drm_gem_vram_object *gbo, struct dma_buf_map *map);
+int drm_gem_vram_vmap(struct drm_gem_vram_object *gbo, struct iosys_map *map);
+void drm_gem_vram_vunmap(struct drm_gem_vram_object *gbo,
+			 struct iosys_map *map);
 
 int drm_gem_vram_fill_create_dumb(struct drm_file *file,
 				  struct drm_device *dev,
@@ -159,7 +160,9 @@ void drm_gem_vram_simple_display_pipe_cleanup_fb(
 	.debugfs_init             = drm_vram_mm_debugfs_init, \
 	.dumb_create		  = drm_gem_vram_driver_dumb_create, \
 	.dumb_map_offset	  = drm_gem_ttm_dumb_map_offset, \
-	.gem_prime_mmap		  = drm_gem_prime_mmap
+	.gem_prime_mmap		  = drm_gem_prime_mmap, \
+	.prime_handle_to_fd	  = drm_gem_prime_handle_to_fd, \
+	.prime_fd_to_handle	  = drm_gem_prime_fd_to_handle
 
 /*
  *  VRAM memory manager

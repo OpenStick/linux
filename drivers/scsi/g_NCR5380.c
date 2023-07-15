@@ -219,7 +219,7 @@ static int hp_c2502_irqs[] = {
 	9, 5, 7, 3, 4, -1
 };
 
-static int generic_NCR5380_init_one(struct scsi_host_template *tpnt,
+static int generic_NCR5380_init_one(const struct scsi_host_template *tpnt,
 			struct device *pdev, int base, int irq, int board)
 {
 	bool is_pmio = base <= 0xffff;
@@ -663,7 +663,7 @@ static inline int generic_NCR5380_psend(struct NCR5380_hostdata *hostdata,
 static int generic_NCR5380_dma_xfer_len(struct NCR5380_hostdata *hostdata,
                                         struct scsi_cmnd *cmd)
 {
-	int transfersize = cmd->SCp.this_residual;
+	int transfersize = NCR5380_to_ncmd(cmd)->this_residual;
 
 	if (hostdata->flags & FLAG_NO_PSEUDO_DMA)
 		return 0;
@@ -675,7 +675,7 @@ static int generic_NCR5380_dma_xfer_len(struct NCR5380_hostdata *hostdata,
 	/* Limit PDMA send to 512 B to avoid random corruption on DTC3181E */
 	if (hostdata->board == BOARD_DTC3181E &&
 	    cmd->sc_data_direction == DMA_TO_DEVICE)
-		transfersize = min(cmd->SCp.this_residual, 512);
+		transfersize = min(transfersize, 512);
 
 	return min(transfersize, DMA_MAX_SIZE);
 }
@@ -689,7 +689,7 @@ static int generic_NCR5380_dma_residual(struct NCR5380_hostdata *hostdata)
 
 #include "NCR5380.c"
 
-static struct scsi_host_template driver_template = {
+static const struct scsi_host_template driver_template = {
 	.module			= THIS_MODULE,
 	.proc_name		= DRV_MODULE_NAME,
 	.name			= "Generic NCR5380/NCR53C400 SCSI",
@@ -702,7 +702,7 @@ static struct scsi_host_template driver_template = {
 	.sg_tablesize		= SG_ALL,
 	.cmd_per_lun		= 2,
 	.dma_boundary		= PAGE_SIZE - 1,
-	.cmd_size		= NCR5380_CMD_SIZE,
+	.cmd_size		= sizeof(struct NCR5380_cmd),
 	.max_sectors		= 128,
 };
 

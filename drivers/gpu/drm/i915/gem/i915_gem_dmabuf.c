@@ -7,10 +7,16 @@
 #include <linux/dma-buf.h>
 #include <linux/highmem.h>
 #include <linux/dma-resv.h>
+#include <linux/module.h>
 
+#include <asm/smp.h>
+
+#include "gem/i915_gem_dmabuf.h"
 #include "i915_drv.h"
 #include "i915_gem_object.h"
 #include "i915_scatterlist.h"
+
+MODULE_IMPORT_NS(DMA_BUF);
 
 I915_SELFTEST_DECLARE(static bool force_different_devices;)
 
@@ -19,71 +25,65 @@ static struct drm_i915_gem_object *dma_buf_to_obj(struct dma_buf *buf)
 	return to_intel_bo(buf->priv);
 }
 
-static struct sg_table *i915_gem_map_dma_buf(struct dma_buf_attachment *attachment,
+static struct sg_table *i915_gem_map_dma_buf(struct dma_buf_attachment *attach,
 					     enum dma_data_direction dir)
 {
-	struct drm_i915_gem_object *obj = dma_buf_to_obj(attachment->dmabuf);
-	struct sg_table *st;
+	struct drm_i915_gem_object *obj = dma_buf_to_obj(attach->dmabuf);
+	struct sg_table *sgt;
 	struct scatterlist *src, *dst;
 	int ret, i;
 
-	/* Copy sg so that we make an independent mapping */
-	st = kmalloc(sizeof(struct sg_table), GFP_KERNEL);
-	if (st == NULL) {
+	/*
+	 * Make a copy of the object's sgt, so that we can make an independent
+	 * mapping
+	 */
+	sgt = kmalloc(sizeof(*sgt), GFP_KERNEL);
+	if (!sgt) {
 		ret = -ENOMEM;
 		goto err;
 	}
 
-	ret = sg_alloc_table(st, obj->mm.pages->nents, GFP_KERNEL);
+	ret = sg_alloc_table(sgt, obj->mm.pages->orig_nents, GFP_KERNEL);
 	if (ret)
 		goto err_free;
 
-	src = obj->mm.pages->sgl;
-	dst = st->sgl;
-	for (i = 0; i < obj->mm.pages->nents; i++) {
+	dst = sgt->sgl;
+	for_each_sg(obj->mm.pages->sgl, src, obj->mm.pages->orig_nents, i) {
 		sg_set_page(dst, sg_page(src), src->length, 0);
 		dst = sg_next(dst);
-		src = sg_next(src);
 	}
 
-	ret = dma_map_sgtable(attachment->dev, st, dir, DMA_ATTR_SKIP_CPU_SYNC);
+	ret = dma_map_sgtable(attach->dev, sgt, dir, DMA_ATTR_SKIP_CPU_SYNC);
 	if (ret)
 		goto err_free_sg;
 
-	return st;
+	return sgt;
 
 err_free_sg:
-	sg_free_table(st);
+	sg_free_table(sgt);
 err_free:
-	kfree(st);
+	kfree(sgt);
 err:
 	return ERR_PTR(ret);
 }
 
-static void i915_gem_unmap_dma_buf(struct dma_buf_attachment *attachment,
-				   struct sg_table *sg,
-				   enum dma_data_direction dir)
-{
-	dma_unmap_sgtable(attachment->dev, sg, dir, DMA_ATTR_SKIP_CPU_SYNC);
-	sg_free_table(sg);
-	kfree(sg);
-}
-
-static int i915_gem_dmabuf_vmap(struct dma_buf *dma_buf, struct dma_buf_map *map)
+static int i915_gem_dmabuf_vmap(struct dma_buf *dma_buf,
+				struct iosys_map *map)
 {
 	struct drm_i915_gem_object *obj = dma_buf_to_obj(dma_buf);
 	void *vaddr;
 
-	vaddr = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WB);
+	vaddr = i915_gem_object_pin_map(obj, I915_MAP_WB);
 	if (IS_ERR(vaddr))
 		return PTR_ERR(vaddr);
 
-	dma_buf_map_set_vaddr(map, vaddr);
+	iosys_map_set_vaddr(map, vaddr);
 
 	return 0;
 }
 
-static void i915_gem_dmabuf_vunmap(struct dma_buf *dma_buf, struct dma_buf_map *map)
+static void i915_gem_dmabuf_vunmap(struct dma_buf *dma_buf,
+				   struct iosys_map *map)
 {
 	struct drm_i915_gem_object *obj = dma_buf_to_obj(dma_buf);
 
@@ -94,10 +94,16 @@ static void i915_gem_dmabuf_vunmap(struct dma_buf *dma_buf, struct dma_buf_map *
 static int i915_gem_dmabuf_mmap(struct dma_buf *dma_buf, struct vm_area_struct *vma)
 {
 	struct drm_i915_gem_object *obj = dma_buf_to_obj(dma_buf);
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
 	int ret;
+
+	dma_resv_assert_held(dma_buf->resv);
 
 	if (obj->base.size < vma->vm_end - vma->vm_start)
 		return -EINVAL;
+
+	if (HAS_LMEM(i915))
+		return drm_gem_prime_mmap(&obj->base, vma);
 
 	if (!obj->base.filp)
 		return -ENODEV;
@@ -201,7 +207,7 @@ static const struct dma_buf_ops i915_dmabuf_ops =  {
 	.attach = i915_gem_dmabuf_attach,
 	.detach = i915_gem_dmabuf_detach,
 	.map_dma_buf = i915_gem_map_dma_buf,
-	.unmap_dma_buf = i915_gem_unmap_dma_buf,
+	.unmap_dma_buf = drm_gem_unmap_dma_buf,
 	.release = drm_gem_dmabuf_release,
 	.mmap = i915_gem_dmabuf_mmap,
 	.vmap = i915_gem_dmabuf_vmap,
@@ -232,27 +238,40 @@ struct dma_buf *i915_gem_prime_export(struct drm_gem_object *gem_obj, int flags)
 
 static int i915_gem_object_get_pages_dmabuf(struct drm_i915_gem_object *obj)
 {
-	struct sg_table *pages;
-	unsigned int sg_page_sizes;
+	struct drm_i915_private *i915 = to_i915(obj->base.dev);
+	struct sg_table *sgt;
 
 	assert_object_held(obj);
 
-	pages = dma_buf_map_attachment(obj->base.import_attach,
-				       DMA_BIDIRECTIONAL);
-	if (IS_ERR(pages))
-		return PTR_ERR(pages);
+	sgt = dma_buf_map_attachment(obj->base.import_attach,
+				     DMA_BIDIRECTIONAL);
+	if (IS_ERR(sgt))
+		return PTR_ERR(sgt);
 
-	sg_page_sizes = i915_sg_dma_sizes(pages->sgl);
+	/*
+	 * DG1 is special here since it still snoops transactions even with
+	 * CACHE_NONE. This is not the case with other HAS_SNOOP platforms. We
+	 * might need to revisit this as we add new discrete platforms.
+	 *
+	 * XXX: Consider doing a vmap flush or something, where possible.
+	 * Currently we just do a heavy handed wbinvd_on_all_cpus() here since
+	 * the underlying sg_table might not even point to struct pages, so we
+	 * can't just call drm_clflush_sg or similar, like we do elsewhere in
+	 * the driver.
+	 */
+	if (i915_gem_object_can_bypass_llc(obj) ||
+	    (!HAS_LLC(i915) && !IS_DG1(i915)))
+		wbinvd_on_all_cpus();
 
-	__i915_gem_object_set_pages(obj, pages, sg_page_sizes);
+	__i915_gem_object_set_pages(obj, sgt);
 
 	return 0;
 }
 
 static void i915_gem_object_put_pages_dmabuf(struct drm_i915_gem_object *obj,
-					     struct sg_table *pages)
+					     struct sg_table *sgt)
 {
-	dma_buf_unmap_attachment(obj->base.import_attach, pages,
+	dma_buf_unmap_attachment(obj->base.import_attach, sgt,
 				 DMA_BIDIRECTIONAL);
 }
 
@@ -295,13 +314,14 @@ struct drm_gem_object *i915_gem_prime_import(struct drm_device *dev,
 	get_dma_buf(dma_buf);
 
 	obj = i915_gem_object_alloc();
-	if (obj == NULL) {
+	if (!obj) {
 		ret = -ENOMEM;
 		goto fail_detach;
 	}
 
 	drm_gem_private_object_init(dev, &obj->base, dma_buf->size);
-	i915_gem_object_init(obj, &i915_gem_object_dmabuf_ops, &lock_class, 0);
+	i915_gem_object_init(obj, &i915_gem_object_dmabuf_ops, &lock_class,
+			     I915_BO_ALLOC_USER);
 	obj->base.import_attach = attach;
 	obj->base.resv = dma_buf->resv;
 

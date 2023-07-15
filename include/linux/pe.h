@@ -29,7 +29,14 @@
  * handover_offset and xloadflags fields in the bootparams structure.
  */
 #define LINUX_EFISTUB_MAJOR_VERSION		0x1
-#define LINUX_EFISTUB_MINOR_VERSION		0x0
+#define LINUX_EFISTUB_MINOR_VERSION		0x1
+
+/*
+ * LINUX_PE_MAGIC appears at offset 0x38 into the MS-DOS header of EFI bootable
+ * Linux kernel images that target the architecture as specified by the PE/COFF
+ * header machine type field.
+ */
+#define LINUX_PE_MAGIC	0x818223cd
 
 #define MZ_MAGIC	0x5a4d	/* "MZ" */
 
@@ -65,6 +72,8 @@
 #define	IMAGE_FILE_MACHINE_SH5		0x01a8
 #define	IMAGE_FILE_MACHINE_THUMB	0x01c2
 #define	IMAGE_FILE_MACHINE_WCEMIPSV2	0x0169
+#define	IMAGE_FILE_MACHINE_LOONGARCH32	0x6232
+#define	IMAGE_FILE_MACHINE_LOONGARCH64	0x6264
 
 /* flags */
 #define IMAGE_FILE_RELOCS_STRIPPED           0x0001
@@ -108,6 +117,9 @@
 #define IMAGE_DLLCHARACTERISTICS_NO_BIND                0x0800
 #define IMAGE_DLLCHARACTERISTICS_WDM_DRIVER             0x2000
 #define IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE  0x8000
+
+#define IMAGE_DLLCHARACTERISTICS_EX_CET_COMPAT		0x0001
+#define IMAGE_DLLCHARACTERISTICS_EX_FORWARD_CFI_COMPAT	0x0040
 
 /* they actually defined 0x00000000 as well, but I think we'll skip that one. */
 #define IMAGE_SCN_RESERVED_0	0x00000001
@@ -156,6 +168,7 @@
 #define IMAGE_SCN_MEM_WRITE	0x80000000 /* writeable */
 
 #define IMAGE_DEBUG_TYPE_CODEVIEW	2
+#define IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS	20
 
 #ifndef __ASSEMBLY__
 

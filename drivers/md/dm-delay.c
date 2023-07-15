@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2005-2007 Red Hat GmbH
  *
@@ -20,8 +21,8 @@
 struct delay_class {
 	struct dm_dev *dev;
 	sector_t start;
-	unsigned delay;
-	unsigned ops;
+	unsigned int delay;
+	unsigned int ops;
 };
 
 struct delay_c {
@@ -72,7 +73,7 @@ static void flush_bios(struct bio *bio)
 	while (bio) {
 		n = bio->bi_next;
 		bio->bi_next = NULL;
-		submit_bio_noacct(bio);
+		dm_submit_bio_remap(bio, NULL);
 		bio = n;
 	}
 }
@@ -232,6 +233,7 @@ out:
 
 	ti->num_flush_bios = 1;
 	ti->num_discard_bios = 1;
+	ti->accounts_remapped_io = true;
 	ti->per_io_data_size = sizeof(struct dm_delay_info);
 	return 0;
 
@@ -295,8 +297,7 @@ static int delay_map(struct dm_target *ti, struct bio *bio)
 	}
 	delayed->class = c;
 	bio_set_dev(bio, c->dev->bdev);
-	if (bio_sectors(bio))
-		bio->bi_iter.bi_sector = c->start + dm_target_offset(ti, bio->bi_iter.bi_sector);
+	bio->bi_iter.bi_sector = c->start + dm_target_offset(ti, bio->bi_iter.bi_sector);
 
 	return delay_bio(dc, c, bio);
 }
@@ -305,7 +306,7 @@ static int delay_map(struct dm_target *ti, struct bio *bio)
 	DMEMIT("%s %llu %u", (c)->dev->name, (unsigned long long)(c)->start, (c)->delay)
 
 static void delay_status(struct dm_target *ti, status_type_t type,
-			 unsigned status_flags, char *result, unsigned maxlen)
+			 unsigned int status_flags, char *result, unsigned int maxlen)
 {
 	struct delay_c *dc = ti->private;
 	int sz = 0;
@@ -355,7 +356,7 @@ out:
 
 static struct target_type delay_target = {
 	.name	     = "delay",
-	.version     = {1, 2, 1},
+	.version     = {1, 3, 0},
 	.features    = DM_TARGET_PASSES_INTEGRITY,
 	.module      = THIS_MODULE,
 	.ctr	     = delay_ctr,
@@ -366,31 +367,7 @@ static struct target_type delay_target = {
 	.status	     = delay_status,
 	.iterate_devices = delay_iterate_devices,
 };
-
-static int __init dm_delay_init(void)
-{
-	int r;
-
-	r = dm_register_target(&delay_target);
-	if (r < 0) {
-		DMERR("register failed %d", r);
-		goto bad_register;
-	}
-
-	return 0;
-
-bad_register:
-	return r;
-}
-
-static void __exit dm_delay_exit(void)
-{
-	dm_unregister_target(&delay_target);
-}
-
-/* Module hooks */
-module_init(dm_delay_init);
-module_exit(dm_delay_exit);
+module_dm(delay);
 
 MODULE_DESCRIPTION(DM_NAME " delay target");
 MODULE_AUTHOR("Heinz Mauelshagen <mauelshagen@redhat.com>");

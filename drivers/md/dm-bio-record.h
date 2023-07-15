@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2004-2005 Red Hat, Inc. All rights reserved.
  *
@@ -8,6 +9,7 @@
 #define DM_BIO_RECORD_H
 
 #include <linux/bio.h>
+#include <linux/blk-integrity.h>
 
 /*
  * There are lots of mutable fields in the bio struct that get

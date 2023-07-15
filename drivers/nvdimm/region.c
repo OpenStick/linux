@@ -2,6 +2,7 @@
 /*
  * Copyright(c) 2013-2015 Intel Corporation. All rights reserved.
  */
+#include <linux/memregion.h>
 #include <linux/cpumask.h>
 #include <linux/module.h>
 #include <linux/device.h>
@@ -15,6 +16,10 @@ static int nd_region_probe(struct device *dev)
 	static unsigned long once;
 	struct nd_region_data *ndrd;
 	struct nd_region *nd_region = to_nd_region(dev);
+	struct range range = {
+		.start = nd_region->ndr_start,
+		.end = nd_region->ndr_start + nd_region->ndr_size - 1,
+	};
 
 	if (nd_region->num_lanes > num_online_cpus()
 			&& nd_region->num_lanes < num_possible_cpus()
@@ -30,25 +35,13 @@ static int nd_region_probe(struct device *dev)
 	if (rc)
 		return rc;
 
-	rc = nd_blk_region_init(nd_region);
-	if (rc)
-		return rc;
-
-	if (is_memory(&nd_region->dev)) {
-		struct range range = {
-			.start = nd_region->ndr_start,
-			.end = nd_region->ndr_start + nd_region->ndr_size - 1,
-		};
-
-		if (devm_init_badblocks(dev, &nd_region->bb))
-			return -ENODEV;
-		nd_region->bb_state = sysfs_get_dirent(nd_region->dev.kobj.sd,
-						       "badblocks");
-		if (!nd_region->bb_state)
-			dev_warn(&nd_region->dev,
-					"'badblocks' notification disabled\n");
-		nvdimm_badblocks_populate(nd_region, &nd_region->bb, &range);
-	}
+	if (devm_init_badblocks(dev, &nd_region->bb))
+		return -ENODEV;
+	nd_region->bb_state =
+		sysfs_get_dirent(nd_region->dev.kobj.sd, "badblocks");
+	if (!nd_region->bb_state)
+		dev_warn(dev, "'badblocks' notification disabled\n");
+	nvdimm_badblocks_populate(nd_region, &nd_region->bb, &range);
 
 	rc = nd_region_register_namespaces(nd_region, &err);
 	if (rc < 0)
@@ -103,11 +96,21 @@ static void nd_region_remove(struct device *dev)
 	nvdimm_bus_unlock(dev);
 
 	/*
-	 * Note, this assumes nd_device_lock() context to not race
+	 * Note, this assumes device_lock() context to not race
 	 * nd_region_notify()
 	 */
 	sysfs_put(nd_region->bb_state);
 	nd_region->bb_state = NULL;
+
+	/*
+	 * Try to flush caches here since a disabled region may be subject to
+	 * secure erase while disabled, and previous dirty data should not be
+	 * written back to a new instance of the region. This only matters on
+	 * bare metal where security commands are available, so silent failure
+	 * here is ok.
+	 */
+	if (cpu_cache_has_invalidate_memregion())
+		cpu_cache_invalidate_memregion(IORES_DESC_PERSISTENT_MEMORY);
 }
 
 static int child_notify(struct device *dev, void *data)
@@ -158,4 +161,3 @@ void nd_region_exit(void)
 }
 
 MODULE_ALIAS_ND_DEVICE(ND_DEVICE_REGION_PMEM);
-MODULE_ALIAS_ND_DEVICE(ND_DEVICE_REGION_BLK);

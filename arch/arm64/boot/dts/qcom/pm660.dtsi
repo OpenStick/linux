@@ -11,7 +11,7 @@
 
 / {
 	thermal-zones {
-		pm660 {
+		pm660-thermal {
 			polling-delay-passive = <250>;
 			polling-delay = <1000>;
 
@@ -49,18 +49,29 @@
 		};
 
 		pon: pon@800 {
-			compatible = "qcom,pm8916-pon";
-
+			compatible = "qcom,pm8998-pon";
 			reg = <0x800>;
+			mode-bootloader = <0x2>;
+			mode-recovery = <0x1>;
 
-			pwrkey {
+			pon_pwrkey: pwrkey {
 				compatible = "qcom,pm8941-pwrkey";
 				interrupts = <0x0 0x8 0 IRQ_TYPE_EDGE_BOTH>;
 				debounce = <15625>;
 				bias-pull-up;
 				linux,code = <KEY_POWER>;
+
+				status = "disabled";
 			};
 
+			pon_resin: resin {
+				compatible = "qcom,pm8941-resin";
+				interrupts = <0x0 0x8 1 IRQ_TYPE_EDGE_BOTH>;
+				debounce = <15625>;
+				bias-pull-up;
+
+				status = "disabled";
+			};
 		};
 
 		pm660_temp: temp-alarm@2400 {
@@ -152,15 +163,15 @@
 				qcom,pre-scaling = <1 3>;
 			};
 
-			vcoin: vcoin@83 {
+			vcoin: vcoin@85 {
 				reg = <ADC5_VCOIN>;
 				qcom,decimation = <1024>;
 				qcom,pre-scaling = <1 3>;
 			};
 		};
 
-		pm660_gpios: gpios@c000 {
-			compatible = "qcom,pm660-gpio";
+		pm660_gpios: gpio@c000 {
+			compatible = "qcom,pm660-gpio", "qcom,spmi-gpio";
 			reg = <0xc000>;
 			gpio-controller;
 			gpio-ranges = <&pm660_gpios 0 0 13>;
@@ -176,7 +187,7 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		pm660_spmi_regulators: pm660-regulators {
+		pm660_spmi_regulators: regulators {
 			compatible = "qcom,pm660-regulators";
 		};
 	};

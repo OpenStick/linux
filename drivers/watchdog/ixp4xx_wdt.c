@@ -84,10 +84,24 @@ static int ixp4xx_wdt_set_timeout(struct watchdog_device *wdd,
 	return 0;
 }
 
+static int ixp4xx_wdt_restart(struct watchdog_device *wdd,
+                              unsigned long action, void *data)
+{
+	struct ixp4xx_wdt *iwdt = to_ixp4xx_wdt(wdd);
+
+	__raw_writel(IXP4XX_WDT_KEY, iwdt->base + IXP4XX_OSWK_OFFSET);
+	__raw_writel(0, iwdt->base + IXP4XX_OSWT_OFFSET);
+	__raw_writel(IXP4XX_WDT_COUNT_ENABLE | IXP4XX_WDT_RESET_ENABLE,
+		     iwdt->base + IXP4XX_OSWE_OFFSET);
+
+	return 0;
+}
+
 static const struct watchdog_ops ixp4xx_wdt_ops = {
 	.start = ixp4xx_wdt_start,
 	.stop = ixp4xx_wdt_stop,
 	.set_timeout = ixp4xx_wdt_set_timeout,
+	.restart = ixp4xx_wdt_restart,
 	.owner = THIS_MODULE,
 };
 
@@ -97,12 +111,6 @@ static const struct watchdog_info ixp4xx_wdt_info = {
 		| WDIOF_SETTIMEOUT,
 	.identity = KBUILD_MODNAME,
 };
-
-/* Devres-handled clock disablement */
-static void ixp4xx_clock_action(void *d)
-{
-	clk_disable_unprepare(d);
-}
 
 static int ixp4xx_wdt_probe(struct platform_device *pdev)
 {
@@ -125,16 +133,10 @@ static int ixp4xx_wdt_probe(struct platform_device *pdev)
 	 * Retrieve rate from a fixed clock from the device tree if
 	 * the parent has that, else use the default clock rate.
 	 */
-	clk = devm_clk_get(dev->parent, NULL);
-	if (!IS_ERR(clk)) {
-		ret = clk_prepare_enable(clk);
-		if (ret)
-			return ret;
-		ret = devm_add_action_or_reset(dev, ixp4xx_clock_action, clk);
-		if (ret)
-			return ret;
+	clk = devm_clk_get_enabled(dev->parent, NULL);
+	if (!IS_ERR(clk))
 		iwdt->rate = clk_get_rate(clk);
-	}
+
 	if (!iwdt->rate)
 		iwdt->rate = IXP4XX_TIMER_FREQ;
 

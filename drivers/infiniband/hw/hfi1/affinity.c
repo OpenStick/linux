@@ -5,7 +5,6 @@
 
 #include <linux/topology.h>
 #include <linux/cpumask.h>
-#include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/numa.h>
 
@@ -177,6 +176,8 @@ out:
 	pr_err("HFI: System BIOS may need to be upgraded\n");
 	for (node = 0; node < node_affinity.num_possible_nodes; node++)
 		hfi1_per_node_cntr[node] = 1;
+
+	pci_dev_put(dev);
 
 	return 0;
 }
@@ -667,7 +668,7 @@ int hfi1_dev_affinity_init(struct hfi1_devdata *dd)
 			 * engines, use the same CPU cores as general/control
 			 * context.
 			 */
-			if (cpumask_weight(&entry->def_intr.mask) == 0)
+			if (cpumask_empty(&entry->def_intr.mask))
 				cpumask_copy(&entry->def_intr.mask,
 					     &entry->general_intr_mask);
 		}
@@ -687,7 +688,7 @@ int hfi1_dev_affinity_init(struct hfi1_devdata *dd)
 		 * vectors, use the same CPU core as the general/control
 		 * context.
 		 */
-		if (cpumask_weight(&entry->comp_vect_mask) == 0)
+		if (cpumask_empty(&entry->comp_vect_mask))
 			cpumask_copy(&entry->comp_vect_mask,
 				     &entry->general_intr_mask);
 	}

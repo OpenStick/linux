@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018 Red Hat, Inc.
  *
@@ -415,7 +415,7 @@ static int dust_message(struct dm_target *ti, unsigned int argc, char **argv,
 			char *result, unsigned int maxlen)
 {
 	struct dust_device *dd = ti->private;
-	sector_t size = i_size_read(dd->dev->bdev->bd_inode) >> SECTOR_SHIFT;
+	sector_t size = bdev_nr_sectors(dd->dev->bdev);
 	bool invalid_msg = false;
 	int r = -EINVAL;
 	unsigned long long tmp, block;
@@ -544,8 +544,7 @@ static int dust_prepare_ioctl(struct dm_target *ti, struct block_device **bdev)
 	/*
 	 * Only pass ioctls through if the device sizes match exactly.
 	 */
-	if (dd->start ||
-	    ti->len != i_size_read(dev->bdev->bd_inode) >> SECTOR_SHIFT)
+	if (dd->start || ti->len != bdev_nr_sectors(dev->bdev))
 		return 1;
 
 	return 0;
@@ -571,24 +570,7 @@ static struct target_type dust_target = {
 	.status = dust_status,
 	.prepare_ioctl = dust_prepare_ioctl,
 };
-
-static int __init dm_dust_init(void)
-{
-	int r = dm_register_target(&dust_target);
-
-	if (r < 0)
-		DMERR("dm_register_target failed %d", r);
-
-	return r;
-}
-
-static void __exit dm_dust_exit(void)
-{
-	dm_unregister_target(&dust_target);
-}
-
-module_init(dm_dust_init);
-module_exit(dm_dust_exit);
+module_dm(dust);
 
 MODULE_DESCRIPTION(DM_NAME " dust test target");
 MODULE_AUTHOR("Bryan Gurney <dm-devel@redhat.com>");

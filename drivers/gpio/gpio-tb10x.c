@@ -62,14 +62,14 @@ static inline void tb10x_set_bits(struct tb10x_gpio *gpio, unsigned int offs,
 	u32 r;
 	unsigned long flags;
 
-	spin_lock_irqsave(&gpio->gc.bgpio_lock, flags);
+	raw_spin_lock_irqsave(&gpio->gc.bgpio_lock, flags);
 
 	r = tb10x_reg_read(gpio, offs);
 	r = (r & ~mask) | (val & mask);
 
 	tb10x_reg_write(gpio, offs, r);
 
-	spin_unlock_irqrestore(&gpio->gc.bgpio_lock, flags);
+	raw_spin_unlock_irqrestore(&gpio->gc.bgpio_lock, flags);
 }
 
 static int tb10x_gpio_to_irq(struct gpio_chip *chip, unsigned offset)
@@ -167,7 +167,7 @@ static int tb10x_gpio_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, tb10x_gpio);
 
-	if (of_find_property(np, "interrupt-controller", NULL)) {
+	if (of_property_read_bool(np, "interrupt-controller")) {
 		struct irq_chip_generic *gc;
 
 		ret = platform_get_irq(pdev, 0);

@@ -53,7 +53,8 @@ static void crypto_finalize_request(struct crypto_engine *engine,
 				dev_err(engine->dev, "failed to unprepare request\n");
 		}
 	}
-	req->complete(req, err);
+	lockdep_assert_in_softirq();
+	crypto_request_complete(req, err);
 
 	kthread_queue_work(engine->kworker, &engine->pump_requests);
 }
@@ -127,9 +128,6 @@ start_request:
 	 */
 	if (!engine->retry_support)
 		engine->cur_req = async_req;
-
-	if (backlog)
-		backlog->complete(backlog, -EINPROGRESS);
 
 	if (engine->busy)
 		was_busy = true;
@@ -213,9 +211,12 @@ req_err_1:
 	}
 
 req_err_2:
-	async_req->complete(async_req, ret);
+	crypto_request_complete(async_req, ret);
 
 retry:
+	if (backlog)
+		crypto_request_complete(backlog, -EINPROGRESS);
+
 	/* If retry mechanism is supported, send new requests to engine */
 	if (engine->retry_support) {
 		spin_lock_irqsave(&engine->queue_lock, flags);
@@ -252,6 +253,7 @@ static void crypto_pump_work(struct kthread_work *work)
  * crypto_transfer_request - transfer the new request into the engine queue
  * @engine: the hardware engine
  * @req: the request need to be listed into the engine queue
+ * @need_pump: indicates whether queue the pump of request to kthread_work
  */
 static int crypto_transfer_request(struct crypto_engine *engine,
 				   struct crypto_async_request *req,
@@ -328,6 +330,19 @@ int crypto_transfer_hash_request_to_engine(struct crypto_engine *engine,
 EXPORT_SYMBOL_GPL(crypto_transfer_hash_request_to_engine);
 
 /**
+ * crypto_transfer_kpp_request_to_engine - transfer one kpp_request to list
+ * into the engine queue
+ * @engine: the hardware engine
+ * @req: the request need to be listed into the engine queue
+ */
+int crypto_transfer_kpp_request_to_engine(struct crypto_engine *engine,
+					  struct kpp_request *req)
+{
+	return crypto_transfer_request_to_engine(engine, &req->base);
+}
+EXPORT_SYMBOL_GPL(crypto_transfer_kpp_request_to_engine);
+
+/**
  * crypto_transfer_skcipher_request_to_engine - transfer one skcipher_request
  * to list into the engine queue
  * @engine: the hardware engine
@@ -381,6 +396,19 @@ void crypto_finalize_hash_request(struct crypto_engine *engine,
 	return crypto_finalize_request(engine, &req->base, err);
 }
 EXPORT_SYMBOL_GPL(crypto_finalize_hash_request);
+
+/**
+ * crypto_finalize_kpp_request - finalize one kpp_request if the request is done
+ * @engine: the hardware engine
+ * @req: the request need to be finalized
+ * @err: error number
+ */
+void crypto_finalize_kpp_request(struct crypto_engine *engine,
+				 struct kpp_request *req, int err)
+{
+	return crypto_finalize_request(engine, &req->base, err);
+}
+EXPORT_SYMBOL_GPL(crypto_finalize_kpp_request);
 
 /**
  * crypto_finalize_skcipher_request - finalize one skcipher_request if
@@ -471,7 +499,7 @@ EXPORT_SYMBOL_GPL(crypto_engine_stop);
  *                This has the form:
  *                callback(struct crypto_engine *engine)
  *                where:
- *                @engine: the crypto engine structure.
+ *                engine: the crypto engine structure.
  * @rt: whether this queue is set to run as a realtime task
  * @qlen: maximum size of the crypto-engine queue
  *

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR MIT
 /**************************************************************************
  *
- * Copyright 2009-2015 VMware, Inc., Palo Alto, CA., USA
+ * Copyright 2009-2023 VMware, Inc., Palo Alto, CA., USA
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -27,9 +27,10 @@
 
 #include <drm/ttm/ttm_placement.h>
 
+#include "vmwgfx_binding.h"
+#include "vmwgfx_bo.h"
 #include "vmwgfx_drv.h"
 #include "vmwgfx_resource_priv.h"
-#include "vmwgfx_binding.h"
 
 struct vmw_user_context {
 	struct ttm_base_object base;
@@ -38,7 +39,7 @@ struct vmw_user_context {
 	struct vmw_cmdbuf_res_manager *man;
 	struct vmw_resource *cotables[SVGA_COTABLE_MAX];
 	spinlock_t cotable_lock;
-	struct vmw_buffer_object *dx_query_mob;
+	struct vmw_bo *dx_query_mob;
 };
 
 static void vmw_user_context_free(struct vmw_resource *res);
@@ -60,8 +61,6 @@ static int vmw_dx_context_unbind(struct vmw_resource *res,
 				 struct ttm_validate_buffer *val_buf);
 static int vmw_dx_context_destroy(struct vmw_resource *res);
 
-static uint64_t vmw_user_context_size;
-
 static const struct vmw_user_resource_conv user_context_conv = {
 	.object_type = VMW_RES_CONTEXT,
 	.base_obj_to_res = vmw_user_context_base_to_res,
@@ -74,10 +73,11 @@ const struct vmw_user_resource_conv *user_context_converter =
 
 static const struct vmw_res_func vmw_legacy_context_func = {
 	.res_type = vmw_res_context,
-	.needs_backup = false,
+	.needs_guest_memory = false,
 	.may_evict = false,
 	.type_name = "legacy contexts",
-	.backup_placement = NULL,
+	.domain = VMW_BO_DOMAIN_SYS,
+	.busy_domain = VMW_BO_DOMAIN_SYS,
 	.create = NULL,
 	.destroy = NULL,
 	.bind = NULL,
@@ -86,12 +86,13 @@ static const struct vmw_res_func vmw_legacy_context_func = {
 
 static const struct vmw_res_func vmw_gb_context_func = {
 	.res_type = vmw_res_context,
-	.needs_backup = true,
+	.needs_guest_memory = true,
 	.may_evict = true,
 	.prio = 3,
 	.dirty_prio = 3,
 	.type_name = "guest backed contexts",
-	.backup_placement = &vmw_mob_placement,
+	.domain = VMW_BO_DOMAIN_MOB,
+	.busy_domain = VMW_BO_DOMAIN_MOB,
 	.create = vmw_gb_context_create,
 	.destroy = vmw_gb_context_destroy,
 	.bind = vmw_gb_context_bind,
@@ -100,12 +101,13 @@ static const struct vmw_res_func vmw_gb_context_func = {
 
 static const struct vmw_res_func vmw_dx_context_func = {
 	.res_type = vmw_res_dx_context,
-	.needs_backup = true,
+	.needs_guest_memory = true,
 	.may_evict = true,
 	.prio = 3,
 	.dirty_prio = 3,
 	.type_name = "dx contexts",
-	.backup_placement = &vmw_mob_placement,
+	.domain = VMW_BO_DOMAIN_MOB,
+	.busy_domain = VMW_BO_DOMAIN_MOB,
 	.create = vmw_dx_context_create,
 	.destroy = vmw_dx_context_destroy,
 	.bind = vmw_dx_context_bind,
@@ -184,7 +186,7 @@ static int vmw_gb_context_init(struct vmw_private *dev_priv,
 	struct vmw_user_context *uctx =
 		container_of(res, struct vmw_user_context, res);
 
-	res->backup_size = (dx ? sizeof(SVGADXContextMobFormat) :
+	res->guest_memory_size = (dx ? sizeof(SVGADXContextMobFormat) :
 				 sizeof(SVGAGBContextData));
 	ret = vmw_resource_init(dev_priv, res, true,
 				res_free,
@@ -356,8 +358,8 @@ static int vmw_gb_context_bind(struct vmw_resource *res,
 	cmd->header.size = sizeof(cmd->body);
 	cmd->body.cid = res->id;
 	cmd->body.mobid = bo->resource->start;
-	cmd->body.validContents = res->backup_dirty;
-	res->backup_dirty = false;
+	cmd->body.validContents = res->guest_memory_dirty;
+	res->guest_memory_dirty = false;
 	vmw_cmd_commit(dev_priv, sizeof(*cmd));
 
 	return 0;
@@ -523,8 +525,8 @@ static int vmw_dx_context_bind(struct vmw_resource *res,
 	cmd->header.size = sizeof(cmd->body);
 	cmd->body.cid = res->id;
 	cmd->body.mobid = bo->resource->start;
-	cmd->body.validContents = res->backup_dirty;
-	res->backup_dirty = false;
+	cmd->body.validContents = res->guest_memory_dirty;
+	res->guest_memory_dirty = false;
 	vmw_cmd_commit(dev_priv, sizeof(*cmd));
 
 
@@ -686,7 +688,6 @@ static void vmw_user_context_free(struct vmw_resource *res)
 {
 	struct vmw_user_context *ctx =
 	    container_of(res, struct vmw_user_context, res);
-	struct vmw_private *dev_priv = res->dev_priv;
 
 	if (ctx->cbs)
 		vmw_binding_state_free(ctx->cbs);
@@ -694,8 +695,6 @@ static void vmw_user_context_free(struct vmw_resource *res)
 	(void) vmw_context_bind_dx_query(res, NULL);
 
 	ttm_base_object_kfree(ctx, base);
-	ttm_mem_global_free(vmw_mem_glob(dev_priv),
-			    vmw_user_context_size);
 }
 
 /*
@@ -720,7 +719,7 @@ int vmw_context_destroy_ioctl(struct drm_device *dev, void *data,
 	struct drm_vmw_context_arg *arg = (struct drm_vmw_context_arg *)data;
 	struct ttm_object_file *tfile = vmw_fpriv(file_priv)->tfile;
 
-	return ttm_ref_object_base_unref(tfile, arg->cid, TTM_REF_USAGE);
+	return ttm_ref_object_base_unref(tfile, arg->cid);
 }
 
 static int vmw_context_define(struct drm_device *dev, void *data,
@@ -732,10 +731,6 @@ static int vmw_context_define(struct drm_device *dev, void *data,
 	struct vmw_resource *tmp;
 	struct drm_vmw_context_arg *arg = (struct drm_vmw_context_arg *)data;
 	struct ttm_object_file *tfile = vmw_fpriv(file_priv)->tfile;
-	struct ttm_operation_ctx ttm_opt_ctx = {
-		.interruptible = true,
-		.no_wait_gpu = false
-	};
 	int ret;
 
 	if (!has_sm4_context(dev_priv) && dx) {
@@ -743,25 +738,8 @@ static int vmw_context_define(struct drm_device *dev, void *data,
 		return -EINVAL;
 	}
 
-	if (unlikely(vmw_user_context_size == 0))
-		vmw_user_context_size = ttm_round_pot(sizeof(*ctx)) +
-		  ((dev_priv->has_mob) ? vmw_cmdbuf_res_man_size() : 0) +
-		  + VMW_IDA_ACC_SIZE + TTM_OBJ_EXTRA_SIZE;
-
-	ret = ttm_mem_global_alloc(vmw_mem_glob(dev_priv),
-				   vmw_user_context_size,
-				   &ttm_opt_ctx);
-	if (unlikely(ret != 0)) {
-		if (ret != -ERESTARTSYS)
-			DRM_ERROR("Out of graphics memory for context"
-				  " creation.\n");
-		goto out_ret;
-	}
-
 	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
 	if (unlikely(!ctx)) {
-		ttm_mem_global_free(vmw_mem_glob(dev_priv),
-				    vmw_user_context_size);
 		ret = -ENOMEM;
 		goto out_ret;
 	}
@@ -780,7 +758,7 @@ static int vmw_context_define(struct drm_device *dev, void *data,
 
 	tmp = vmw_resource_reference(&ctx->res);
 	ret = ttm_base_object_init(tfile, &ctx->base, false, VMW_RES_CONTEXT,
-				   &vmw_user_context_base_release, NULL);
+				   &vmw_user_context_base_release);
 
 	if (unlikely(ret != 0)) {
 		vmw_resource_unreference(&tmp);
@@ -879,7 +857,7 @@ vmw_context_binding_state(struct vmw_resource *ctx)
  * specified in the parameter.  0 otherwise.
  */
 int vmw_context_bind_dx_query(struct vmw_resource *ctx_res,
-			      struct vmw_buffer_object *mob)
+			      struct vmw_bo *mob)
 {
 	struct vmw_user_context *uctx =
 		container_of(ctx_res, struct vmw_user_context, res);
@@ -911,7 +889,7 @@ int vmw_context_bind_dx_query(struct vmw_resource *ctx_res,
  *
  * @ctx_res: The context resource
  */
-struct vmw_buffer_object *
+struct vmw_bo *
 vmw_context_get_dx_query_mob(struct vmw_resource *ctx_res)
 {
 	struct vmw_user_context *uctx =

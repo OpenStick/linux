@@ -41,8 +41,8 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&spk_ext_pa_default>;
 
-		enable-gpios = <&msmgpio 114 GPIO_ACTIVE_HIGH>;
-		aw8738,mode = <5>;
+		mode-gpios = <&msmgpio 114 GPIO_ACTIVE_HIGH>;
+		awinic,mode = <5>;
 		sound-name-prefix = "Speaker Amp";
 	};
 
@@ -55,6 +55,21 @@
 		default-brightness-level = <255>;
 	};
 
+	flash-led-controller {
+		compatible = "ocs,ocp8110";
+		enable-gpios = <&msmgpio 49 GPIO_ACTIVE_HIGH>;
+		flash-gpios = <&msmgpio 119 GPIO_ACTIVE_HIGH>;
+
+		pinctrl-0 = <&camera_front_flash_default>;
+		pinctrl-names = "default";
+
+		flash_led: led {
+			function = LED_FUNCTION_FLASH;
+			color = <LED_COLOR_ID_WHITE>;
+			flash-max-timeout-us = <250000>;
+		};
+	};
+
 	gpio-keys {
 		compatible = "gpio-keys";
 
@@ -63,7 +78,7 @@
 
 		label = "GPIO Buttons";
 
-		volume-up {
+		button-volume-up {
 			label = "Volume Up";
 			gpios = <&msmgpio 107 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEUP>;
@@ -147,13 +162,6 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&smb_int_default>;
 
-		/*
-		 * Some properties are battery-specific. Battery detection
-		 * happens in the bootloader, so it will fill those appropriately
-		 * and set status = "okay".
-		 */
-		status = "disabled";
-
 		qcom,rsense-10mohm;
 
 		qcom,float-voltage-mv = <4400>;
@@ -180,6 +188,13 @@
 		qcom,fg-reset-at-pon;
 		qcom,fg-reset-threshold-mv = <200>;
 
+		/*
+		 * Some properties are battery-specific. Battery detection
+		 * happens in the bootloader, so it will fill those appropriately
+		 * and set status = "okay".
+		 */
+		status = "disabled";
+
 		usb_otg_vbus: usb-otg-vbus {
 			regulator-max-microamp = <1500000>;
 		};
@@ -190,13 +205,13 @@
 	status = "okay";
 
 	touchscreen@48 {
-		compatible = "himax,852x";
+		compatible = "himax,hx852x-es";
 		reg = <0x48>;
 
 		interrupt-parent = <&msmgpio>;
 		interrupts = <13 IRQ_TYPE_LEVEL_LOW>;
 
-		reset-gpio = <&msmgpio 12 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&msmgpio 12 GPIO_ACTIVE_LOW>;
 
 		vcca-supply = <&reg_ts_vcca>;
 		vccd-supply = <&pm8916_l6>;
@@ -261,10 +276,6 @@
 	status = "okay";
 };
 
-&pronto {
-	status = "okay";
-};
-
 &sdhc_1 {
 	status = "okay";
 
@@ -287,8 +298,15 @@
 	status = "okay";
 
 	model = "bq-paella";
+	widgets =
+		"Speaker", "Speaker",
+		"Headphone", "Headphones";
+	pin-switches = "Speaker";
 	audio-routing =
-		"Speaker Amp IN", "HPH_R_EXT",
+		"Speaker", "Speaker Amp OUT",
+		"Speaker Amp IN", "HPH_R",
+		"Headphones", "HPH_L",
+		"Headphones", "HPH_R",
 		"AMIC1", "MIC BIAS External1",
 		"AMIC2", "MIC BIAS Internal2",
 		"AMIC3", "MIC BIAS External1";
@@ -310,6 +328,14 @@
 	qcom,mbhc-vthreshold-low = <75 100 120 180 500>;
 	qcom,mbhc-vthreshold-high = <75 100 120 180 500>;
 	qcom,hphl-jack-type-normally-open;
+};
+
+&wcnss {
+	status = "okay";
+};
+
+&wcnss_iris {
+	compatible = "qcom,wcn3620";
 };
 
 &smd_rpm_regulators {
@@ -416,7 +442,7 @@
 };
 
 &msmgpio {
-	button_backlight_default: button-backlight-default {
+	button_backlight_default: button-backlight-default-state {
 		pins = "gpio17";
 		function = "gpio";
 
@@ -424,7 +450,14 @@
 		bias-disable;
 	};
 
-	gpio_keys_default: gpio-keys-default {
+	camera_front_flash_default: camera-front-flash-default-state {
+		pins = "gpio49", "gpio119";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	gpio_keys_default: gpio-keys-default-state {
 		pins = "gpio107";
 		function = "gpio";
 
@@ -432,7 +465,7 @@
 		bias-pull-up;
 	};
 
-	mag_reset_default: mag-reset-default {
+	mag_reset_default: mag-reset-default-state {
 		pins = "gpio111";
 		function = "gpio";
 
@@ -440,24 +473,23 @@
 		bias-disable;
 	};
 
-	mdss {
-		mdss_active: mdss-active {
-			pins = "gpio25";
-			function = "gpio";
+	mdss_active: mdss-active-state {
+		pins = "gpio25";
+		function = "gpio";
 
-			drive-strength = <8>;
-			bias-disable;
-		};
-		mdss_suspend: mdss-suspend {
-			pins = "gpio25";
-			function = "gpio";
-
-			drive-strength = <2>;
-			bias-pull-down;
-		};
+		drive-strength = <8>;
+		bias-disable;
 	};
 
-	smb_int_default: smb_int_default {
+	mdss_suspend: mdss-suspend-state {
+		pins = "gpio25";
+		function = "gpio";
+
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	smb_int_default: smb-int-default-state {
 		pins = "gpio62";
 		function = "gpio";
 
@@ -465,7 +497,7 @@
 		bias-pull-up;
 	};
 
-	spk_ext_pa_default: spk-ext-pa-default {
+	spk_ext_pa_default: spk-ext-pa-default-state {
 		pins = "gpio114";
 		function = "gpio";
 
@@ -473,7 +505,7 @@
 		bias-disable;
 	};
 
-	ts_int_reset_default: ts-int-reset-default {
+	ts_int_reset_default: ts-int-reset-default-state {
 		pins = "gpio12", "gpio13";
 		function = "gpio";
 
@@ -481,7 +513,7 @@
 		bias-disable;
 	};
 
-	ts_vcca_default: ts-vcca-default {
+	ts_vcca_default: ts-vcca-default-state {
 		pins = "gpio78";
 		function = "gpio";
 
@@ -489,7 +521,7 @@
 		bias-disable;
 	};
 
-	usb_id_default: usb-id-default {
+	usb_id_default: usb-id-default-state {
 		pins = "gpio110";
 		function = "gpio";
 
@@ -497,7 +529,7 @@
 		bias-pull-up;
 	};
 
-	usb_id_switch_default: usb_id_switch_default {
+	usb_id_switch_default: usb-id-switch-default-state {
 		function = "gpio";
 		pins = "gpio121";
 
@@ -507,12 +539,11 @@
 };
 
 &pm8916_mpps {
-	pwm_out: mpp4 {
+	pwm_out: mpp4-state {
 		pins = "mpp4";
 		function = "digital";
-
+		power-source = <PM8916_MPP_VPH>;
 		output-low;
 		qcom,dtest = <1>;
-		power-source = <PM8916_MPP_VPH>;
 	};
 };

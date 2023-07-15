@@ -24,7 +24,6 @@
 #include <linux/component.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
-#include <linux/i2c.h>
 #include <linux/io.h>
 #include <linux/of_address.h>
 #include <linux/of_platform.h>
@@ -181,8 +180,50 @@
 
 #define DSI0_TXPKT_PIX_FIFO		0x20 /* AKA PIX_FIFO */
 
-#define DSI0_INT_STAT		0x24
-#define DSI0_INT_EN		0x28
+#define DSI0_INT_STAT			0x24
+#define DSI0_INT_EN			0x28
+# define DSI0_INT_FIFO_ERR		BIT(25)
+# define DSI0_INT_CMDC_DONE_MASK	VC4_MASK(24, 23)
+# define DSI0_INT_CMDC_DONE_SHIFT	23
+#  define DSI0_INT_CMDC_DONE_NO_REPEAT		1
+#  define DSI0_INT_CMDC_DONE_REPEAT		3
+# define DSI0_INT_PHY_DIR_RTF		BIT(22)
+# define DSI0_INT_PHY_D1_ULPS		BIT(21)
+# define DSI0_INT_PHY_D1_STOP		BIT(20)
+# define DSI0_INT_PHY_RXLPDT		BIT(19)
+# define DSI0_INT_PHY_RXTRIG		BIT(18)
+# define DSI0_INT_PHY_D0_ULPS		BIT(17)
+# define DSI0_INT_PHY_D0_LPDT		BIT(16)
+# define DSI0_INT_PHY_D0_FTR		BIT(15)
+# define DSI0_INT_PHY_D0_STOP		BIT(14)
+/* Signaled when the clock lane enters the given state. */
+# define DSI0_INT_PHY_CLK_ULPS		BIT(13)
+# define DSI0_INT_PHY_CLK_HS		BIT(12)
+# define DSI0_INT_PHY_CLK_FTR		BIT(11)
+/* Signaled on timeouts */
+# define DSI0_INT_PR_TO			BIT(10)
+# define DSI0_INT_TA_TO			BIT(9)
+# define DSI0_INT_LPRX_TO		BIT(8)
+# define DSI0_INT_HSTX_TO		BIT(7)
+/* Contention on a line when trying to drive the line low */
+# define DSI0_INT_ERR_CONT_LP1		BIT(6)
+# define DSI0_INT_ERR_CONT_LP0		BIT(5)
+/* Control error: incorrect line state sequence on data lane 0. */
+# define DSI0_INT_ERR_CONTROL		BIT(4)
+# define DSI0_INT_ERR_SYNC_ESC		BIT(3)
+# define DSI0_INT_RX2_PKT		BIT(2)
+# define DSI0_INT_RX1_PKT		BIT(1)
+# define DSI0_INT_CMD_PKT		BIT(0)
+
+#define DSI0_INTERRUPTS_ALWAYS_ENABLED	(DSI0_INT_ERR_SYNC_ESC | \
+					 DSI0_INT_ERR_CONTROL |	 \
+					 DSI0_INT_ERR_CONT_LP0 | \
+					 DSI0_INT_ERR_CONT_LP1 | \
+					 DSI0_INT_HSTX_TO |	 \
+					 DSI0_INT_LPRX_TO |	 \
+					 DSI0_INT_TA_TO |	 \
+					 DSI0_INT_PR_TO)
+
 # define DSI1_INT_PHY_D3_ULPS		BIT(30)
 # define DSI1_INT_PHY_D3_STOP		BIT(29)
 # define DSI1_INT_PHY_D2_ULPS		BIT(28)
@@ -507,12 +548,15 @@ struct vc4_dsi_variant {
 
 /* General DSI hardware state. */
 struct vc4_dsi {
+	struct vc4_encoder encoder;
+	struct mipi_dsi_host dsi_host;
+
+	struct kref kref;
+
 	struct platform_device *pdev;
 
-	struct mipi_dsi_host dsi_host;
-	struct drm_encoder *encoder;
-	struct drm_bridge *bridge;
-	struct list_head bridge_chain;
+	struct drm_bridge *out_bridge;
+	struct drm_bridge bridge;
 
 	void __iomem *regs;
 
@@ -558,6 +602,18 @@ struct vc4_dsi {
 
 #define host_to_dsi(host) container_of(host, struct vc4_dsi, dsi_host)
 
+static inline struct vc4_dsi *
+to_vc4_dsi(struct drm_encoder *encoder)
+{
+	return container_of(encoder, struct vc4_dsi, encoder.base);
+}
+
+static inline struct vc4_dsi *
+bridge_to_vc4_dsi(struct drm_bridge *bridge)
+{
+	return container_of(bridge, struct vc4_dsi, bridge);
+}
+
 static inline void
 dsi_dma_workaround_write(struct vc4_dsi *dsi, u32 offset, u32 val)
 {
@@ -565,6 +621,8 @@ dsi_dma_workaround_write(struct vc4_dsi *dsi, u32 offset, u32 val)
 	struct dma_async_tx_descriptor *tx;
 	dma_cookie_t cookie;
 	int ret;
+
+	kunit_fail_current_test("Accessing a register in a unit test!\n");
 
 	/* DSI0 should be able to write normally. */
 	if (!chan) {
@@ -594,25 +652,18 @@ dsi_dma_workaround_write(struct vc4_dsi *dsi, u32 offset, u32 val)
 		DRM_ERROR("Failed to wait for DMA: %d\n", ret);
 }
 
-#define DSI_READ(offset) readl(dsi->regs + (offset))
+#define DSI_READ(offset)								\
+	({										\
+		kunit_fail_current_test("Accessing a register in a unit test!\n");	\
+		readl(dsi->regs + (offset));						\
+	})
+
 #define DSI_WRITE(offset, val) dsi_dma_workaround_write(dsi, offset, val)
 #define DSI_PORT_READ(offset) \
 	DSI_READ(dsi->variant->port ? DSI1_##offset : DSI0_##offset)
 #define DSI_PORT_WRITE(offset, val) \
 	DSI_WRITE(dsi->variant->port ? DSI1_##offset : DSI0_##offset, val)
 #define DSI_PORT_BIT(bit) (dsi->variant->port ? DSI1_##bit : DSI0_##bit)
-
-/* VC4 DSI encoder KMS struct */
-struct vc4_dsi_encoder {
-	struct vc4_encoder base;
-	struct vc4_dsi *dsi;
-};
-
-static inline struct vc4_dsi_encoder *
-to_vc4_dsi_encoder(struct drm_encoder *encoder)
-{
-	return container_of(encoder, struct vc4_dsi_encoder, base.base);
-}
 
 static const struct debugfs_reg32 dsi0_regs[] = {
 	VC4_REG32(DSI0_CTRL),
@@ -751,24 +802,22 @@ dsi_esc_timing(u32 ns)
 	return DIV_ROUND_UP(ns, ESC_TIME_NS);
 }
 
-static void vc4_dsi_encoder_disable(struct drm_encoder *encoder)
+static void vc4_dsi_bridge_disable(struct drm_bridge *bridge,
+				   struct drm_bridge_state *state)
 {
-	struct vc4_dsi_encoder *vc4_encoder = to_vc4_dsi_encoder(encoder);
-	struct vc4_dsi *dsi = vc4_encoder->dsi;
+	struct vc4_dsi *dsi = bridge_to_vc4_dsi(bridge);
+	u32 disp0_ctrl;
+
+	disp0_ctrl = DSI_PORT_READ(DISP0_CTRL);
+	disp0_ctrl &= ~DSI_DISP0_ENABLE;
+	DSI_PORT_WRITE(DISP0_CTRL, disp0_ctrl);
+}
+
+static void vc4_dsi_bridge_post_disable(struct drm_bridge *bridge,
+					struct drm_bridge_state *state)
+{
+	struct vc4_dsi *dsi = bridge_to_vc4_dsi(bridge);
 	struct device *dev = &dsi->pdev->dev;
-	struct drm_bridge *iter;
-
-	list_for_each_entry_reverse(iter, &dsi->bridge_chain, chain_node) {
-		if (iter->funcs->disable)
-			iter->funcs->disable(iter);
-	}
-
-	vc4_dsi_ulps(dsi, true);
-
-	list_for_each_entry_from(iter, &dsi->bridge_chain, chain_node) {
-		if (iter->funcs->post_disable)
-			iter->funcs->post_disable(iter);
-	}
 
 	clk_disable_unprepare(dsi->pll_phy_clock);
 	clk_disable_unprepare(dsi->escape_clock);
@@ -790,12 +839,11 @@ static void vc4_dsi_encoder_disable(struct drm_encoder *encoder)
  * higher-than-expected clock rate to the panel, but that's what the
  * firmware does too.
  */
-static bool vc4_dsi_encoder_mode_fixup(struct drm_encoder *encoder,
-				       const struct drm_display_mode *mode,
-				       struct drm_display_mode *adjusted_mode)
+static bool vc4_dsi_bridge_mode_fixup(struct drm_bridge *bridge,
+				      const struct drm_display_mode *mode,
+				      struct drm_display_mode *adjusted_mode)
 {
-	struct vc4_dsi_encoder *vc4_encoder = to_vc4_dsi_encoder(encoder);
-	struct vc4_dsi *dsi = vc4_encoder->dsi;
+	struct vc4_dsi *dsi = bridge_to_vc4_dsi(bridge);
 	struct clk *phy_parent = clk_get_parent(dsi->pll_phy_clock);
 	unsigned long parent_rate = clk_get_rate(phy_parent);
 	unsigned long pixel_clock_hz = mode->clock * 1000;
@@ -805,11 +853,9 @@ static bool vc4_dsi_encoder_mode_fixup(struct drm_encoder *encoder,
 	/* Find what divider gets us a faster clock than the requested
 	 * pixel clock.
 	 */
-	for (divider = 1; divider < 8; divider++) {
-		if (parent_rate / divider < pll_clock) {
-			divider--;
+	for (divider = 1; divider < 255; divider++) {
+		if (parent_rate / (divider + 1) < pll_clock)
 			break;
-		}
 	}
 
 	/* Now that we've picked a PLL divider, calculate back to its
@@ -829,24 +875,27 @@ static bool vc4_dsi_encoder_mode_fixup(struct drm_encoder *encoder,
 	return true;
 }
 
-static void vc4_dsi_encoder_enable(struct drm_encoder *encoder)
+static void vc4_dsi_bridge_pre_enable(struct drm_bridge *bridge,
+				      struct drm_bridge_state *old_state)
 {
-	struct drm_display_mode *mode = &encoder->crtc->state->adjusted_mode;
-	struct vc4_dsi_encoder *vc4_encoder = to_vc4_dsi_encoder(encoder);
-	struct vc4_dsi *dsi = vc4_encoder->dsi;
+	struct drm_atomic_state *state = old_state->base.state;
+	struct vc4_dsi *dsi = bridge_to_vc4_dsi(bridge);
+	const struct drm_crtc_state *crtc_state;
 	struct device *dev = &dsi->pdev->dev;
+	const struct drm_display_mode *mode;
+	struct drm_connector *connector;
 	bool debug_dump_regs = false;
-	struct drm_bridge *iter;
 	unsigned long hs_clock;
+	struct drm_crtc *crtc;
 	u32 ui_ns;
 	/* Minimum LP state duration in escape clock cycles. */
 	u32 lpx = dsi_esc_timing(60);
-	unsigned long pixel_clock_hz = mode->clock * 1000;
+	unsigned long pixel_clock_hz;
 	unsigned long dsip_clock;
 	unsigned long phy_clock;
 	int ret;
 
-	ret = pm_runtime_get_sync(dev);
+	ret = pm_runtime_resume_and_get(dev);
 	if (ret) {
 		DRM_ERROR("Failed to runtime PM enable on DSI%d\n", dsi->variant->port);
 		return;
@@ -857,6 +906,18 @@ static void vc4_dsi_encoder_enable(struct drm_encoder *encoder)
 		dev_info(&dsi->pdev->dev, "DSI regs before:\n");
 		drm_print_regset32(&p, &dsi->regset);
 	}
+
+	/*
+	 * Retrieve the CRTC adjusted mode. This requires a little dance to go
+	 * from the bridge to the encoder, to the connector and to the CRTC.
+	 */
+	connector = drm_atomic_get_new_connector_for_encoder(state,
+							     bridge->encoder);
+	crtc = drm_atomic_get_new_connector_state(state, connector)->crtc;
+	crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
+	mode = &crtc_state->adjusted_mode;
+
+	pixel_clock_hz = mode->clock * 1000;
 
 	/* Round up the clk_set_rate() request slightly, since
 	 * PLLD_DSI1 is an integer divider and its rate selection will
@@ -893,6 +954,9 @@ static void vc4_dsi_encoder_enable(struct drm_encoder *encoder)
 			afec0 |= DSI0_PHY_AFEC0_RESET;
 
 		DSI_PORT_WRITE(PHY_AFEC0, afec0);
+
+		/* AFEC reset hold time */
+		mdelay(1);
 
 		DSI_PORT_WRITE(PHY_AFEC1,
 			       VC4_SET_FIELD(6,  DSI0_PHY_AFEC1_IDR_DLANE1) |
@@ -1060,19 +1124,11 @@ static void vc4_dsi_encoder_enable(struct drm_encoder *encoder)
 		DSI_PORT_WRITE(CTRL, DSI_PORT_READ(CTRL) | DSI1_CTRL_EN);
 
 	/* Bring AFE out of reset. */
-	if (dsi->variant->port == 0) {
-	} else {
-		DSI_PORT_WRITE(PHY_AFEC0,
-			       DSI_PORT_READ(PHY_AFEC0) &
-			       ~DSI1_PHY_AFEC0_RESET);
-	}
+	DSI_PORT_WRITE(PHY_AFEC0,
+		       DSI_PORT_READ(PHY_AFEC0) &
+		       ~DSI_PORT_BIT(PHY_AFEC0_RESET));
 
 	vc4_dsi_ulps(dsi, false);
-
-	list_for_each_entry_reverse(iter, &dsi->bridge_chain, chain_node) {
-		if (iter->funcs->pre_enable)
-			iter->funcs->pre_enable(iter);
-	}
 
 	if (dsi->mode_flags & MIPI_DSI_MODE_VIDEO) {
 		DSI_PORT_WRITE(DISP0_CTRL,
@@ -1081,24 +1137,39 @@ static void vc4_dsi_encoder_enable(struct drm_encoder *encoder)
 			       VC4_SET_FIELD(dsi->format, DSI_DISP0_PFORMAT) |
 			       VC4_SET_FIELD(DSI_DISP0_LP_STOP_PERFRAME,
 					     DSI_DISP0_LP_STOP_CTRL) |
-			       DSI_DISP0_ST_END |
-			       DSI_DISP0_ENABLE);
+			       DSI_DISP0_ST_END);
 	} else {
 		DSI_PORT_WRITE(DISP0_CTRL,
-			       DSI_DISP0_COMMAND_MODE |
-			       DSI_DISP0_ENABLE);
+			       DSI_DISP0_COMMAND_MODE);
 	}
+}
 
-	list_for_each_entry(iter, &dsi->bridge_chain, chain_node) {
-		if (iter->funcs->enable)
-			iter->funcs->enable(iter);
-	}
+static void vc4_dsi_bridge_enable(struct drm_bridge *bridge,
+				  struct drm_bridge_state *old_state)
+{
+	struct vc4_dsi *dsi = bridge_to_vc4_dsi(bridge);
+	bool debug_dump_regs = false;
+	u32 disp0_ctrl;
+
+	disp0_ctrl = DSI_PORT_READ(DISP0_CTRL);
+	disp0_ctrl |= DSI_DISP0_ENABLE;
+	DSI_PORT_WRITE(DISP0_CTRL, disp0_ctrl);
 
 	if (debug_dump_regs) {
 		struct drm_printer p = drm_info_printer(&dsi->pdev->dev);
 		dev_info(&dsi->pdev->dev, "DSI regs after:\n");
 		drm_print_regset32(&p, &dsi->regset);
 	}
+}
+
+static int vc4_dsi_bridge_attach(struct drm_bridge *bridge,
+				 enum drm_bridge_attach_flags flags)
+{
+	struct vc4_dsi *dsi = bridge_to_vc4_dsi(bridge);
+
+	/* Attach the panel or bridge to the dsi bridge */
+	return drm_bridge_attach(bridge->encoder, dsi->out_bridge,
+				 &dsi->bridge, flags);
 }
 
 static ssize_t vc4_dsi_host_transfer(struct mipi_dsi_host *host,
@@ -1184,13 +1255,28 @@ static ssize_t vc4_dsi_host_transfer(struct mipi_dsi_host *host,
 	/* Enable the appropriate interrupt for the transfer completion. */
 	dsi->xfer_result = 0;
 	reinit_completion(&dsi->xfer_completion);
-	DSI_PORT_WRITE(INT_STAT, DSI1_INT_TXPKT1_DONE | DSI1_INT_PHY_DIR_RTF);
-	if (msg->rx_len) {
-		DSI_PORT_WRITE(INT_EN, (DSI1_INTERRUPTS_ALWAYS_ENABLED |
-					DSI1_INT_PHY_DIR_RTF));
+	if (dsi->variant->port == 0) {
+		DSI_PORT_WRITE(INT_STAT,
+			       DSI0_INT_CMDC_DONE_MASK | DSI1_INT_PHY_DIR_RTF);
+		if (msg->rx_len) {
+			DSI_PORT_WRITE(INT_EN, (DSI0_INTERRUPTS_ALWAYS_ENABLED |
+						DSI0_INT_PHY_DIR_RTF));
+		} else {
+			DSI_PORT_WRITE(INT_EN,
+				       (DSI0_INTERRUPTS_ALWAYS_ENABLED |
+					VC4_SET_FIELD(DSI0_INT_CMDC_DONE_NO_REPEAT,
+						      DSI0_INT_CMDC_DONE)));
+		}
 	} else {
-		DSI_PORT_WRITE(INT_EN, (DSI1_INTERRUPTS_ALWAYS_ENABLED |
-					DSI1_INT_TXPKT1_DONE));
+		DSI_PORT_WRITE(INT_STAT,
+			       DSI1_INT_TXPKT1_DONE | DSI1_INT_PHY_DIR_RTF);
+		if (msg->rx_len) {
+			DSI_PORT_WRITE(INT_EN, (DSI1_INTERRUPTS_ALWAYS_ENABLED |
+						DSI1_INT_PHY_DIR_RTF));
+		} else {
+			DSI_PORT_WRITE(INT_EN, (DSI1_INTERRUPTS_ALWAYS_ENABLED |
+						DSI1_INT_TXPKT1_DONE));
+		}
 	}
 
 	/* Send the packet. */
@@ -1207,7 +1293,7 @@ static ssize_t vc4_dsi_host_transfer(struct mipi_dsi_host *host,
 		ret = dsi->xfer_result;
 	}
 
-	DSI_PORT_WRITE(INT_EN, DSI1_INTERRUPTS_ALWAYS_ENABLED);
+	DSI_PORT_WRITE(INT_EN, DSI_PORT_BIT(INTERRUPTS_ALWAYS_ENABLED));
 
 	if (ret)
 		goto reset_fifo_and_return;
@@ -1253,7 +1339,7 @@ reset_fifo_and_return:
 		       DSI_PORT_BIT(CTRL_RESET_FIFOS));
 
 	DSI_PORT_WRITE(TXPKT1C, 0);
-	DSI_PORT_WRITE(INT_EN, DSI1_INTERRUPTS_ALWAYS_ENABLED);
+	DSI_PORT_WRITE(INT_EN, DSI_PORT_BIT(INTERRUPTS_ALWAYS_ENABLED));
 	return ret;
 }
 
@@ -1297,9 +1383,11 @@ static int vc4_dsi_host_attach(struct mipi_dsi_host *host,
 		return 0;
 	}
 
+	drm_bridge_add(&dsi->bridge);
+
 	ret = component_add(&dsi->pdev->dev, &vc4_dsi_ops);
 	if (ret) {
-		mipi_dsi_host_unregister(&dsi->dsi_host);
+		drm_bridge_remove(&dsi->bridge);
 		return ret;
 	}
 
@@ -1309,6 +1397,10 @@ static int vc4_dsi_host_attach(struct mipi_dsi_host *host,
 static int vc4_dsi_host_detach(struct mipi_dsi_host *host,
 			       struct mipi_dsi_device *device)
 {
+	struct vc4_dsi *dsi = host_to_dsi(host);
+
+	component_del(&dsi->pdev->dev, &vc4_dsi_ops);
+	drm_bridge_remove(&dsi->bridge);
 	return 0;
 }
 
@@ -1318,10 +1410,30 @@ static const struct mipi_dsi_host_ops vc4_dsi_host_ops = {
 	.transfer = vc4_dsi_host_transfer,
 };
 
-static const struct drm_encoder_helper_funcs vc4_dsi_encoder_helper_funcs = {
-	.disable = vc4_dsi_encoder_disable,
-	.enable = vc4_dsi_encoder_enable,
-	.mode_fixup = vc4_dsi_encoder_mode_fixup,
+static const struct drm_bridge_funcs vc4_dsi_bridge_funcs = {
+	.atomic_duplicate_state = drm_atomic_helper_bridge_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,
+	.atomic_reset = drm_atomic_helper_bridge_reset,
+	.atomic_pre_enable = vc4_dsi_bridge_pre_enable,
+	.atomic_enable = vc4_dsi_bridge_enable,
+	.atomic_disable = vc4_dsi_bridge_disable,
+	.atomic_post_disable = vc4_dsi_bridge_post_disable,
+	.attach = vc4_dsi_bridge_attach,
+	.mode_fixup = vc4_dsi_bridge_mode_fixup,
+};
+
+static int vc4_dsi_late_register(struct drm_encoder *encoder)
+{
+	struct drm_device *drm = encoder->dev;
+	struct vc4_dsi *dsi = to_vc4_dsi(encoder);
+
+	vc4_debugfs_add_regset32(drm, dsi->variant->debugfs_name, &dsi->regset);
+
+	return 0;
+}
+
+static const struct drm_encoder_funcs vc4_dsi_encoder_funcs = {
+	.late_register = vc4_dsi_late_register,
 };
 
 static const struct vc4_dsi_variant bcm2711_dsi1_variant = {
@@ -1394,26 +1506,28 @@ static irqreturn_t vc4_dsi_irq_handler(int irq, void *data)
 	DSI_PORT_WRITE(INT_STAT, stat);
 
 	dsi_handle_error(dsi, &ret, stat,
-			 DSI1_INT_ERR_SYNC_ESC, "LPDT sync");
+			 DSI_PORT_BIT(INT_ERR_SYNC_ESC), "LPDT sync");
 	dsi_handle_error(dsi, &ret, stat,
-			 DSI1_INT_ERR_CONTROL, "data lane 0 sequence");
+			 DSI_PORT_BIT(INT_ERR_CONTROL), "data lane 0 sequence");
 	dsi_handle_error(dsi, &ret, stat,
-			 DSI1_INT_ERR_CONT_LP0, "LP0 contention");
+			 DSI_PORT_BIT(INT_ERR_CONT_LP0), "LP0 contention");
 	dsi_handle_error(dsi, &ret, stat,
-			 DSI1_INT_ERR_CONT_LP1, "LP1 contention");
+			 DSI_PORT_BIT(INT_ERR_CONT_LP1), "LP1 contention");
 	dsi_handle_error(dsi, &ret, stat,
-			 DSI1_INT_HSTX_TO, "HSTX timeout");
+			 DSI_PORT_BIT(INT_HSTX_TO), "HSTX timeout");
 	dsi_handle_error(dsi, &ret, stat,
-			 DSI1_INT_LPRX_TO, "LPRX timeout");
+			 DSI_PORT_BIT(INT_LPRX_TO), "LPRX timeout");
 	dsi_handle_error(dsi, &ret, stat,
-			 DSI1_INT_TA_TO, "turnaround timeout");
+			 DSI_PORT_BIT(INT_TA_TO), "turnaround timeout");
 	dsi_handle_error(dsi, &ret, stat,
-			 DSI1_INT_PR_TO, "peripheral reset timeout");
+			 DSI_PORT_BIT(INT_PR_TO), "peripheral reset timeout");
 
-	if (stat & (DSI1_INT_TXPKT1_DONE | DSI1_INT_PHY_DIR_RTF)) {
+	if (stat & ((dsi->variant->port ? DSI1_INT_TXPKT1_DONE :
+					  DSI0_INT_CMDC_DONE_MASK) |
+		    DSI_PORT_BIT(INT_PHY_DIR_RTF))) {
 		complete(&dsi->xfer_completion);
 		ret = IRQ_HANDLED;
-	} else if (stat & DSI1_INT_HSTX_TO) {
+	} else if (stat & DSI_PORT_BIT(INT_HSTX_TO)) {
 		complete(&dsi->xfer_completion);
 		dsi->xfer_result = -ETIMEDOUT;
 		ret = IRQ_HANDLED;
@@ -1491,32 +1605,66 @@ vc4_dsi_init_phy_clocks(struct vc4_dsi *dsi)
 				      dsi->clk_onecell);
 }
 
+static void vc4_dsi_dma_mem_release(void *ptr)
+{
+	struct vc4_dsi *dsi = ptr;
+	struct device *dev = &dsi->pdev->dev;
+
+	dma_free_coherent(dev, 4, dsi->reg_dma_mem, dsi->reg_dma_paddr);
+	dsi->reg_dma_mem = NULL;
+}
+
+static void vc4_dsi_dma_chan_release(void *ptr)
+{
+	struct vc4_dsi *dsi = ptr;
+
+	dma_release_channel(dsi->reg_dma_chan);
+	dsi->reg_dma_chan = NULL;
+}
+
+static void vc4_dsi_release(struct kref *kref)
+{
+	struct vc4_dsi *dsi =
+		container_of(kref, struct vc4_dsi, kref);
+
+	kfree(dsi);
+}
+
+static void vc4_dsi_get(struct vc4_dsi *dsi)
+{
+	kref_get(&dsi->kref);
+}
+
+static void vc4_dsi_put(struct vc4_dsi *dsi)
+{
+	kref_put(&dsi->kref, &vc4_dsi_release);
+}
+
+static void vc4_dsi_release_action(struct drm_device *drm, void *ptr)
+{
+	struct vc4_dsi *dsi = ptr;
+
+	vc4_dsi_put(dsi);
+}
+
 static int vc4_dsi_bind(struct device *dev, struct device *master, void *data)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct drm_device *drm = dev_get_drvdata(master);
 	struct vc4_dsi *dsi = dev_get_drvdata(dev);
-	struct vc4_dsi_encoder *vc4_dsi_encoder;
-	struct drm_panel *panel;
-	const struct of_device_id *match;
-	dma_cap_mask_t dma_mask;
+	struct drm_encoder *encoder = &dsi->encoder.base;
 	int ret;
 
-	match = of_match_device(vc4_dsi_dt_match, dev);
-	if (!match)
-		return -ENODEV;
+	vc4_dsi_get(dsi);
 
-	dsi->variant = match->data;
+	ret = drmm_add_action_or_reset(drm, vc4_dsi_release_action, dsi);
+	if (ret)
+		return ret;
 
-	vc4_dsi_encoder = devm_kzalloc(dev, sizeof(*vc4_dsi_encoder),
-				       GFP_KERNEL);
-	if (!vc4_dsi_encoder)
-		return -ENOMEM;
+	dsi->variant = of_device_get_match_data(dev);
 
-	INIT_LIST_HEAD(&dsi->bridge_chain);
-	vc4_dsi_encoder->base.type = VC4_ENCODER_TYPE_DSI1;
-	vc4_dsi_encoder->dsi = dsi;
-	dsi->encoder = &vc4_dsi_encoder->base.base;
+	dsi->encoder.type = dsi->variant->port ?
+		VC4_ENCODER_TYPE_DSI1 : VC4_ENCODER_TYPE_DSI0;
 
 	dsi->regs = vc4_ioremap_regs(pdev, 0);
 	if (IS_ERR(dsi->regs))
@@ -1537,6 +1685,8 @@ static int vc4_dsi_bind(struct device *dev, struct device *master, void *data)
 	 * so set up a channel for talking to it.
 	 */
 	if (dsi->variant->broken_axi_workaround) {
+		dma_cap_mask_t dma_mask;
+
 		dsi->reg_dma_mem = dma_alloc_coherent(dev, 4,
 						      &dsi->reg_dma_paddr,
 						      GFP_KERNEL);
@@ -1545,8 +1695,13 @@ static int vc4_dsi_bind(struct device *dev, struct device *master, void *data)
 			return -ENOMEM;
 		}
 
+		ret = devm_add_action_or_reset(dev, vc4_dsi_dma_mem_release, dsi);
+		if (ret)
+			return ret;
+
 		dma_cap_zero(dma_mask);
 		dma_cap_set(DMA_MEMCPY, dma_mask);
+
 		dsi->reg_dma_chan = dma_request_chan_by_mask(&dma_mask);
 		if (IS_ERR(dsi->reg_dma_chan)) {
 			ret = PTR_ERR(dsi->reg_dma_chan);
@@ -1555,6 +1710,10 @@ static int vc4_dsi_bind(struct device *dev, struct device *master, void *data)
 					  ret);
 			return ret;
 		}
+
+		ret = devm_add_action_or_reset(dev, vc4_dsi_dma_chan_release, dsi);
+		if (ret)
+			return ret;
 
 		/* Get the physical address of the device's registers.  The
 		 * struct resource for the regs gives us the bus address
@@ -1609,27 +1768,9 @@ static int vc4_dsi_bind(struct device *dev, struct device *master, void *data)
 		return ret;
 	}
 
-	ret = drm_of_find_panel_or_bridge(dev->of_node, 0, 0,
-					  &panel, &dsi->bridge);
-	if (ret) {
-		/* If the bridge or panel pointed by dev->of_node is not
-		 * enabled, just return 0 here so that we don't prevent the DRM
-		 * dev from being registered. Of course that means the DSI
-		 * encoder won't be exposed, but that's not a problem since
-		 * nothing is connected to it.
-		 */
-		if (ret == -ENODEV)
-			return 0;
-
-		return ret;
-	}
-
-	if (panel) {
-		dsi->bridge = devm_drm_panel_bridge_add_typed(dev, panel,
-							      DRM_MODE_CONNECTOR_DSI);
-		if (IS_ERR(dsi->bridge))
-			return PTR_ERR(dsi->bridge);
-	}
+	dsi->out_bridge = drmm_of_get_bridge(drm, dev->of_node, 0, 0);
+	if (IS_ERR(dsi->out_bridge))
+		return PTR_ERR(dsi->out_bridge);
 
 	/* The esc clock rate is supposed to always be 100Mhz. */
 	ret = clk_set_rate(dsi->escape_clock, 100 * 1000000);
@@ -1642,45 +1783,26 @@ static int vc4_dsi_bind(struct device *dev, struct device *master, void *data)
 	if (ret)
 		return ret;
 
-	drm_simple_encoder_init(drm, dsi->encoder, DRM_MODE_ENCODER_DSI);
-	drm_encoder_helper_add(dsi->encoder, &vc4_dsi_encoder_helper_funcs);
-
-	ret = drm_bridge_attach(dsi->encoder, dsi->bridge, NULL, 0);
+	ret = drmm_encoder_init(drm, encoder,
+				&vc4_dsi_encoder_funcs,
+				DRM_MODE_ENCODER_DSI,
+				NULL);
 	if (ret)
 		return ret;
-	/* Disable the atomic helper calls into the bridge.  We
-	 * manually call the bridge pre_enable / enable / etc. calls
-	 * from our driver, since we need to sequence them within the
-	 * encoder's enable/disable paths.
-	 */
-	list_splice_init(&dsi->encoder->bridge_chain, &dsi->bridge_chain);
 
-	vc4_debugfs_add_regset32(drm, dsi->variant->debugfs_name, &dsi->regset);
+	ret = devm_pm_runtime_enable(dev);
+	if (ret)
+		return ret;
 
-	pm_runtime_enable(dev);
+	ret = drm_bridge_attach(encoder, &dsi->bridge, NULL, 0);
+	if (ret)
+		return ret;
 
 	return 0;
 }
 
-static void vc4_dsi_unbind(struct device *dev, struct device *master,
-			   void *data)
-{
-	struct vc4_dsi *dsi = dev_get_drvdata(dev);
-
-	if (dsi->bridge)
-		pm_runtime_disable(dev);
-
-	/*
-	 * Restore the bridge_chain so the bridge detach procedure can happen
-	 * normally.
-	 */
-	list_splice_init(&dsi->bridge_chain, &dsi->encoder->bridge_chain);
-	drm_encoder_cleanup(dsi->encoder);
-}
-
 static const struct component_ops vc4_dsi_ops = {
 	.bind   = vc4_dsi_bind,
-	.unbind = vc4_dsi_unbind,
 };
 
 static int vc4_dsi_dev_probe(struct platform_device *pdev)
@@ -1688,12 +1810,19 @@ static int vc4_dsi_dev_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct vc4_dsi *dsi;
 
-	dsi = devm_kzalloc(dev, sizeof(*dsi), GFP_KERNEL);
+	dsi = kzalloc(sizeof(*dsi), GFP_KERNEL);
 	if (!dsi)
 		return -ENOMEM;
 	dev_set_drvdata(dev, dsi);
 
+	kref_init(&dsi->kref);
+
 	dsi->pdev = pdev;
+	dsi->bridge.funcs = &vc4_dsi_bridge_funcs;
+#ifdef CONFIG_OF
+	dsi->bridge.of_node = dev->of_node;
+#endif
+	dsi->bridge.type = DRM_MODE_CONNECTOR_DSI;
 	dsi->dsi_host.ops = &vc4_dsi_host_ops;
 	dsi->dsi_host.dev = dev;
 	mipi_dsi_host_register(&dsi->dsi_host);
@@ -1706,8 +1835,8 @@ static int vc4_dsi_dev_remove(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct vc4_dsi *dsi = dev_get_drvdata(dev);
 
-	component_del(&pdev->dev, &vc4_dsi_ops);
 	mipi_dsi_host_unregister(&dsi->dsi_host);
+	vc4_dsi_put(dsi);
 
 	return 0;
 }

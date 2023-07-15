@@ -1,15 +1,5 @@
-/*
- * Copyright (C) 2014-2017 Broadcom
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation version 2.
- *
- * This program is distributed "as is" WITHOUT ANY WARRANTY of any
- * kind, whether express or implied; without even the implied warranty
- * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- */
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2014-2017 Broadcom
 
 /*
  * This file contains the Broadcom Northstar Plus (NSP) GPIO driver that
@@ -70,7 +60,6 @@ struct nsp_gpio {
 	struct device *dev;
 	void __iomem *base;
 	void __iomem *io_ctrl;
-	struct irq_chip irqchip;
 	struct gpio_chip gc;
 	struct pinctrl_dev *pctl;
 	struct pinctrl_desc pctldesc;
@@ -203,6 +192,7 @@ static void nsp_gpio_irq_mask(struct irq_data *d)
 	raw_spin_lock_irqsave(&chip->lock, flags);
 	nsp_gpio_irq_set_mask(d, false);
 	raw_spin_unlock_irqrestore(&chip->lock, flags);
+	gpiochip_disable_irq(gc, irqd_to_hwirq(d));
 }
 
 static void nsp_gpio_irq_unmask(struct irq_data *d)
@@ -211,6 +201,7 @@ static void nsp_gpio_irq_unmask(struct irq_data *d)
 	struct nsp_gpio *chip = gpiochip_get_data(gc);
 	unsigned long flags;
 
+	gpiochip_enable_irq(gc, irqd_to_hwirq(d));
 	raw_spin_lock_irqsave(&chip->lock, flags);
 	nsp_gpio_irq_set_mask(d, true);
 	raw_spin_unlock_irqrestore(&chip->lock, flags);
@@ -267,6 +258,16 @@ static int nsp_gpio_irq_set_type(struct irq_data *d, unsigned int type)
 		level_low ? "true" : "false", falling ? "true" : "false");
 	return 0;
 }
+
+static const struct irq_chip nsp_gpio_irq_chip = {
+	.name = "gpio-a",
+	.irq_ack = nsp_gpio_irq_ack,
+	.irq_mask = nsp_gpio_irq_mask,
+	.irq_unmask = nsp_gpio_irq_unmask,
+	.irq_set_type = nsp_gpio_irq_set_type,
+	.flags = IRQCHIP_IMMUTABLE,
+	GPIOCHIP_IRQ_RESOURCE_HELPERS,
+};
 
 static int nsp_gpio_direction_input(struct gpio_chip *gc, unsigned gpio)
 {
@@ -648,7 +649,6 @@ static int nsp_gpio_probe(struct platform_device *pdev)
 	gc->ngpio = val;
 	gc->label = dev_name(dev);
 	gc->parent = dev;
-	gc->of_node = dev->of_node;
 	gc->request = gpiochip_generic_request;
 	gc->free = gpiochip_generic_free;
 	gc->direction_input = nsp_gpio_direction_input;
@@ -661,14 +661,6 @@ static int nsp_gpio_probe(struct platform_device *pdev)
 	irq = platform_get_irq(pdev, 0);
 	if (irq > 0) {
 		struct gpio_irq_chip *girq;
-		struct irq_chip *irqc;
-
-		irqc = &chip->irqchip;
-		irqc->name = "gpio-a";
-		irqc->irq_ack = nsp_gpio_irq_ack;
-		irqc->irq_mask = nsp_gpio_irq_mask;
-		irqc->irq_unmask = nsp_gpio_irq_unmask;
-		irqc->irq_set_type = nsp_gpio_irq_set_type;
 
 		val = readl(chip->base + NSP_CHIP_A_INT_MASK);
 		val = val | NSP_CHIP_A_GPIO_INT_BIT;
@@ -684,7 +676,7 @@ static int nsp_gpio_probe(struct platform_device *pdev)
 		}
 
 		girq = &chip->gc.irq;
-		girq->chip = irqc;
+		gpio_irq_chip_set_chip(girq, &nsp_gpio_irq_chip);
 		/* This will let us handle the parent IRQ in the driver */
 		girq->parent_handler = NULL;
 		girq->num_parents = 0;

@@ -41,7 +41,7 @@ static ssize_t type_show(struct device *dev,
 {
 	struct zcrypt_card *zc = dev_get_drvdata(dev);
 
-	return scnprintf(buf, PAGE_SIZE, "%s\n", zc->type_string);
+	return sysfs_emit(buf, "%s\n", zc->type_string);
 }
 
 static DEVICE_ATTR_RO(type);
@@ -54,7 +54,7 @@ static ssize_t online_show(struct device *dev,
 	struct ap_card *ac = to_ap_card(dev);
 	int online = ac->config && zc->online ? 1 : 0;
 
-	return scnprintf(buf, PAGE_SIZE, "%d\n", online);
+	return sysfs_emit(buf, "%d\n", online);
 }
 
 static ssize_t online_store(struct device *dev,
@@ -76,7 +76,7 @@ static ssize_t online_store(struct device *dev,
 	zc->online = online;
 	id = zc->card->id;
 
-	ZCRYPT_DBF(DBF_INFO, "card=%02x online=%d\n", id, online);
+	ZCRYPT_DBF_INFO("%s card=%02x online=%d\n", __func__, id, online);
 
 	ap_send_online_uevent(&ac->ap_dev, online);
 
@@ -90,7 +90,7 @@ static ssize_t online_store(struct device *dev,
 	list_for_each_entry(zq, &zc->zqueues, list)
 		maxzqs++;
 	if (maxzqs > 0)
-		zq_uelist = kcalloc(maxzqs + 1, sizeof(zq), GFP_ATOMIC);
+		zq_uelist = kcalloc(maxzqs + 1, sizeof(*zq_uelist), GFP_ATOMIC);
 	list_for_each_entry(zq, &zc->zqueues, list)
 		if (zcrypt_queue_force_online(zq, online))
 			if (zq_uelist) {
@@ -118,7 +118,7 @@ static ssize_t load_show(struct device *dev,
 {
 	struct zcrypt_card *zc = dev_get_drvdata(dev);
 
-	return scnprintf(buf, PAGE_SIZE, "%d\n", atomic_read(&zc->load));
+	return sysfs_emit(buf, "%d\n", atomic_read(&zc->load));
 }
 
 static DEVICE_ATTR_RO(load);
@@ -138,7 +138,7 @@ struct zcrypt_card *zcrypt_card_alloc(void)
 {
 	struct zcrypt_card *zc;
 
-	zc = kzalloc(sizeof(struct zcrypt_card), GFP_KERNEL);
+	zc = kzalloc(sizeof(*zc), GFP_KERNEL);
 	if (!zc)
 		return NULL;
 	INIT_LIST_HEAD(&zc->list);
@@ -189,7 +189,8 @@ int zcrypt_card_register(struct zcrypt_card *zc)
 
 	zc->online = 1;
 
-	ZCRYPT_DBF(DBF_INFO, "card=%02x register online=1\n", zc->card->id);
+	ZCRYPT_DBF_INFO("%s card=%02x register online=1\n",
+			__func__, zc->card->id);
 
 	rc = sysfs_create_group(&zc->card->ap_dev.device.kobj,
 				&zcrypt_card_attr_group);
@@ -211,7 +212,8 @@ EXPORT_SYMBOL(zcrypt_card_register);
  */
 void zcrypt_card_unregister(struct zcrypt_card *zc)
 {
-	ZCRYPT_DBF(DBF_INFO, "card=%02x unregister\n", zc->card->id);
+	ZCRYPT_DBF_INFO("%s card=%02x unregister\n",
+			__func__, zc->card->id);
 
 	spin_lock(&zcrypt_list_lock);
 	list_del_init(&zc->list);

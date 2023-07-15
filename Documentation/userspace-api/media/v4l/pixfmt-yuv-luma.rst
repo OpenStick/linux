@@ -14,7 +14,7 @@ are often referred to as greyscale formats.
    - In all the tables that follow, bit 7 is the most significant bit in a byte.
    - Formats are described with the minimum number of pixels needed to create a
      byte-aligned repeating pattern. `...` indicates repetition of the pattern.
-   - Y'\ :sub:`x`\ [9:2] denotes bits 9 to 2 of the Y' value for pixel at colum
+   - Y'\ :sub:`x`\ [9:2] denotes bits 9 to 2 of the Y' value for pixel at column
      `x`.
    - `0` denotes padding bits set to 0.
 
@@ -48,6 +48,17 @@ are often referred to as greyscale formats.
       - ...
       - ...
 
+    * .. _V4L2-PIX-FMT-IPU3-Y10:
+
+      - ``V4L2_PIX_FMT_IPU3_Y10``
+      - 'ip3y'
+
+      - Y'\ :sub:`0`\ [7:0]
+      - Y'\ :sub:`1`\ [5:0] Y'\ :sub:`0`\ [9:8]
+      - Y'\ :sub:`2`\ [3:0] Y'\ :sub:`1`\ [9:6]
+      - Y'\ :sub:`3`\ [1:0] Y'\ :sub:`2`\ [9:4]
+      - Y'\ :sub:`3`\ [9:2]
+
     * .. _V4L2-PIX-FMT-Y10:
 
       - ``V4L2_PIX_FMT_Y10``
@@ -75,8 +86,8 @@ are often referred to as greyscale formats.
       - ``V4L2_PIX_FMT_Y10P``
       - 'Y10P'
 
-      - Y'\ :sub:`0`\ [7:0]
-      - Y'\ :sub:`1`\ [9:8]
+      - Y'\ :sub:`0`\ [9:2]
+      - Y'\ :sub:`1`\ [9:2]
       - Y'\ :sub:`2`\ [9:2]
       - Y'\ :sub:`3`\ [9:2]
       - Y'\ :sub:`3`\ [1:0] Y'\ :sub:`2`\ [1:0] Y'\ :sub:`1`\ [1:0] Y'\ :sub:`0`\ [1:0]
@@ -88,6 +99,17 @@ are often referred to as greyscale formats.
 
       - Y'\ :sub:`0`\ [7:0]
       - `0000` Y'\ :sub:`0`\ [11:8]
+      - ...
+      - ...
+      - ...
+
+    * .. _V4L2-PIX-FMT-Y012:
+
+      - ``V4L2_PIX_FMT_Y012``
+      - 'Y012'
+
+      - Y'\ :sub:`0`\ [3:0] `0000`
+      - Y'\ :sub:`0`\ [11:4]
       - ...
       - ...
       - ...
@@ -133,4 +155,9 @@ are often referred to as greyscale formats.
 
     For the Y16 and Y16_BE formats, the actual sampling precision may be lower
     than 16 bits. For example, 10 bits per pixel uses values in the range 0 to
-    1023.
+    1023. For the IPU3_Y10 format 25 pixels are packed into 32 bytes, which
+    leaves the 6 most significant bits of the last byte padded with 0.
+
+    For Y012 and Y12 formats, Y012 places its data in the 12 high bits, with
+    padding zeros in the 4 low bits, in contrast to the Y12 format, which has
+    its padding located in the most significant bits of the 16 bit word.

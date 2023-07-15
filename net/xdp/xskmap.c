@@ -4,10 +4,12 @@
  */
 
 #include <linux/bpf.h>
+#include <linux/filter.h>
 #include <linux/capability.h>
 #include <net/xdp_sock.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
+#include <linux/btf_ids.h>
 
 #include "xsk.h"
 
@@ -22,6 +24,7 @@ static struct xsk_map_node *xsk_map_node_alloc(struct xsk_map *map,
 		return ERR_PTR(-ENOMEM);
 
 	bpf_map_inc(&map->map);
+	atomic_inc(&map->count);
 
 	node->map = map;
 	node->map_entry = map_entry;
@@ -30,8 +33,11 @@ static struct xsk_map_node *xsk_map_node_alloc(struct xsk_map *map,
 
 static void xsk_map_node_free(struct xsk_map_node *node)
 {
+	struct xsk_map *map = node->map;
+
 	bpf_map_put(&node->map->map);
 	kfree(node);
+	atomic_dec(&map->count);
 }
 
 static void xsk_map_sock_add(struct xdp_sock *xs, struct xsk_map_node *node)
@@ -81,6 +87,14 @@ static struct bpf_map *xsk_map_alloc(union bpf_attr *attr)
 	spin_lock_init(&m->lock);
 
 	return &m->map;
+}
+
+static u64 xsk_map_mem_usage(const struct bpf_map *map)
+{
+	struct xsk_map *m = container_of(map, struct xsk_map, map);
+
+	return struct_size(m, xsk_map, map->max_entries) +
+		   (u64)atomic_read(&m->count) * sizeof(struct xsk_map_node);
 }
 
 static void xsk_map_free(struct bpf_map *map)
@@ -148,8 +162,8 @@ static void *xsk_map_lookup_elem_sys_only(struct bpf_map *map, void *key)
 	return ERR_PTR(-EOPNOTSUPP);
 }
 
-static int xsk_map_update_elem(struct bpf_map *map, void *key, void *value,
-			       u64 map_flags)
+static long xsk_map_update_elem(struct bpf_map *map, void *key, void *value,
+				u64 map_flags)
 {
 	struct xsk_map *m = container_of(map, struct xsk_map, map);
 	struct xdp_sock __rcu **map_entry;
@@ -209,7 +223,7 @@ out:
 	return err;
 }
 
-static int xsk_map_delete_elem(struct bpf_map *map, void *key)
+static long xsk_map_delete_elem(struct bpf_map *map, void *key)
 {
 	struct xsk_map *m = container_of(map, struct xsk_map, map);
 	struct xdp_sock __rcu **map_entry;
@@ -229,9 +243,9 @@ static int xsk_map_delete_elem(struct bpf_map *map, void *key)
 	return 0;
 }
 
-static int xsk_map_redirect(struct bpf_map *map, u32 ifindex, u64 flags)
+static long xsk_map_redirect(struct bpf_map *map, u64 index, u64 flags)
 {
-	return __bpf_xdp_redirect_map(map, ifindex, flags, 0,
+	return __bpf_xdp_redirect_map(map, index, flags, 0,
 				      __xsk_map_lookup_elem);
 }
 
@@ -253,7 +267,7 @@ static bool xsk_map_meta_equal(const struct bpf_map *meta0,
 		bpf_map_meta_equal(meta0, meta1);
 }
 
-static int xsk_map_btf_id;
+BTF_ID_LIST_SINGLE(xsk_map_btf_ids, struct, xsk_map)
 const struct bpf_map_ops xsk_map_ops = {
 	.map_meta_equal = xsk_map_meta_equal,
 	.map_alloc = xsk_map_alloc,
@@ -265,7 +279,7 @@ const struct bpf_map_ops xsk_map_ops = {
 	.map_update_elem = xsk_map_update_elem,
 	.map_delete_elem = xsk_map_delete_elem,
 	.map_check_btf = map_check_no_btf,
-	.map_btf_name = "xsk_map",
-	.map_btf_id = &xsk_map_btf_id,
+	.map_mem_usage = xsk_map_mem_usage,
+	.map_btf_id = &xsk_map_btf_ids[0],
 	.map_redirect = xsk_map_redirect,
 };

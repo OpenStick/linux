@@ -56,8 +56,8 @@
 
 #include <asm/irq.h>
 
-#define TX_WORK_PER_LOOP  64
-#define RX_WORK_PER_LOOP  64
+#define TX_WORK_PER_LOOP  NAPI_POLL_WEIGHT
+#define RX_WORK_PER_LOOP  NAPI_POLL_WEIGHT
 
 /*
  * Hardware access:
@@ -1734,12 +1734,12 @@ static void nv_get_stats(int cpu, struct fe_priv *np,
 	u64 tx_packets, tx_bytes, tx_dropped;
 
 	do {
-		syncp_start = u64_stats_fetch_begin_irq(&np->swstats_rx_syncp);
+		syncp_start = u64_stats_fetch_begin(&np->swstats_rx_syncp);
 		rx_packets       = src->stat_rx_packets;
 		rx_bytes         = src->stat_rx_bytes;
 		rx_dropped       = src->stat_rx_dropped;
 		rx_missed_errors = src->stat_rx_missed_errors;
-	} while (u64_stats_fetch_retry_irq(&np->swstats_rx_syncp, syncp_start));
+	} while (u64_stats_fetch_retry(&np->swstats_rx_syncp, syncp_start));
 
 	storage->rx_packets       += rx_packets;
 	storage->rx_bytes         += rx_bytes;
@@ -1747,11 +1747,11 @@ static void nv_get_stats(int cpu, struct fe_priv *np,
 	storage->rx_missed_errors += rx_missed_errors;
 
 	do {
-		syncp_start = u64_stats_fetch_begin_irq(&np->swstats_tx_syncp);
+		syncp_start = u64_stats_fetch_begin(&np->swstats_tx_syncp);
 		tx_packets  = src->stat_tx_packets;
 		tx_bytes    = src->stat_tx_bytes;
 		tx_dropped  = src->stat_tx_dropped;
-	} while (u64_stats_fetch_retry_irq(&np->swstats_tx_syncp, syncp_start));
+	} while (u64_stats_fetch_retry(&np->swstats_tx_syncp, syncp_start));
 
 	storage->tx_packets += tx_packets;
 	storage->tx_bytes   += tx_bytes;
@@ -3175,7 +3175,7 @@ static int nv_set_mac_address(struct net_device *dev, void *addr)
 		return -EADDRNOTAVAIL;
 
 	/* synchronized against open : rtnl_lock() held by caller */
-	memcpy(dev->dev_addr, macaddr->sa_data, ETH_ALEN);
+	eth_hw_addr_set(dev, macaddr->sa_data);
 
 	if (netif_running(dev)) {
 		netif_tx_lock_bh(dev);
@@ -4291,9 +4291,9 @@ static void nv_do_stats_poll(struct timer_list *t)
 static void nv_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
 {
 	struct fe_priv *np = netdev_priv(dev);
-	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
-	strlcpy(info->version, FORCEDETH_VERSION, sizeof(info->version));
-	strlcpy(info->bus_info, pci_name(np->pci_dev), sizeof(info->bus_info));
+	strscpy(info->driver, DRV_NAME, sizeof(info->driver));
+	strscpy(info->version, FORCEDETH_VERSION, sizeof(info->version));
+	strscpy(info->bus_info, pci_name(np->pci_dev), sizeof(info->bus_info));
 }
 
 static void nv_get_wol(struct net_device *dev, struct ethtool_wolinfo *wolinfo)
@@ -4651,7 +4651,10 @@ static int nv_nway_reset(struct net_device *dev)
 	return ret;
 }
 
-static void nv_get_ringparam(struct net_device *dev, struct ethtool_ringparam* ring)
+static void nv_get_ringparam(struct net_device *dev,
+			     struct ethtool_ringparam *ring,
+			     struct kernel_ethtool_ringparam *kernel_ring,
+			     struct netlink_ext_ack *extack)
 {
 	struct fe_priv *np = netdev_priv(dev);
 
@@ -4662,7 +4665,10 @@ static void nv_get_ringparam(struct net_device *dev, struct ethtool_ringparam* r
 	ring->tx_pending = np->tx_ring_size;
 }
 
-static int nv_set_ringparam(struct net_device *dev, struct ethtool_ringparam* ring)
+static int nv_set_ringparam(struct net_device *dev,
+			    struct ethtool_ringparam *ring,
+			    struct kernel_ethtool_ringparam *kernel_ring,
+			    struct netlink_ext_ack *extack)
 {
 	struct fe_priv *np = netdev_priv(dev);
 	u8 __iomem *base = get_hwbase(dev);
@@ -5711,6 +5717,7 @@ static int nv_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 	u32 phystate_orig = 0, phystate;
 	int phyinitialized = 0;
 	static int printed_version;
+	u8 mac[ETH_ALEN];
 
 	if (!printed_version++)
 		pr_info("Reverse Engineered nForce ethernet driver. Version %s.\n",
@@ -5869,7 +5876,7 @@ static int nv_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 	else
 		dev->netdev_ops = &nv_netdev_ops_optimized;
 
-	netif_napi_add(dev, &np->napi, nv_napi_poll, RX_WORK_PER_LOOP);
+	netif_napi_add(dev, &np->napi, nv_napi_poll);
 	dev->ethtool_ops = &ops;
 	dev->watchdog_timeo = NV_WATCHDOG_TIMEO;
 
@@ -5884,50 +5891,52 @@ static int nv_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 	txreg = readl(base + NvRegTransmitPoll);
 	if (id->driver_data & DEV_HAS_CORRECT_MACADDR) {
 		/* mac address is already in correct order */
-		dev->dev_addr[0] = (np->orig_mac[0] >>  0) & 0xff;
-		dev->dev_addr[1] = (np->orig_mac[0] >>  8) & 0xff;
-		dev->dev_addr[2] = (np->orig_mac[0] >> 16) & 0xff;
-		dev->dev_addr[3] = (np->orig_mac[0] >> 24) & 0xff;
-		dev->dev_addr[4] = (np->orig_mac[1] >>  0) & 0xff;
-		dev->dev_addr[5] = (np->orig_mac[1] >>  8) & 0xff;
+		mac[0] = (np->orig_mac[0] >>  0) & 0xff;
+		mac[1] = (np->orig_mac[0] >>  8) & 0xff;
+		mac[2] = (np->orig_mac[0] >> 16) & 0xff;
+		mac[3] = (np->orig_mac[0] >> 24) & 0xff;
+		mac[4] = (np->orig_mac[1] >>  0) & 0xff;
+		mac[5] = (np->orig_mac[1] >>  8) & 0xff;
 	} else if (txreg & NVREG_TRANSMITPOLL_MAC_ADDR_REV) {
 		/* mac address is already in correct order */
-		dev->dev_addr[0] = (np->orig_mac[0] >>  0) & 0xff;
-		dev->dev_addr[1] = (np->orig_mac[0] >>  8) & 0xff;
-		dev->dev_addr[2] = (np->orig_mac[0] >> 16) & 0xff;
-		dev->dev_addr[3] = (np->orig_mac[0] >> 24) & 0xff;
-		dev->dev_addr[4] = (np->orig_mac[1] >>  0) & 0xff;
-		dev->dev_addr[5] = (np->orig_mac[1] >>  8) & 0xff;
+		mac[0] = (np->orig_mac[0] >>  0) & 0xff;
+		mac[1] = (np->orig_mac[0] >>  8) & 0xff;
+		mac[2] = (np->orig_mac[0] >> 16) & 0xff;
+		mac[3] = (np->orig_mac[0] >> 24) & 0xff;
+		mac[4] = (np->orig_mac[1] >>  0) & 0xff;
+		mac[5] = (np->orig_mac[1] >>  8) & 0xff;
 		/*
 		 * Set orig mac address back to the reversed version.
 		 * This flag will be cleared during low power transition.
 		 * Therefore, we should always put back the reversed address.
 		 */
-		np->orig_mac[0] = (dev->dev_addr[5] << 0) + (dev->dev_addr[4] << 8) +
-			(dev->dev_addr[3] << 16) + (dev->dev_addr[2] << 24);
-		np->orig_mac[1] = (dev->dev_addr[1] << 0) + (dev->dev_addr[0] << 8);
+		np->orig_mac[0] = (mac[5] << 0) + (mac[4] << 8) +
+			(mac[3] << 16) + (mac[2] << 24);
+		np->orig_mac[1] = (mac[1] << 0) + (mac[0] << 8);
 	} else {
 		/* need to reverse mac address to correct order */
-		dev->dev_addr[0] = (np->orig_mac[1] >>  8) & 0xff;
-		dev->dev_addr[1] = (np->orig_mac[1] >>  0) & 0xff;
-		dev->dev_addr[2] = (np->orig_mac[0] >> 24) & 0xff;
-		dev->dev_addr[3] = (np->orig_mac[0] >> 16) & 0xff;
-		dev->dev_addr[4] = (np->orig_mac[0] >>  8) & 0xff;
-		dev->dev_addr[5] = (np->orig_mac[0] >>  0) & 0xff;
+		mac[0] = (np->orig_mac[1] >>  8) & 0xff;
+		mac[1] = (np->orig_mac[1] >>  0) & 0xff;
+		mac[2] = (np->orig_mac[0] >> 24) & 0xff;
+		mac[3] = (np->orig_mac[0] >> 16) & 0xff;
+		mac[4] = (np->orig_mac[0] >>  8) & 0xff;
+		mac[5] = (np->orig_mac[0] >>  0) & 0xff;
 		writel(txreg|NVREG_TRANSMITPOLL_MAC_ADDR_REV, base + NvRegTransmitPoll);
 		dev_dbg(&pci_dev->dev,
 			"%s: set workaround bit for reversed mac addr\n",
 			__func__);
 	}
 
-	if (!is_valid_ether_addr(dev->dev_addr)) {
+	if (is_valid_ether_addr(mac)) {
+		eth_hw_addr_set(dev, mac);
+	} else {
 		/*
 		 * Bad mac address. At least one bios sets the mac address
 		 * to 01:23:45:67:89:ab
 		 */
 		dev_err(&pci_dev->dev,
 			"Invalid MAC address detected: %pM - Please complain to your hardware vendor.\n",
-			dev->dev_addr);
+			mac);
 		eth_hw_addr_random(dev);
 		dev_err(&pci_dev->dev,
 			"Using random MAC address: %pM\n", dev->dev_addr);
@@ -6129,6 +6138,7 @@ static int nv_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 	return 0;
 
 out_error:
+	nv_mgmt_release_sema(dev);
 	if (phystate_orig)
 		writel(phystate|NVREG_ADAPTCTL_RUNNING, base + NvRegAdapterControl);
 out_freering:

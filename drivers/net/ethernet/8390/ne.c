@@ -52,6 +52,7 @@ static const char version2[] =
 #include <linux/etherdevice.h>
 #include <linux/jiffies.h>
 #include <linux/platform_device.h>
+#include <net/Space.h>
 
 #include <asm/io.h>
 
@@ -500,9 +501,7 @@ static int __init ne_probe1(struct net_device *dev, unsigned long ioaddr)
 
 	dev->base_addr = ioaddr;
 
-	for (i = 0; i < ETH_ALEN; i++) {
-		dev->dev_addr[i] = SA_prom[i];
-	}
+	eth_hw_addr_set(dev, SA_prom);
 
 	pr_cont("%pM\n", dev->dev_addr);
 

@@ -48,6 +48,7 @@ DEFINE_EVENT(timer_class, timer_init,
  * timer_start - called when the timer is started
  * @timer:	pointer to struct timer_list
  * @expires:	the timers expiry time
+ * @flags:	the timers flags
  */
 TRACE_EVENT(timer_start,
 
@@ -84,6 +85,7 @@ TRACE_EVENT(timer_start,
 /**
  * timer_expire_entry - called immediately before the timer callback
  * @timer:	pointer to struct timer_list
+ * @baseclk:	value of timer_base::clk when timer expires
  *
  * Allows to determine the timer latency.
  */
@@ -190,7 +192,8 @@ TRACE_EVENT(hrtimer_init,
 
 /**
  * hrtimer_start - called when the hrtimer is started
- * @hrtimer: pointer to struct hrtimer
+ * @hrtimer:	pointer to struct hrtimer
+ * @mode:	the hrtimers mode
  */
 TRACE_EVENT(hrtimer_start,
 
@@ -368,7 +371,8 @@ TRACE_EVENT(itimer_expire,
 		tick_dep_name(PERF_EVENTS)		\
 		tick_dep_name(SCHED)			\
 		tick_dep_name(CLOCK_UNSTABLE)		\
-		tick_dep_name_end(RCU)
+		tick_dep_name(RCU)			\
+		tick_dep_name_end(RCU_EXP)
 
 #undef tick_dep_name
 #undef tick_dep_mask_name

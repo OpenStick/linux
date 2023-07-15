@@ -70,7 +70,7 @@ dsp_map
     PCM device number maps assigned to the 1st OSS device;
     Default: 0
 adsp_map
-    PCM device number maps assigned to the 2st OSS device;
+    PCM device number maps assigned to the 2nd OSS device;
     Default: 1
 nonblock_open
     Don't block opening busy PCM devices;
@@ -97,8 +97,17 @@ midi_map
     MIDI device number maps assigned to the 1st OSS device;
     Default: 0
 amidi_map
-    MIDI device number maps assigned to the 2st OSS device;
+    MIDI device number maps assigned to the 2nd OSS device;
     Default: 1
+
+Module snd-soc-core
+-------------------
+
+The soc core module. It is used by all ALSA card drivers.
+It takes the following options which have global effects.
+
+prealloc_buffer_size_kbytes
+    Specify prealloc buffer size in kbytes (default: 512).
 
 Common parameters for top sound card modules
 --------------------------------------------
@@ -123,6 +132,19 @@ id
 enable
     enable card;
     Default: enabled, for PCI and ISA PnP cards
+
+These options are used for either specifying the order of instances or
+controlling enabling and disabling of each one of the devices if there
+are multiple devices bound with the same driver. For example, there are
+many machines which have two HD-audio controllers (one for HDMI/DP
+audio and another for onboard analog). In most cases, the second one is
+in primary usage, and people would like to assign it as the first
+appearing card. They can do it by specifying "index=1,0" module
+parameter, which will swap the assignment slots.
+
+Today, with the sound backend like PulseAudio and PipeWire which
+supports dynamic configuration, it's of little use, but that was a
+help for static configuration in the past.
 
 Module snd-adlib
 ----------------
@@ -714,13 +736,14 @@ Module for EMU10K1/EMU10k2 based PCI sound cards.
 
 * Sound Blaster Live!
 * Sound Blaster PCI 512
-* Emu APS (partially supported)
 * Sound Blaster Audigy
-	
+* E-MU APS (partially supported)
+* E-MU DAS
+
 extin
-    bitmap of available external inputs for FX8010 (see bellow)
+    bitmap of available external inputs for FX8010 (see below)
 extout
-    bitmap of available external outputs for FX8010 (see bellow)
+    bitmap of available external outputs for FX8010 (see below)
 seq_ports
     allocated sequencer ports (4 by default)
 max_synth_voices
@@ -2237,7 +2260,7 @@ implicit_fb
     Apply the generic implicit feedback sync mode.  When this is set
     and the playback stream sync mode is ASYNC, the driver tries to
     tie an adjacent ASYNC capture stream as the implicit feedback
-    source.
+    source.  This is equivalent with quirk_flags bit 17.
 use_vmalloc
     Use vmalloc() for allocations of the PCM buffers (default: yes).
     For architectures with non-coherent memory like ARM or MIPS, the
@@ -2279,6 +2302,8 @@ quirk_flags
         * bit 14: Ignore errors for mixer access
         * bit 15: Support generic DSD raw U32_BE format
         * bit 16: Set up the interface at first like UAC1
+        * bit 17: Apply the generic implicit feedback sync mode
+        * bit 18: Don't apply implicit feedback sync mode
 
 This module supports multiple devices, autoprobe and hotplugging.
 

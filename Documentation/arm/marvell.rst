@@ -14,17 +14,20 @@ Orion family
 
   Flavors:
         - 88F5082
-        - 88F5181
-        - 88F5181L
-        - 88F5182
+        - 88F5181  a.k.a Orion-1
+        - 88F5181L a.k.a Orion-VoIP
+        - 88F5182  a.k.a Orion-NAS
 
                - Datasheet: https://web.archive.org/web/20210124231420/http://csclub.uwaterloo.ca/~board/ts7800/MV88F5182-datasheet.pdf
                - Programmer's User Guide: https://web.archive.org/web/20210124231536/http://csclub.uwaterloo.ca/~board/ts7800/MV88F5182-opensource-manual.pdf
                - User Manual: https://web.archive.org/web/20210124231631/http://csclub.uwaterloo.ca/~board/ts7800/MV88F5182-usermanual.pdf
-        - 88F5281
+               - Functional Errata: https://web.archive.org/web/20210704165540/https://www.digriz.org.uk/ts78xx/88F5182_Functional_Errata.pdf
+        - 88F5281  a.k.a Orion-2
 
                - Datasheet: https://web.archive.org/web/20131028144728/http://www.ocmodshop.com/images/reviews/networking/qnap_ts409u/marvel_88f5281_data_sheet.pdf
-        - 88F6183
+        - 88F6183  a.k.a Orion-1-90
+  Homepage:
+        https://web.archive.org/web/20080607215437/http://www.marvell.com/products/media/index.jsp
   Core:
 	Feroceon 88fr331 (88f51xx) or 88fr531-vd (88f52xx) ARMv5 compatible
   Linux kernel mach directory:
@@ -103,6 +106,8 @@ Discovery family
 
                 Not supported by the Linux kernel.
 
+  Homepage:
+        https://web.archive.org/web/20110924171043/http://www.marvell.com/embedded-processors/discovery-innovation/
   Core:
 	Feroceon 88fr571-vd ARMv5 compatible
 
@@ -119,6 +124,7 @@ EBU Armada family
         - 88F6707
         - 88F6W11
 
+    - Product infos:   https://web.archive.org/web/20141002083258/http://www.marvell.com/embedded-processors/armada-370/
     - Product Brief:   https://web.archive.org/web/20121115063038/http://www.marvell.com/embedded-processors/armada-300/assets/Marvell_ARMADA_370_SoC.pdf
     - Hardware Spec:   https://web.archive.org/web/20140617183747/http://www.marvell.com/embedded-processors/armada-300/assets/ARMADA370-datasheet.pdf
     - Functional Spec: https://web.archive.org/web/20140617183701/http://www.marvell.com/embedded-processors/armada-300/assets/ARMADA370-FunctionalSpec-datasheet.pdf
@@ -126,9 +132,29 @@ EBU Armada family
   Core:
 	Sheeva ARMv7 compatible PJ4B
 
+  Armada XP Flavors:
+        - MV78230
+        - MV78260
+        - MV78460
+
+    NOTE:
+	not to be confused with the non-SMP 78xx0 SoCs
+
+    - Product infos:   https://web.archive.org/web/20150101215721/http://www.marvell.com/embedded-processors/armada-xp/
+    - Product Brief:   https://web.archive.org/web/20121021173528/http://www.marvell.com/embedded-processors/armada-xp/assets/Marvell-ArmadaXP-SoC-product%20brief.pdf
+    - Functional Spec: https://web.archive.org/web/20180829171131/http://www.marvell.com/embedded-processors/armada-xp/assets/ARMADA-XP-Functional-SpecDatasheet.pdf
+    - Hardware Specs:
+        - https://web.archive.org/web/20141127013651/http://www.marvell.com/embedded-processors/armada-xp/assets/HW_MV78230_OS.PDF
+        - https://web.archive.org/web/20141222000224/http://www.marvell.com/embedded-processors/armada-xp/assets/HW_MV78260_OS.PDF
+        - https://web.archive.org/web/20141222000230/http://www.marvell.com/embedded-processors/armada-xp/assets/HW_MV78460_OS.PDF
+
+  Core:
+	Sheeva ARMv7 compatible Dual-core or Quad-core PJ4B-MP
+
   Armada 375 Flavors:
 	- 88F6720
 
+    - Product infos: https://web.archive.org/web/20140108032402/http://www.marvell.com/embedded-processors/armada-375/
     - Product Brief: https://web.archive.org/web/20131216023516/http://www.marvell.com/embedded-processors/armada-300/assets/ARMADA_375_SoC-01_product_brief.pdf
 
   Core:
@@ -161,29 +187,6 @@ EBU Armada family
   Core:
 	ARM Cortex-A9
 
-  Armada XP Flavors:
-        - MV78230
-        - MV78260
-        - MV78460
-
-    NOTE:
-	not to be confused with the non-SMP 78xx0 SoCs
-
-    Product Brief:
-	https://web.archive.org/web/20121021173528/http://www.marvell.com/embedded-processors/armada-xp/assets/Marvell-ArmadaXP-SoC-product%20brief.pdf
-
-    Functional Spec:
-	https://web.archive.org/web/20180829171131/http://www.marvell.com/embedded-processors/armada-xp/assets/ARMADA-XP-Functional-SpecDatasheet.pdf
-
-    - Hardware Specs:
-
-        - https://web.archive.org/web/20141127013651/http://www.marvell.com/embedded-processors/armada-xp/assets/HW_MV78230_OS.PDF
-        - https://web.archive.org/web/20141222000224/http://www.marvell.com/embedded-processors/armada-xp/assets/HW_MV78260_OS.PDF
-        - https://web.archive.org/web/20141222000230/http://www.marvell.com/embedded-processors/armada-xp/assets/HW_MV78460_OS.PDF
-
-  Core:
-	Sheeva ARMv7 compatible Dual-core or Quad-core PJ4B-MP
-
   Linux kernel mach directory:
 	arch/arm/mach-mvebu
   Linux kernel plat directory:
@@ -212,6 +215,7 @@ EBU Armada family ARMv8
 	arch/arm64/boot/dts/marvell/armada-37*
 
   Armada 7K Flavors:
+	  - 88F6040 (AP806 Quad 600 MHz + one CP110)
 	  - 88F7020 (AP806 Dual + one CP110)
 	  - 88F7040 (AP806 Quad + one CP110)
 
@@ -243,14 +247,33 @@ EBU Armada family ARMv8
   Device tree files:
 	arch/arm64/boot/dts/marvell/armada-80*
 
+  Octeon TX2 CN913x Flavors:
+	- CN9130 (AP807 Quad + one internal CP115)
+	- CN9131 (AP807 Quad + one internal CP115 + one external CP115 / 88F8215)
+	- CN9132 (AP807 Quad + one internal CP115 + two external CP115 / 88F8215)
+
+  Core:
+	ARM Cortex A72
+
+  Homepage:
+	https://web.archive.org/web/20200803150818/https://www.marvell.com/products/infrastructure-processors/multi-core-processors/octeon-tx2/octeon-tx2-cn9130.html
+
+  Product Brief:
+	https://web.archive.org/web/20200803150818/https://www.marvell.com/content/dam/marvell/en/public-collateral/embedded-processors/marvell-infrastructure-processors-octeon-tx2-cn913x-product-brief-2020-02.pdf
+
+  Device tree files:
+	arch/arm64/boot/dts/marvell/cn913*
+
 Avanta family
 -------------
 
   Flavors:
+       - 88F6500
        - 88F6510
        - 88F6530P
        - 88F6550
        - 88F6560
+       - 88F6601
 
   Homepage:
 	https://web.archive.org/web/20181005145041/http://www.marvell.com/broadband/
@@ -353,8 +376,6 @@ PXA 2xx/3xx/93x/95x family
 
    Linux kernel mach directory:
 	arch/arm/mach-pxa
-   Linux kernel plat directory:
-	arch/arm/plat-pxa
 
 MMP/MMP2/MMP3 family (communication processor)
 ----------------------------------------------
@@ -408,8 +429,6 @@ MMP/MMP2/MMP3 family (communication processor)
 
    Linux kernel mach directory:
 	arch/arm/mach-mmp
-   Linux kernel plat directory:
-	arch/arm/plat-pxa
 
 Berlin family (Multimedia Solutions)
 -------------------------------------
@@ -417,7 +436,7 @@ Berlin family (Multimedia Solutions)
   - Flavors:
 	- 88DE3010, Armada 1000 (no Linux support)
 		- Core:		Marvell PJ1 (ARMv5TE), Dual-core
-		- Product Brief:	http://www.marvell.com.cn/digital-entertainment/assets/armada_1000_pb.pdf
+		- Product Brief:	https://web.archive.org/web/20131103162620/http://www.marvell.com/digital-entertainment/assets/armada_1000_pb.pdf
 	- 88DE3005, Armada 1500 Mini
 		- Design name:	BG2CD
 		- Core:		ARM Cortex-A9, PL310 L2CC
@@ -496,9 +515,6 @@ Long-term plans
    mach-mvebu/ to support all SoCs from the Marvell EBU (Engineering
    Business Unit) in a single mach-<foo> directory. The plat-orion/
    would therefore disappear.
-
- * Unify the mach-mmp/ and mach-pxa/ into the same mach-pxa
-   directory. The plat-pxa/ would therefore disappear.
 
 Credits
 -------

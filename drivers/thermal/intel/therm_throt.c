@@ -32,6 +32,7 @@
 #include <asm/irq.h>
 #include <asm/msr.h>
 
+#include "intel_hfi.h"
 #include "thermal_interrupt.h"
 
 /* How long to wait between reporting thermal events */
@@ -189,32 +190,92 @@ static const struct attribute_group thermal_attr_group = {
 };
 #endif /* CONFIG_SYSFS */
 
-#define CORE_LEVEL	0
-#define PACKAGE_LEVEL	1
-
 #define THERM_THROT_POLL_INTERVAL	HZ
 #define THERM_STATUS_PROCHOT_LOG	BIT(1)
 
-#define THERM_STATUS_CLEAR_CORE_MASK (BIT(1) | BIT(3) | BIT(5) | BIT(7) | BIT(9) | BIT(11) | BIT(13) | BIT(15))
-#define THERM_STATUS_CLEAR_PKG_MASK  (BIT(1) | BIT(3) | BIT(5) | BIT(7) | BIT(9) | BIT(11))
+static u64 therm_intr_core_clear_mask;
+static u64 therm_intr_pkg_clear_mask;
 
-static void clear_therm_status_log(int level)
+static void thermal_intr_init_core_clear_mask(void)
 {
+	if (therm_intr_core_clear_mask)
+		return;
+
+	/*
+	 * Reference: Intel SDM  Volume 4
+	 * "Table 2-2. IA-32 Architectural MSRs", MSR 0x19C
+	 * IA32_THERM_STATUS.
+	 */
+
+	/*
+	 * Bit 1, 3, 5: CPUID.01H:EDX[22] = 1. This driver will not
+	 * enable interrupts, when 0 as it checks for X86_FEATURE_ACPI.
+	 */
+	therm_intr_core_clear_mask = (BIT(1) | BIT(3) | BIT(5));
+
+	/*
+	 * Bit 7 and 9: Thermal Threshold #1 and #2 log
+	 * If CPUID.01H:ECX[8] = 1
+	 */
+	if (boot_cpu_has(X86_FEATURE_TM2))
+		therm_intr_core_clear_mask |= (BIT(7) | BIT(9));
+
+	/* Bit 11: Power Limitation log (R/WC0) If CPUID.06H:EAX[4] = 1 */
+	if (boot_cpu_has(X86_FEATURE_PLN))
+		therm_intr_core_clear_mask |= BIT(11);
+
+	/*
+	 * Bit 13: Current Limit log (R/WC0) If CPUID.06H:EAX[7] = 1
+	 * Bit 15: Cross Domain Limit log (R/WC0) If CPUID.06H:EAX[7] = 1
+	 */
+	if (boot_cpu_has(X86_FEATURE_HWP))
+		therm_intr_core_clear_mask |= (BIT(13) | BIT(15));
+}
+
+static void thermal_intr_init_pkg_clear_mask(void)
+{
+	if (therm_intr_pkg_clear_mask)
+		return;
+
+	/*
+	 * Reference: Intel SDM  Volume 4
+	 * "Table 2-2. IA-32 Architectural MSRs", MSR 0x1B1
+	 * IA32_PACKAGE_THERM_STATUS.
+	 */
+
+	/* All bits except BIT 26 depend on CPUID.06H: EAX[6] = 1 */
+	if (boot_cpu_has(X86_FEATURE_PTS))
+		therm_intr_pkg_clear_mask = (BIT(1) | BIT(3) | BIT(5) | BIT(7) | BIT(9) | BIT(11));
+
+	/*
+	 * Intel SDM Volume 2A: Thermal and Power Management Leaf
+	 * Bit 26: CPUID.06H: EAX[19] = 1
+	 */
+	if (boot_cpu_has(X86_FEATURE_HFI))
+		therm_intr_pkg_clear_mask |= BIT(26);
+}
+
+/*
+ * Clear the bits in package thermal status register for bit = 1
+ * in bitmask
+ */
+void thermal_clear_package_intr_status(int level, u64 bit_mask)
+{
+	u64 msr_val;
 	int msr;
-	u64 mask, msr_val;
 
 	if (level == CORE_LEVEL) {
 		msr  = MSR_IA32_THERM_STATUS;
-		mask = THERM_STATUS_CLEAR_CORE_MASK;
+		msr_val = therm_intr_core_clear_mask;
 	} else {
 		msr  = MSR_IA32_PACKAGE_THERM_STATUS;
-		mask = THERM_STATUS_CLEAR_PKG_MASK;
+		msr_val = therm_intr_pkg_clear_mask;
 	}
 
-	rdmsrl(msr, msr_val);
-	msr_val &= mask;
-	wrmsrl(msr, msr_val & ~THERM_STATUS_PROCHOT_LOG);
+	msr_val &= ~bit_mask;
+	wrmsrl(msr, msr_val);
 }
+EXPORT_SYMBOL_GPL(thermal_clear_package_intr_status);
 
 static void get_therm_status(int level, bool *proc_hot, u8 *temp)
 {
@@ -294,7 +355,7 @@ static void __maybe_unused throttle_active_work(struct work_struct *work)
 	state->average = avg;
 
 re_arm:
-	clear_therm_status_log(state->level);
+	thermal_clear_package_intr_status(state->level, THERM_STATUS_PROCHOT_LOG);
 	schedule_delayed_work_on(this_cpu, &state->therm_work, THERM_THROT_POLL_INTERVAL);
 }
 
@@ -475,6 +536,13 @@ static int thermal_throttle_online(unsigned int cpu)
 	INIT_DELAYED_WORK(&state->package_throttle.therm_work, throttle_active_work);
 	INIT_DELAYED_WORK(&state->core_throttle.therm_work, throttle_active_work);
 
+	/*
+	 * The first CPU coming online will enable the HFI. Usually this causes
+	 * hardware to issue an HFI thermal interrupt. Such interrupt will reach
+	 * the CPU once we enable the thermal vector in the local APIC.
+	 */
+	intel_hfi_online(cpu);
+
 	/* Unmask the thermal vector after the above workqueues are initialized. */
 	l = apic_read(APIC_LVTTHMR);
 	apic_write(APIC_LVTTHMR, l & ~APIC_LVT_MASKED);
@@ -492,6 +560,8 @@ static int thermal_throttle_offline(unsigned int cpu)
 	l = apic_read(APIC_LVTTHMR);
 	apic_write(APIC_LVTTHMR, l | APIC_LVT_MASKED);
 
+	intel_hfi_offline(cpu);
+
 	cancel_delayed_work_sync(&state->package_throttle.therm_work);
 	cancel_delayed_work_sync(&state->core_throttle.therm_work);
 
@@ -508,6 +578,8 @@ static __init int thermal_throttle_init_device(void)
 
 	if (!atomic_read(&therm_throt_en))
 		return 0;
+
+	intel_hfi_init();
 
 	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "x86/therm:online",
 				thermal_throttle_online,
@@ -608,6 +680,10 @@ void intel_thermal_interrupt(void)
 					PACKAGE_THERM_STATUS_POWER_LIMIT,
 					POWER_LIMIT_EVENT,
 					PACKAGE_LEVEL);
+
+		if (this_cpu_has(X86_FEATURE_HFI))
+			intel_hfi_process_event(msr_val &
+						PACKAGE_THERM_STATUS_HFI_UPDATED);
 	}
 }
 
@@ -688,6 +764,9 @@ void intel_init_thermal(struct cpuinfo_x86 *c)
 	h = THERMAL_APIC_VECTOR | APIC_DM_FIXED | APIC_LVT_MASKED;
 	apic_write(APIC_LVTTHMR, h);
 
+	thermal_intr_init_core_clear_mask();
+	thermal_intr_init_pkg_clear_mask();
+
 	rdmsr(MSR_IA32_THERM_INTERRUPT, l, h);
 	if (cpu_has(c, X86_FEATURE_PLN) && !int_pln_enable)
 		wrmsr(MSR_IA32_THERM_INTERRUPT,
@@ -717,6 +796,12 @@ void intel_init_thermal(struct cpuinfo_x86 *c)
 			wrmsr(MSR_IA32_PACKAGE_THERM_INTERRUPT,
 			      l | (PACKAGE_THERM_INT_LOW_ENABLE
 				| PACKAGE_THERM_INT_HIGH_ENABLE), h);
+
+		if (cpu_has(c, X86_FEATURE_HFI)) {
+			rdmsr(MSR_IA32_PACKAGE_THERM_INTERRUPT, l, h);
+			wrmsr(MSR_IA32_PACKAGE_THERM_INTERRUPT,
+			      l | PACKAGE_THERM_INT_HFI_ENABLE, h);
+		}
 	}
 
 	rdmsr(MSR_IA32_MISC_ENABLE, l, h);

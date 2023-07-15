@@ -124,15 +124,33 @@ initialize_ftrace() { # Reset ftrace to initial-state
     [ -f uprobe_events ] && echo > uprobe_events
     [ -f synthetic_events ] && echo > synthetic_events
     [ -f snapshot ] && echo 0 > snapshot
+
+# Stop tracing while reading the trace file by default, to prevent
+# the test results while checking it and to avoid taking a long time
+# to check the result.
+    [ -f options/pause-on-trace ] && echo 1 > options/pause-on-trace
+
     clear_trace
     enable_tracing
 }
 
+finish_ftrace() {
+    initialize_ftrace
+# And recover it to default.
+    [ -f options/pause-on-trace ] && echo 0 > options/pause-on-trace
+}
+
 check_requires() { # Check required files and tracers
     for i in "$@" ; do
+	p=${i%:program}
         r=${i%:README}
         t=${i%:tracer}
-        if [ $t != $i ]; then
+	if [ $p != $i ]; then
+	    if ! which $p ; then
+                echo "Required program $p is not found."
+                exit_unresolved
+	    fi
+        elif [ $t != $i ]; then
             if ! grep -wq $t available_tracers ; then
                 echo "Required tracer $t is not configured."
                 exit_unsupported

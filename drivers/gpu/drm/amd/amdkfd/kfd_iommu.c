@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0 OR MIT
 /*
- * Copyright 2018 Advanced Micro Devices, Inc.
+ * Copyright 2018-2022 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -30,7 +31,6 @@
 #include <linux/pci.h>
 #include <linux/amd-iommu.h>
 #include "kfd_priv.h"
-#include "kfd_dbgmgr.h"
 #include "kfd_topology.h"
 #include "kfd_iommu.h"
 
@@ -49,7 +49,7 @@ int kfd_iommu_check_device(struct kfd_dev *kfd)
 		return -ENODEV;
 
 	iommu_info.flags = 0;
-	err = amd_iommu_device_info(kfd->pdev, &iommu_info);
+	err = amd_iommu_device_info(kfd->adev->pdev, &iommu_info);
 	if (err)
 		return err;
 
@@ -71,7 +71,7 @@ int kfd_iommu_device_init(struct kfd_dev *kfd)
 		return 0;
 
 	iommu_info.flags = 0;
-	err = amd_iommu_device_info(kfd->pdev, &iommu_info);
+	err = amd_iommu_device_info(kfd->adev->pdev, &iommu_info);
 	if (err < 0) {
 		dev_err(kfd_device,
 			"error getting iommu info. is the iommu enabled?\n");
@@ -89,7 +89,7 @@ int kfd_iommu_device_init(struct kfd_dev *kfd)
 	}
 
 	pasid_limit = min_t(unsigned int,
-			(unsigned int)(1 << kfd->device_info->max_pasid_bits),
+			(unsigned int)(1 << kfd->device_info.max_pasid_bits),
 			iommu_info.max_pasids);
 
 	if (!kfd_set_pasid_limit(pasid_limit)) {
@@ -121,7 +121,7 @@ int kfd_iommu_bind_process_to_device(struct kfd_process_device *pdd)
 		return -EINVAL;
 	}
 
-	err = amd_iommu_bind_pasid(dev->pdev, p->pasid, p->lead_thread);
+	err = amd_iommu_bind_pasid(dev->adev->pdev, p->pasid, p->lead_thread);
 	if (!err)
 		pdd->bound = PDD_BOUND;
 
@@ -139,7 +139,8 @@ void kfd_iommu_unbind_process(struct kfd_process *p)
 
 	for (i = 0; i < p->n_pdds; i++)
 		if (p->pdds[i]->bound == PDD_BOUND)
-			amd_iommu_unbind_pasid(p->pdds[i]->dev->pdev, p->pasid);
+			amd_iommu_unbind_pasid(p->pdds[i]->dev->adev->pdev,
+					       p->pasid);
 }
 
 /* Callback for process shutdown invoked by the IOMMU driver */
@@ -162,17 +163,6 @@ static void iommu_pasid_shutdown_callback(struct pci_dev *pdev, u32 pasid)
 		return;
 
 	pr_debug("Unbinding process 0x%x from IOMMU\n", pasid);
-
-	mutex_lock(kfd_get_dbgmgr_mutex());
-
-	if (dev->dbgmgr && dev->dbgmgr->pasid == p->pasid) {
-		if (!kfd_dbgmgr_unregister(dev->dbgmgr, p)) {
-			kfd_dbgmgr_destroy(dev->dbgmgr);
-			dev->dbgmgr = NULL;
-		}
-	}
-
-	mutex_unlock(kfd_get_dbgmgr_mutex());
 
 	mutex_lock(&p->mutex);
 
@@ -233,7 +223,7 @@ static int kfd_bind_processes_to_device(struct kfd_dev *kfd)
 			continue;
 		}
 
-		err = amd_iommu_bind_pasid(kfd->pdev, p->pasid,
+		err = amd_iommu_bind_pasid(kfd->adev->pdev, p->pasid,
 				p->lead_thread);
 		if (err < 0) {
 			pr_err("Unexpected pasid 0x%x binding failure\n",
@@ -293,9 +283,9 @@ void kfd_iommu_suspend(struct kfd_dev *kfd)
 
 	kfd_unbind_processes_from_device(kfd);
 
-	amd_iommu_set_invalidate_ctx_cb(kfd->pdev, NULL);
-	amd_iommu_set_invalid_ppr_cb(kfd->pdev, NULL);
-	amd_iommu_free_device(kfd->pdev);
+	amd_iommu_set_invalidate_ctx_cb(kfd->adev->pdev, NULL);
+	amd_iommu_set_invalid_ppr_cb(kfd->adev->pdev, NULL);
+	amd_iommu_free_device(kfd->adev->pdev);
 }
 
 /** kfd_iommu_resume - Restore IOMMU after resume
@@ -313,20 +303,20 @@ int kfd_iommu_resume(struct kfd_dev *kfd)
 
 	pasid_limit = kfd_get_pasid_limit();
 
-	err = amd_iommu_init_device(kfd->pdev, pasid_limit);
+	err = amd_iommu_init_device(kfd->adev->pdev, pasid_limit);
 	if (err)
 		return -ENXIO;
 
-	amd_iommu_set_invalidate_ctx_cb(kfd->pdev,
+	amd_iommu_set_invalidate_ctx_cb(kfd->adev->pdev,
 					iommu_pasid_shutdown_callback);
-	amd_iommu_set_invalid_ppr_cb(kfd->pdev,
+	amd_iommu_set_invalid_ppr_cb(kfd->adev->pdev,
 				     iommu_invalid_ppr_cb);
 
 	err = kfd_bind_processes_to_device(kfd);
 	if (err) {
-		amd_iommu_set_invalidate_ctx_cb(kfd->pdev, NULL);
-		amd_iommu_set_invalid_ppr_cb(kfd->pdev, NULL);
-		amd_iommu_free_device(kfd->pdev);
+		amd_iommu_set_invalidate_ctx_cb(kfd->adev->pdev, NULL);
+		amd_iommu_set_invalid_ppr_cb(kfd->adev->pdev, NULL);
+		amd_iommu_free_device(kfd->adev->pdev);
 		return err;
 	}
 

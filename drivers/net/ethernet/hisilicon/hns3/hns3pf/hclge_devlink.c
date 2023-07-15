@@ -13,11 +13,6 @@ static int hclge_devlink_info_get(struct devlink *devlink,
 	struct hclge_devlink_priv *priv = devlink_priv(devlink);
 	char version_str[HCLGE_DEVLINK_FW_STRING_LEN];
 	struct hclge_dev *hdev = priv->hdev;
-	int ret;
-
-	ret = devlink_info_driver_name_put(req, KBUILD_MODNAME);
-	if (ret)
-		return ret;
 
 	snprintf(version_str, sizeof(version_str), "%lu.%lu.%lu.%lu",
 		 hnae3_get_field(hdev->fw_version, HNAE3_FW_VERSION_BYTE3_MASK,
@@ -109,7 +104,6 @@ int hclge_devlink_init(struct hclge_dev *hdev)
 	struct pci_dev *pdev = hdev->pdev;
 	struct hclge_devlink_priv *priv;
 	struct devlink *devlink;
-	int ret;
 
 	devlink = devlink_alloc(&hclge_devlink_ops,
 				sizeof(struct hclge_devlink_priv), &pdev->dev);
@@ -120,27 +114,13 @@ int hclge_devlink_init(struct hclge_dev *hdev)
 	priv->hdev = hdev;
 	hdev->devlink = devlink;
 
-	ret = devlink_register(devlink);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to register devlink, ret = %d\n",
-			ret);
-		goto out_reg_fail;
-	}
-
-	devlink_reload_enable(devlink);
-
+	devlink_register(devlink);
 	return 0;
-
-out_reg_fail:
-	devlink_free(devlink);
-	return ret;
 }
 
 void hclge_devlink_uninit(struct hclge_dev *hdev)
 {
 	struct devlink *devlink = hdev->devlink;
-
-	devlink_reload_disable(devlink);
 
 	devlink_unregister(devlink);
 

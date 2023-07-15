@@ -440,6 +440,22 @@ NOTE: For 82599-based network connections, if you are enabling jumbo frames in
 a virtual function (VF), jumbo frames must first be enabled in the physical
 function (PF). The VF MTU setting cannot be larger than the PF MTU.
 
+NBASE-T Support
+---------------
+The ixgbe driver supports NBASE-T on some devices. However, the advertisement
+of NBASE-T speeds is suppressed by default, to accommodate broken network
+switches which cannot cope with advertised NBASE-T speeds. Use the ethtool
+command to enable advertising NBASE-T speeds on devices which support it::
+
+  ethtool -s eth? advertise 0x1800000001028
+
+On Linux systems with INTERFACES(5), this can be specified as a pre-up command
+in /etc/network/interfaces so that the interface is always brought up with
+NBASE-T support, e.g.::
+
+  iface eth? inet dhcp
+       pre-up ethtool -s eth? advertise 0x1800000001028 || true
+
 Generic Receive Offload, aka GRO
 --------------------------------
 The driver supports the in-kernel software implementation of GRO. GRO has
@@ -529,13 +545,8 @@ on the Intel Ethernet Controller XL710.
 Support
 =======
 For general information, go to the Intel support website at:
-
 https://www.intel.com/support/
-
-or the Intel Wired Networking project hosted by Sourceforge at:
-
-https://sourceforge.net/projects/e1000
 
 If an issue is identified with the released source code on a supported kernel
 with a supported adapter, email the specific information related to the issue
-to e1000-devel@lists.sf.net.
+to intel-wired-lan@lists.osuosl.org.

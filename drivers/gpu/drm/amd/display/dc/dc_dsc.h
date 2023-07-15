@@ -51,8 +51,13 @@ struct dc_dsc_policy {
 	int min_slice_height; // Must not be less than 8
 	uint32_t max_target_bpp;
 	uint32_t min_target_bpp;
-	uint32_t preferred_bpp_x16;
 	bool enable_dsc_when_not_needed;
+};
+
+struct dc_dsc_config_options {
+	uint32_t dsc_min_slice_height_override;
+	uint32_t max_target_bpp_limit_override_x16;
+	uint32_t slice_height_granularity;
 };
 
 bool dc_dsc_parse_dsc_dpcd(const struct dc *dc,
@@ -72,8 +77,7 @@ bool dc_dsc_compute_bandwidth_range(
 bool dc_dsc_compute_config(
 		const struct display_stream_compressor *dsc,
 		const struct dsc_dec_dpcd_caps *dsc_sink_caps,
-		uint32_t dsc_min_slice_height_override,
-		uint32_t max_target_bpp_limit_override,
+		const struct dc_dsc_config_options *options,
 		uint32_t target_bandwidth_kbps,
 		const struct dc_crtc_timing *timing,
 		struct dc_dsc_config *dsc_cfg);
@@ -81,6 +85,16 @@ bool dc_dsc_compute_config(
 uint32_t dc_dsc_stream_bandwidth_in_kbps(const struct dc_crtc_timing *timing,
 		uint32_t bpp_x16, uint32_t num_slices_h, bool is_dp);
 
+uint32_t dc_dsc_stream_bandwidth_overhead_in_kbps(
+		const struct dc_crtc_timing *timing,
+		const int num_slices_h,
+		const bool is_dp);
+
+/* TODO - Hardware/specs limitation should be owned by dc dsc and returned to DM,
+ * and DM can choose to OVERRIDE the limitation on CASE BY CASE basis.
+ * Hardware/specs limitation should not be writable by DM.
+ * It should be decoupled from DM specific policy and named differently.
+ */
 void dc_dsc_get_policy_for_timing(const struct dc_crtc_timing *timing,
 		uint32_t max_target_bpp_limit_override_x16,
 		struct dc_dsc_policy *policy);
@@ -90,5 +104,7 @@ void dc_dsc_policy_set_max_target_bpp_limit(uint32_t limit);
 void dc_dsc_policy_set_enable_dsc_when_not_needed(bool enable);
 
 void dc_dsc_policy_set_disable_dsc_stream_overhead(bool disable);
+
+void dc_dsc_get_default_config_option(const struct dc *dc, struct dc_dsc_config_options *options);
 
 #endif

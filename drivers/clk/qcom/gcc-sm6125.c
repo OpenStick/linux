@@ -1121,7 +1121,7 @@ static struct clk_rcg2 gcc_sdcc1_apps_clk_src = {
 		.name = "gcc_sdcc1_apps_clk_src",
 		.parent_data = gcc_parent_data_1,
 		.num_parents = ARRAY_SIZE(gcc_parent_data_1),
-		.ops = &clk_rcg2_ops,
+		.ops = &clk_rcg2_floor_ops,
 	},
 };
 
@@ -1143,7 +1143,7 @@ static struct clk_rcg2 gcc_sdcc1_ice_core_clk_src = {
 		.name = "gcc_sdcc1_ice_core_clk_src",
 		.parent_data = gcc_parent_data_0,
 		.num_parents = ARRAY_SIZE(gcc_parent_data_0),
-		.ops = &clk_rcg2_floor_ops,
+		.ops = &clk_rcg2_ops,
 	},
 };
 
@@ -1153,7 +1153,6 @@ static const struct freq_tbl ftbl_gcc_sdcc2_apps_clk_src[] = {
 	F(25000000, P_GPLL0_OUT_AUX2, 12, 0, 0),
 	F(50000000, P_GPLL0_OUT_AUX2, 6, 0, 0),
 	F(100000000, P_GPLL0_OUT_AUX2, 3, 0, 0),
-	F(202000000, P_GPLL7_OUT_MAIN, 2, 0, 0),
 	{ }
 };
 
@@ -4151,7 +4150,7 @@ static int gcc_sm6125_probe(struct platform_device *pdev)
 
 	/*
 	 * Enable DUAL_EDGE mode for MCLK RCGs
-	 * This is requierd to enable MND divider mode
+	 * This is required to enable MND divider mode
 	 */
 	regmap_update_bits(regmap, 0x51004, 0x3000, 0x2000);
 	regmap_update_bits(regmap, 0x51020, 0x3000, 0x2000);

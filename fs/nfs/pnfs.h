@@ -82,10 +82,6 @@ enum pnfs_try_status {
 	PNFS_TRY_AGAIN     = 2,
 };
 
-/* error codes for internal use */
-#define NFS4ERR_RESET_TO_MDS   12001
-#define NFS4ERR_RESET_TO_PNFS  12002
-
 #ifdef CONFIG_NFS_V4_1
 
 #define LAYOUT_NFSV4_1_MODULE_PREFIX "nfs-layouttype4"
@@ -109,6 +105,7 @@ enum {
 	NFS_LAYOUT_FIRST_LAYOUTGET,	/* Serialize first layoutget */
 	NFS_LAYOUT_INODE_FREEING,	/* The inode is being freed */
 	NFS_LAYOUT_HASHED,		/* The layout visible */
+	NFS_LAYOUT_DRAIN,
 };
 
 enum layoutdriver_policy_flags {
@@ -172,6 +169,8 @@ struct pnfs_layoutdriver_type {
 	void (*cleanup_layoutcommit) (struct nfs4_layoutcommit_data *data);
 	int (*prepare_layoutcommit) (struct nfs4_layoutcommit_args *args);
 	int (*prepare_layoutstats) (struct nfs42_layoutstat_args *args);
+
+	void (*cancel_io)(struct pnfs_layout_segment *lseg);
 };
 
 struct pnfs_commit_ops {
@@ -194,7 +193,7 @@ struct pnfs_commit_ops {
 	void (*recover_commit_reqs) (struct list_head *list,
 				     struct nfs_commit_info *cinfo);
 	struct nfs_page * (*search_commit_reqs)(struct nfs_commit_info *cinfo,
-						struct page *page);
+						struct folio *folio);
 };
 
 struct pnfs_layout_hdr {
@@ -238,6 +237,8 @@ struct pnfs_devicelist {
 
 extern int pnfs_register_layoutdriver(struct pnfs_layoutdriver_type *);
 extern void pnfs_unregister_layoutdriver(struct pnfs_layoutdriver_type *);
+extern const struct pnfs_layoutdriver_type *pnfs_find_layoutdriver(u32 id);
+extern void pnfs_put_layoutdriver(const struct pnfs_layoutdriver_type *ld);
 
 /* nfs4proc.c */
 extern size_t max_response_pages(struct nfs_server *server);
@@ -394,7 +395,7 @@ void pnfs_generic_rw_release(void *data);
 void pnfs_generic_recover_commit_reqs(struct list_head *dst,
 				      struct nfs_commit_info *cinfo);
 struct nfs_page *pnfs_generic_search_commit_reqs(struct nfs_commit_info *cinfo,
-						 struct page *page);
+						 struct folio *folio);
 int pnfs_generic_commit_pagelist(struct inode *inode,
 				 struct list_head *mds_pages,
 				 int how,
@@ -517,7 +518,7 @@ pnfs_mark_request_commit(struct nfs_page *req, struct pnfs_layout_segment *lseg,
 {
 	struct pnfs_ds_commit_info *fl_cinfo = cinfo->ds;
 
-	if (!lseg || !fl_cinfo->ops->mark_request_commit)
+	if (!lseg || !fl_cinfo->ops || !fl_cinfo->ops->mark_request_commit)
 		return false;
 	fl_cinfo->ops->mark_request_commit(req, lseg, cinfo, ds_commit_idx);
 	return true;
@@ -556,13 +557,13 @@ pnfs_recover_commit_reqs(struct list_head *head, struct nfs_commit_info *cinfo)
 
 static inline struct nfs_page *
 pnfs_search_commit_reqs(struct inode *inode, struct nfs_commit_info *cinfo,
-			struct page *page)
+			struct folio *folio)
 {
 	struct pnfs_ds_commit_info *fl_cinfo = cinfo->ds;
 
 	if (!fl_cinfo->ops || !fl_cinfo->ops->search_commit_reqs)
 		return NULL;
-	return fl_cinfo->ops->search_commit_reqs(cinfo, page);
+	return fl_cinfo->ops->search_commit_reqs(cinfo, folio);
 }
 
 /* Should the pNFS client commit and return the layout upon a setattr */
@@ -684,6 +685,13 @@ pnfs_lseg_request_intersecting(struct pnfs_layout_segment *lseg, struct nfs_page
 
 	return pnfs_is_range_intersecting(lseg->pls_range.offset, seg_last,
 				req_offset(req), req_last);
+}
+
+static inline void pnfs_lseg_cancel_io(struct nfs_server *server,
+				       struct pnfs_layout_segment *lseg)
+{
+	if (server->pnfs_curr_ld->cancel_io)
+		server->pnfs_curr_ld->cancel_io(lseg);
 }
 
 extern unsigned int layoutstats_timer;
@@ -856,7 +864,7 @@ pnfs_recover_commit_reqs(struct list_head *head, struct nfs_commit_info *cinfo)
 
 static inline struct nfs_page *
 pnfs_search_commit_reqs(struct inode *inode, struct nfs_commit_info *cinfo,
-			struct page *page)
+			struct folio *folio)
 {
 	return NULL;
 }

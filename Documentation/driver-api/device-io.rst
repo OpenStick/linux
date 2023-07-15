@@ -410,7 +410,7 @@ ioremap_uc()
 
 ioremap_uc() behaves like ioremap() except that on the x86 architecture without
 'PAT' mode, it marks memory as uncached even when the MTRR has designated
-it as cacheable, see Documentation/x86/pat.rst.
+it as cacheable, see Documentation/arch/x86/pat.rst.
 
 Portable drivers should avoid the use of ioremap_uc().
 
@@ -501,6 +501,15 @@ pcim_iomap()
 
 Not using these wrappers may make drivers unusable on certain platforms with
 stricter rules for mapping I/O memory.
+
+Generalizing Access to System and I/O Memory
+============================================
+
+.. kernel-doc:: include/linux/iosys-map.h
+   :doc: overview
+
+.. kernel-doc:: include/linux/iosys-map.h
+   :internal:
 
 Public Functions Provided
 =========================

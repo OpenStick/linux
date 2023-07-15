@@ -221,7 +221,6 @@ struct stm32_spi;
  * time between frames (if driver has this functionality)
  * @set_number_of_data: optional routine to configure registers to desired
  * number of data (if driver has this functionality)
- * @can_dma: routine to determine if the transfer is eligible for DMA use
  * @transfer_one_dma_start: routine to start transfer a single spi_transfer
  * using DMA
  * @dma_rx_cb: routine to call after DMA RX channel operation is complete
@@ -232,7 +231,7 @@ struct stm32_spi;
  * @baud_rate_div_min: minimum baud rate divisor
  * @baud_rate_div_max: maximum baud rate divisor
  * @has_fifo: boolean to know if fifo is used for driver
- * @has_startbit: boolean to know if start bit is used to start transfer
+ * @flags: compatible specific SPI controller flags used at registration time
  */
 struct stm32_spi_cfg {
 	const struct stm32_spi_regspec *regs;
@@ -253,6 +252,7 @@ struct stm32_spi_cfg {
 	unsigned int baud_rate_div_min;
 	unsigned int baud_rate_div_max;
 	bool has_fifo;
+	u16 flags;
 };
 
 /**
@@ -434,7 +434,7 @@ static int stm32_spi_prepare_mbr(struct stm32_spi *spi, u32 speed_hz,
 	u32 div, mbrdiv;
 
 	/* Ensure spi->clk_rate is even */
-	div = DIV_ROUND_UP(spi->clk_rate & ~0x1, speed_hz);
+	div = DIV_ROUND_CLOSEST(spi->clk_rate & ~0x1, speed_hz);
 
 	/*
 	 * SPI framework set xfer->speed_hz to master->max_speed_hz if
@@ -763,7 +763,7 @@ static irqreturn_t stm32f4_spi_irq_event(int irq, void *dev_id)
 	if (!spi->cur_usedma && (spi->cur_comm == SPI_SIMPLEX_TX ||
 				 spi->cur_comm == SPI_3WIRE_TX)) {
 		/* OVR flag shouldn't be handled for TX only mode */
-		sr &= ~STM32F4_SPI_SR_OVR | STM32F4_SPI_SR_RXNE;
+		sr &= ~(STM32F4_SPI_SR_OVR | STM32F4_SPI_SR_RXNE);
 		mask |= STM32F4_SPI_SR_TXE;
 	}
 
@@ -886,6 +886,7 @@ static irqreturn_t stm32h7_spi_irq_thread(int irq, void *dev_id)
 		static DEFINE_RATELIMIT_STATE(rs,
 					      DEFAULT_RATELIMIT_INTERVAL * 10,
 					      1);
+		ratelimit_set_flags(&rs, RATELIMIT_MSG_ON_RELEASE);
 		if (__ratelimit(&rs))
 			dev_dbg_ratelimited(spi->dev, "Communication suspended\n");
 		if (!spi->cur_usedma && (spi->rx_buf && (spi->rx_len > 0)))
@@ -983,9 +984,9 @@ static int stm32_spi_prepare_msg(struct spi_master *master,
 	if (spi->cfg->set_number_of_data) {
 		int ret;
 
-		ret = spi_split_transfers_maxsize(master, msg,
-						  STM32H7_SPI_TSIZE_MAX,
-						  GFP_KERNEL | GFP_DMA);
+		ret = spi_split_transfers_maxwords(master, msg,
+						   STM32H7_SPI_TSIZE_MAX,
+						   GFP_KERNEL | GFP_DMA);
 		if (ret)
 			return ret;
 	}
@@ -1722,6 +1723,7 @@ static const struct stm32_spi_cfg stm32f4_spi_cfg = {
 	.baud_rate_div_min = STM32F4_SPI_BR_DIV_MIN,
 	.baud_rate_div_max = STM32F4_SPI_BR_DIV_MAX,
 	.has_fifo = false,
+	.flags = SPI_MASTER_MUST_TX,
 };
 
 static const struct stm32_spi_cfg stm32h7_spi_cfg = {
@@ -1778,8 +1780,7 @@ static int stm32_spi_probe(struct platform_device *pdev)
 		of_match_device(pdev->dev.driver->of_match_table,
 				&pdev->dev)->data;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	spi->base = devm_ioremap_resource(&pdev->dev, res);
+	spi->base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 	if (IS_ERR(spi->base))
 		return PTR_ERR(spi->base);
 
@@ -1854,7 +1855,7 @@ static int stm32_spi_probe(struct platform_device *pdev)
 	master->prepare_message = stm32_spi_prepare_msg;
 	master->transfer_one = stm32_spi_transfer_one;
 	master->unprepare_message = stm32_spi_unprepare_msg;
-	master->flags = SPI_MASTER_MUST_TX;
+	master->flags = spi->cfg->flags;
 
 	spi->dma_tx = dma_request_chan(spi->dev, "tx");
 	if (IS_ERR(spi->dma_tx)) {
@@ -1920,7 +1921,7 @@ err_clk_disable:
 	return ret;
 }
 
-static int stm32_spi_remove(struct platform_device *pdev)
+static void stm32_spi_remove(struct platform_device *pdev)
 {
 	struct spi_master *master = platform_get_drvdata(pdev);
 	struct stm32_spi *spi = spi_master_get_devdata(master);
@@ -1944,8 +1945,6 @@ static int stm32_spi_remove(struct platform_device *pdev)
 
 
 	pinctrl_pm_select_sleep_state(&pdev->dev);
-
-	return 0;
 }
 
 static int __maybe_unused stm32_spi_runtime_suspend(struct device *dev)
@@ -1999,9 +1998,8 @@ static int __maybe_unused stm32_spi_resume(struct device *dev)
 		return ret;
 	}
 
-	ret = pm_runtime_get_sync(dev);
+	ret = pm_runtime_resume_and_get(dev);
 	if (ret < 0) {
-		pm_runtime_put_noidle(dev);
 		dev_err(dev, "Unable to power device:%d\n", ret);
 		return ret;
 	}
@@ -2022,7 +2020,7 @@ static const struct dev_pm_ops stm32_spi_pm_ops = {
 
 static struct platform_driver stm32_spi_driver = {
 	.probe = stm32_spi_probe,
-	.remove = stm32_spi_remove,
+	.remove_new = stm32_spi_remove,
 	.driver = {
 		.name = DRIVER_NAME,
 		.pm = &stm32_spi_pm_ops,

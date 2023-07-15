@@ -62,6 +62,8 @@ int __tty_check_change(struct tty_struct *tty, int sig);
 int tty_check_change(struct tty_struct *tty);
 void __stop_tty(struct tty_struct *tty);
 void __start_tty(struct tty_struct *tty);
+void tty_write_unlock(struct tty_struct *tty);
+int tty_write_lock(struct tty_struct *tty, int ndelay);
 void tty_vhangup_session(struct tty_struct *tty);
 void tty_open_proc_set_tty(struct file *filp, struct tty_struct *tty);
 int tty_signal_session_leader(struct tty_struct *tty, int exit_session);
@@ -73,7 +75,7 @@ void tty_buffer_set_lock_subclass(struct tty_port *port);
 bool tty_buffer_restart_work(struct tty_port *port);
 bool tty_buffer_cancel_work(struct tty_port *port);
 void tty_buffer_flush_work(struct tty_port *port);
-speed_t tty_termios_input_baud_rate(struct ktermios *termios);
+speed_t tty_termios_input_baud_rate(const struct ktermios *termios);
 void tty_ldisc_hangup(struct tty_struct *tty, bool reset);
 int tty_ldisc_reinit(struct tty_struct *tty, int disc);
 long tty_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
@@ -93,7 +95,7 @@ void tty_ldisc_release(struct tty_struct *tty);
 int __must_check tty_ldisc_init(struct tty_struct *tty);
 void tty_ldisc_deinit(struct tty_struct *tty);
 
-void tty_sysctl_init(void);
+extern int tty_ldisc_autoload;
 
 /* tty_audit.c */
 #ifdef CONFIG_AUDIT
@@ -110,5 +112,8 @@ static inline void tty_audit_tiocsti(struct tty_struct *tty, char ch)
 #endif
 
 ssize_t redirected_tty_write(struct kiocb *, struct iov_iter *);
+
+int tty_insert_flip_string_and_push_buffer(struct tty_port *port,
+		const unsigned char *chars, size_t cnt);
 
 #endif

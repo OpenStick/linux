@@ -18,7 +18,6 @@
 
 #include <asm/sections.h>
 #include <asm/io.h>
-#include <asm/prom.h>
 #include <asm/pci-bridge.h>
 #include <asm/machdep.h>
 #include <asm/msi_bitmap.h>
@@ -815,7 +814,7 @@ void pnv_pci_shutdown(void)
 /* Fixup wrong class code in p7ioc and p8 root complex */
 static void pnv_p7ioc_rc_quirk(struct pci_dev *dev)
 {
-	dev->class = PCI_CLASS_BRIDGE_PCI << 8;
+	dev->class = PCI_CLASS_BRIDGE_PCI_NORMAL;
 }
 DECLARE_PCI_FIXUP_EARLY(PCI_VENDOR_ID_IBM, 0x3b9, pnv_p7ioc_rc_quirk);
 
@@ -866,28 +865,3 @@ void __init pnv_pci_init(void)
 	/* Configure IOMMU DMA hooks */
 	set_pci_dma_ops(&dma_iommu_ops);
 }
-
-static int pnv_tce_iommu_bus_notifier(struct notifier_block *nb,
-		unsigned long action, void *data)
-{
-	struct device *dev = data;
-
-	switch (action) {
-	case BUS_NOTIFY_DEL_DEVICE:
-		iommu_del_device(dev);
-		return 0;
-	default:
-		return 0;
-	}
-}
-
-static struct notifier_block pnv_tce_iommu_bus_nb = {
-	.notifier_call = pnv_tce_iommu_bus_notifier,
-};
-
-static int __init pnv_tce_iommu_bus_notifier_init(void)
-{
-	bus_register_notifier(&pci_bus_type, &pnv_tce_iommu_bus_nb);
-	return 0;
-}
-machine_subsys_initcall_sync(powernv, pnv_tce_iommu_bus_notifier_init);

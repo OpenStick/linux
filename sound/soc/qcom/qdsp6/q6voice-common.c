@@ -53,7 +53,7 @@ int q6voice_common_probe(struct apr_device *adev, enum q6voice_service_type type
 }
 EXPORT_SYMBOL_GPL(q6voice_common_probe);
 
-int q6voice_common_remove(struct apr_device *adev)
+void q6voice_common_remove(struct apr_device *adev)
 {
 	struct q6voice_service *svc = dev_get_drvdata(&adev->dev);
 	enum q6voice_service_type type = svc->type;
@@ -65,7 +65,6 @@ int q6voice_common_remove(struct apr_device *adev)
 	spin_unlock_irqrestore(&q6voice_services_lock, flags);
 
 	/* TODO: Should probably free up sessions here??? */
-	return 0;
 }
 EXPORT_SYMBOL_GPL(q6voice_common_remove);
 

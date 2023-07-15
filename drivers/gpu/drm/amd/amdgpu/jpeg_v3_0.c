@@ -50,11 +50,17 @@ static int jpeg_v3_0_early_init(void *handle)
 {
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
-	if (adev->asic_type != CHIP_YELLOW_CARP) {
-		u32 harvest = RREG32_SOC15(JPEG, 0, mmCC_UVD_HARVESTING);
+	u32 harvest;
 
+	switch (adev->ip_versions[UVD_HWIP][0]) {
+	case IP_VERSION(3, 1, 1):
+	case IP_VERSION(3, 1, 2):
+		break;
+	default:
+		harvest = RREG32_SOC15(JPEG, 0, mmCC_UVD_HARVESTING);
 		if (harvest & CC_UVD_HARVESTING__UVD_DISABLE_MASK)
 			return -ENOENT;
+		break;
 	}
 
 	adev->jpeg.num_jpeg_inst = 1;
@@ -95,6 +101,7 @@ static int jpeg_v3_0_sw_init(void *handle)
 	ring = &adev->jpeg.inst->ring_dec;
 	ring->use_doorbell = true;
 	ring->doorbell_index = (adev->doorbell_index.vcn.vcn_ring0_1 << 1) + 1;
+	ring->vm_hub = AMDGPU_MMHUB_0;
 	sprintf(ring->name, "jpeg_dec");
 	r = amdgpu_ring_init(adev, ring, 512, &adev->jpeg.inst->irq, 0,
 			     AMDGPU_RING_PRIO_DEFAULT, NULL);
@@ -422,7 +429,7 @@ static uint64_t jpeg_v3_0_dec_ring_get_wptr(struct amdgpu_ring *ring)
 	struct amdgpu_device *adev = ring->adev;
 
 	if (ring->use_doorbell)
-		return adev->wb.wb[ring->wptr_offs];
+		return *ring->wptr_cpu_addr;
 	else
 		return RREG32_SOC15(JPEG, 0, mmUVD_JRBC_RB_WPTR);
 }
@@ -439,7 +446,7 @@ static void jpeg_v3_0_dec_ring_set_wptr(struct amdgpu_ring *ring)
 	struct amdgpu_device *adev = ring->adev;
 
 	if (ring->use_doorbell) {
-		adev->wb.wb[ring->wptr_offs] = lower_32_bits(ring->wptr);
+		*ring->wptr_cpu_addr = lower_32_bits(ring->wptr);
 		WDOORBELL32(ring->doorbell_index, lower_32_bits(ring->wptr));
 	} else {
 		WREG32_SOC15(JPEG, 0, mmUVD_JRBC_RB_WPTR, lower_32_bits(ring->wptr));
@@ -554,7 +561,6 @@ static const struct amd_ip_funcs jpeg_v3_0_ip_funcs = {
 static const struct amdgpu_ring_funcs jpeg_v3_0_dec_ring_vm_funcs = {
 	.type = AMDGPU_RING_TYPE_VCN_JPEG,
 	.align_mask = 0xf,
-	.vmhub = AMDGPU_MMHUB_0,
 	.get_rptr = jpeg_v3_0_dec_ring_get_rptr,
 	.get_wptr = jpeg_v3_0_dec_ring_get_wptr,
 	.set_wptr = jpeg_v3_0_dec_ring_set_wptr,

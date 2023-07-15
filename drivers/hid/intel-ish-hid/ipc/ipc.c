@@ -5,6 +5,7 @@
  * Copyright (c) 2014-2016, Intel Corporation.
  */
 
+#include <linux/devm-helpers.h>
 #include <linux/sched.h>
 #include <linux/spinlock.h>
 #include <linux/delay.h>
@@ -578,7 +579,7 @@ static void _ish_sync_fw_clock(struct ishtp_device *dev)
 	static unsigned long	prev_sync;
 	uint64_t	usec;
 
-	if (prev_sync && jiffies - prev_sync < 20 * HZ)
+	if (prev_sync && time_before(jiffies, prev_sync + 20 * HZ))
 		return;
 
 	prev_sync = jiffies;
@@ -621,7 +622,6 @@ static void	recv_ipc(struct ishtp_device *dev, uint32_t doorbell_val)
 	case MNG_RESET_NOTIFY:
 		if (!ishtp_dev) {
 			ishtp_dev = dev;
-			INIT_WORK(&fw_reset_work, fw_reset_work_fn);
 		}
 		schedule_work(&fw_reset_work);
 		break;
@@ -909,7 +909,11 @@ static uint32_t ish_ipc_get_header(struct ishtp_device *dev, int length,
  */
 static bool _dma_no_cache_snooping(struct ishtp_device *dev)
 {
-	return dev->pdev->device == EHL_Ax_DEVICE_ID;
+	return (dev->pdev->device == EHL_Ax_DEVICE_ID ||
+		dev->pdev->device == TGL_LP_DEVICE_ID ||
+		dev->pdev->device == TGL_H_DEVICE_ID ||
+		dev->pdev->device == ADL_S_DEVICE_ID ||
+		dev->pdev->device == ADL_P_DEVICE_ID);
 }
 
 static const struct ishtp_hw_ops ish_hw_ops = {
@@ -936,6 +940,7 @@ struct ishtp_device *ish_dev_init(struct pci_dev *pdev)
 {
 	struct ishtp_device *dev;
 	int	i;
+	int	ret;
 
 	dev = devm_kzalloc(&pdev->dev,
 			   sizeof(struct ishtp_device) + sizeof(struct ish_hw),
@@ -969,6 +974,12 @@ struct ishtp_device *ish_dev_init(struct pci_dev *pdev)
 			break;
 		}
 		list_add_tail(&tx_buf->link, &dev->wr_free_list);
+	}
+
+	ret = devm_work_autocancel(&pdev->dev, &fw_reset_work, fw_reset_work_fn);
+	if (ret) {
+		dev_err(dev->devc, "Failed to initialise FW reset work\n");
+		return NULL;
 	}
 
 	dev->ops = &ish_hw_ops;

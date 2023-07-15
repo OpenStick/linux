@@ -3,7 +3,6 @@
  * Copyright (c) 2013-2018, Mellanox Technologies inc.  All rights reserved.
  */
 
-#include <linux/module.h>
 #include <linux/mlx5/qp.h>
 #include <linux/slab.h>
 #include <rdma/ib_umem.h>
@@ -448,7 +447,7 @@ int mlx5_ib_post_srq_recv(struct ib_srq *ibsrq, const struct ib_recv_wr *wr,
 
 		if (i < srq->msrq.max_avail_gather) {
 			scat[i].byte_count = 0;
-			scat[i].lkey       = cpu_to_be32(MLX5_INVALID_LKEY);
+			scat[i].lkey = dev->mkeys.terminate_scatter_list_mkey;
 			scat[i].addr       = 0;
 		}
 	}

@@ -13,11 +13,11 @@
 	speaker_amp_left: audio-amplifier-left {
 		compatible = "awinic,aw8738";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&spk_ext_pa_left_default>;
+		pinctrl-names = "default";
 
-		enable-gpios = <&msmgpio 119 GPIO_ACTIVE_HIGH>;
-		aw8738,mode = <3>;
+		mode-gpios = <&msmgpio 119 GPIO_ACTIVE_HIGH>;
+		awinic,mode = <3>;
 		sound-name-prefix = "Speaker Amp L";
 	};
 
@@ -25,19 +25,19 @@
 	speaker_amp_right: audio-amplifier-right {
 		compatible = "awinic,aw8738";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&spk_ext_pa_right_default>;
+		pinctrl-names = "default";
 
-		enable-gpios = <&msmgpio 121 GPIO_ACTIVE_HIGH>;
-		aw8738,mode = <3>;
+		mode-gpios = <&msmgpio 121 GPIO_ACTIVE_HIGH>;
+		awinic,mode = <3>;
 		sound-name-prefix = "Speaker Amp R";
 	};
 
 	gpio-leds {
 		compatible = "gpio-leds";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&gpio_leds_default>;
+		pinctrl-names = "default";
 
 		led-0 {
 			gpios = <&msmgpio 16 GPIO_ACTIVE_LOW>;
@@ -57,8 +57,8 @@
 	usb_id: usb-id {
 		compatible = "linux,extcon-usb-gpio";
 		id-gpios = <&msmgpio 110 GPIO_ACTIVE_HIGH>;
-		pinctrl-names = "default";
 		pinctrl-0 = <&usb_id_default>;
+		pinctrl-names = "default";
 	};
 };
 
@@ -81,8 +81,8 @@
 		vdd-supply = <&pm8916_l17>;
 		vddio-supply = <&pm8916_l6>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&imu_default>;
+		pinctrl-names = "default";
 
 		mount-matrix = "1",  "0", "0",
 			       "0", "-1", "0",
@@ -104,9 +104,17 @@
 	status = "okay";
 
 	model = "wt86528";
+	widgets =
+		"Speaker", "Speaker",
+		"Headphone", "Headphones";
+	pin-switches = "Speaker", "Headphones";
 	audio-routing =
-		"Speaker Amp L IN", "HPH_L_EXT",
-		"Speaker Amp R IN", "HPH_R_EXT",
+		"Speaker", "Speaker Amp L OUT",
+		"Speaker", "Speaker Amp R OUT",
+		"Speaker Amp L IN", "HPH_L",
+		"Speaker Amp R IN", "HPH_R",
+		"Headphones", "Headphones Switch OUTL",
+		"Headphones", "Headphones Switch OUTR",
 		"Headphones Switch INL", "HPH_L",
 		"Headphones Switch INR", "HPH_R",
 		"AMIC1", "MIC BIAS External1",
@@ -128,42 +136,37 @@
 };
 
 &msmgpio {
-	gpio_leds_default: gpio-leds-default {
+	gpio_leds_default: gpio-leds-default-state {
 		pins = "gpio16", "gpio17";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	imu_default: imu-default {
+	imu_default: imu-default-state {
 		pins = "gpio115";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	spk_ext_pa_left_default: spk-ext-pa-left-default {
+	spk_ext_pa_left_default: spk-ext-pa-left-default-state {
 		pins = "gpio119";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	spk_ext_pa_right_default: spk-ext-pa-right-default {
+	spk_ext_pa_right_default: spk-ext-pa-right-default-state {
 		pins = "gpio121";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	usb_id_default: usb-id-default {
+	usb_id_default: usb-id-default-state {
 		pins = "gpio110";
 		function = "gpio";
-
 		drive-strength = <8>;
 		bias-pull-up;
 	};

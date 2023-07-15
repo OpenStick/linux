@@ -458,6 +458,10 @@ void sctp_generate_reconf_event(struct timer_list *t)
 		goto out_unlock;
 	}
 
+	/* This happens when the response arrives after the timer is triggered. */
+	if (!asoc->strreset_chunk)
+		goto out_unlock;
+
 	error = sctp_do_sm(net, SCTP_EVENT_T_TIMEOUT,
 			   SCTP_ST_TIMEOUT(SCTP_EVENT_TIMEOUT_RECONF),
 			   asoc->state, asoc->ep, asoc,
@@ -980,8 +984,7 @@ static void sctp_cmd_process_operr(struct sctp_cmd_seq *cmds,
 		{
 			struct sctp_chunkhdr *unk_chunk_hdr;
 
-			unk_chunk_hdr = (struct sctp_chunkhdr *)
-							err_hdr->variable;
+			unk_chunk_hdr = (struct sctp_chunkhdr *)(err_hdr + 1);
 			switch (unk_chunk_hdr->type) {
 			/* ADDIP 4.1 A9) If the peer responds to an ASCONF with
 			 * an ERROR chunk reporting that it did not recognized

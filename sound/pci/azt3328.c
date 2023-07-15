@@ -364,15 +364,6 @@ snd_azf3328_codec_inw(const struct snd_azf3328_codec_data *codec, unsigned reg)
 }
 
 static inline void
-snd_azf3328_codec_outl(const struct snd_azf3328_codec_data *codec,
-		       unsigned reg,
-		       u32 value
-)
-{
-	outl(value, codec->io_base + reg);
-}
-
-static inline void
 snd_azf3328_codec_outl_multi(const struct snd_azf3328_codec_data *codec,
 			     unsigned reg, const void *buffer, int count
 )
@@ -2427,7 +2418,7 @@ snd_azf3328_create(struct snd_card *card,
 }
 
 static int
-snd_azf3328_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
+__snd_azf3328_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
 {
 	static int dev;
 	struct snd_card *card;
@@ -2518,6 +2509,12 @@ snd_azf3328_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
 	pci_set_drvdata(pci, card);
 	dev++;
 	return 0;
+}
+
+static int
+snd_azf3328_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
+{
+	return snd_card_free_on_error(&pci->dev, __snd_azf3328_probe(pci, pci_id));
 }
 
 #ifdef CONFIG_PM_SLEEP

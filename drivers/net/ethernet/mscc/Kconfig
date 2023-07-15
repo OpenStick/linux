@@ -13,6 +13,7 @@ if NET_VENDOR_MICROSEMI
 
 # Users should depend on NET_SWITCHDEV, HAS_IOMEM, BRIDGE
 config MSCC_OCELOT_SWITCH_LIB
+	depends on PTP_1588_CLOCK_OPTIONAL
 	select NET_DEVLINK
 	select REGMAP_MMIO
 	select PACKING
@@ -28,7 +29,7 @@ config MSCC_OCELOT_SWITCH
 	depends on BRIDGE || BRIDGE=n
 	depends on NET_SWITCHDEV
 	depends on HAS_IOMEM
-	depends on OF_NET
+	depends on OF
 	select MSCC_OCELOT_SWITCH_LIB
 	select GENERIC_PHY
 	help

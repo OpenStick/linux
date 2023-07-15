@@ -264,8 +264,8 @@ void ns87560_tf_read(struct ata_port *ap, struct ata_taskfile *tf)
 {
 	struct ata_ioports *ioaddr = &ap->ioaddr;
 
-	tf->command = ns87560_check_status(ap);
-	tf->feature = ioread8(ioaddr->error_addr);
+	tf->status = ns87560_check_status(ap);
+	tf->error = ioread8(ioaddr->error_addr);
 	tf->nsect = ioread8(ioaddr->nsect_addr);
 	tf->lbal = ioread8(ioaddr->lbal_addr);
 	tf->lbam = ioread8(ioaddr->lbam_addr);
@@ -320,7 +320,7 @@ static struct ata_port_operations ns87560_pata_ops = {
 };
 #endif
 
-static struct scsi_host_template ns87415_sht = {
+static const struct scsi_host_template ns87415_sht = {
 	ATA_BMDMA_SHT(DRV_NAME),
 };
 

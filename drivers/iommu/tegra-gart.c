@@ -112,7 +112,7 @@ static int gart_iommu_attach_dev(struct iommu_domain *domain,
 	spin_lock(&gart->dom_lock);
 
 	if (gart->active_domain && gart->active_domain != domain) {
-		ret = -EBUSY;
+		ret = -EINVAL;
 	} else if (dev_iommu_priv_get(dev) != domain) {
 		dev_iommu_priv_set(dev, domain);
 		gart->active_domain = domain;
@@ -124,9 +124,9 @@ static int gart_iommu_attach_dev(struct iommu_domain *domain,
 	return ret;
 }
 
-static void gart_iommu_detach_dev(struct iommu_domain *domain,
-				  struct device *dev)
+static void gart_iommu_set_platform_dma(struct device *dev)
 {
+	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
 	struct gart_device *gart = gart_handle;
 
 	spin_lock(&gart->dom_lock);
@@ -238,21 +238,12 @@ static phys_addr_t gart_iommu_iova_to_phys(struct iommu_domain *domain,
 	return pte & GART_PAGE_MASK;
 }
 
-static bool gart_iommu_capable(enum iommu_cap cap)
-{
-	return false;
-}
-
 static struct iommu_device *gart_iommu_probe_device(struct device *dev)
 {
 	if (!dev_iommu_fwspec_get(dev))
 		return ERR_PTR(-ENODEV);
 
 	return &gart_handle->iommu;
-}
-
-static void gart_iommu_release_device(struct device *dev)
-{
 }
 
 static int gart_iommu_of_xlate(struct device *dev,
@@ -276,21 +267,21 @@ static void gart_iommu_sync(struct iommu_domain *domain,
 }
 
 static const struct iommu_ops gart_iommu_ops = {
-	.capable	= gart_iommu_capable,
 	.domain_alloc	= gart_iommu_domain_alloc,
-	.domain_free	= gart_iommu_domain_free,
-	.attach_dev	= gart_iommu_attach_dev,
-	.detach_dev	= gart_iommu_detach_dev,
 	.probe_device	= gart_iommu_probe_device,
-	.release_device	= gart_iommu_release_device,
 	.device_group	= generic_device_group,
-	.map		= gart_iommu_map,
-	.unmap		= gart_iommu_unmap,
-	.iova_to_phys	= gart_iommu_iova_to_phys,
+	.set_platform_dma_ops = gart_iommu_set_platform_dma,
 	.pgsize_bitmap	= GART_IOMMU_PGSIZES,
 	.of_xlate	= gart_iommu_of_xlate,
-	.iotlb_sync_map	= gart_iommu_sync_map,
-	.iotlb_sync	= gart_iommu_sync,
+	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.attach_dev	= gart_iommu_attach_dev,
+		.map		= gart_iommu_map,
+		.unmap		= gart_iommu_unmap,
+		.iova_to_phys	= gart_iommu_iova_to_phys,
+		.iotlb_sync_map	= gart_iommu_sync_map,
+		.iotlb_sync	= gart_iommu_sync,
+		.free		= gart_iommu_domain_free,
+	}
 };
 
 int tegra_gart_suspend(struct gart_device *gart)

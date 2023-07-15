@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2021 FIXME
+// Copyright (c) 2023 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -26,14 +26,6 @@ static inline struct otm1285a_otp *to_otm1285a_otp(struct drm_panel *panel)
 	return container_of(panel, struct otm1285a_otp, panel);
 }
 
-#define dsi_generic_write_seq(dsi, seq...) do {				\
-		static const u8 d[] = { seq };				\
-		int ret;						\
-		ret = mipi_dsi_generic_write(dsi, d, ARRAY_SIZE(d));	\
-		if (ret < 0)						\
-			return ret;					\
-	} while (0)
-
 static void otm1285a_otp_reset(struct otm1285a_otp *ctx)
 {
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
@@ -50,15 +42,15 @@ static int otm1285a_otp_on(struct otm1285a_otp *ctx)
 
 	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
-	dsi_generic_write_seq(dsi, 0x00, 0x00);
-	dsi_generic_write_seq(dsi, 0xff, 0x12, 0x85, 0x01);
-	dsi_generic_write_seq(dsi, 0x00, 0x80);
-	dsi_generic_write_seq(dsi, 0xff, 0x12, 0x85);
-	dsi_generic_write_seq(dsi, 0x00, 0x00);
-	dsi_generic_write_seq(dsi, 0x11);
+	mipi_dsi_generic_write_seq(dsi, 0x00, 0x00);
+	mipi_dsi_generic_write_seq(dsi, 0xff, 0x12, 0x85, 0x01);
+	mipi_dsi_generic_write_seq(dsi, 0x00, 0x80);
+	mipi_dsi_generic_write_seq(dsi, 0xff, 0x12, 0x85);
+	mipi_dsi_generic_write_seq(dsi, 0x00, 0x00);
+	mipi_dsi_generic_write_seq(dsi, 0x11);
 	msleep(120);
-	dsi_generic_write_seq(dsi, 0x00, 0x00);
-	dsi_generic_write_seq(dsi, 0x29);
+	mipi_dsi_generic_write_seq(dsi, 0x00, 0x00);
+	mipi_dsi_generic_write_seq(dsi, 0x29);
 	usleep_range(10000, 11000);
 
 	return 0;
@@ -224,7 +216,7 @@ static int otm1285a_otp_probe(struct mipi_dsi_device *dsi)
 	return 0;
 }
 
-static int otm1285a_otp_remove(struct mipi_dsi_device *dsi)
+static void otm1285a_otp_remove(struct mipi_dsi_device *dsi)
 {
 	struct otm1285a_otp *ctx = mipi_dsi_get_drvdata(dsi);
 	int ret;
@@ -234,8 +226,6 @@ static int otm1285a_otp_remove(struct mipi_dsi_device *dsi)
 		dev_err(&dsi->dev, "Failed to detach from DSI host: %d\n", ret);
 
 	drm_panel_remove(&ctx->panel);
-
-	return 0;
 }
 
 static const struct of_device_id otm1285a_otp_of_match[] = {
@@ -256,4 +246,4 @@ module_mipi_dsi_driver(otm1285a_otp_driver);
 
 MODULE_AUTHOR("linux-mdss-dsi-panel-driver-generator <fix@me>"); // FIXME
 MODULE_DESCRIPTION("DRM driver for otm1285a_otp_720p_video_EBBG");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR MIT
 /**************************************************************************
  *
- * Copyright 2019 VMware, Inc., Palo Alto, CA., USA
+ * Copyright 2019-2023 VMware, Inc., Palo Alto, CA., USA
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -24,6 +24,7 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  **************************************************************************/
+#include "vmwgfx_bo.h"
 #include "vmwgfx_drv.h"
 
 /*
@@ -57,7 +58,6 @@ enum vmw_bo_dirty_method {
  * @ref_count: Reference count for this structure
  * @bitmap_size: The size of the bitmap in bits. Typically equal to the
  * nuber of pages in the bo.
- * @size: The accounting size for this struct.
  * @bitmap: A bitmap where each bit represents a page. A set bit means a
  * dirty page.
  */
@@ -68,7 +68,6 @@ struct vmw_bo_dirty {
 	unsigned int change_count;
 	unsigned int ref_count;
 	unsigned long bitmap_size;
-	size_t size;
 	unsigned long bitmap[];
 };
 
@@ -80,11 +79,11 @@ struct vmw_bo_dirty {
  * dirty structure with the results. This function may change the
  * dirty-tracking method.
  */
-static void vmw_bo_dirty_scan_pagetable(struct vmw_buffer_object *vbo)
+static void vmw_bo_dirty_scan_pagetable(struct vmw_bo *vbo)
 {
 	struct vmw_bo_dirty *dirty = vbo->dirty;
-	pgoff_t offset = drm_vma_node_start(&vbo->base.base.vma_node);
-	struct address_space *mapping = vbo->base.bdev->dev_mapping;
+	pgoff_t offset = drm_vma_node_start(&vbo->tbo.base.vma_node);
+	struct address_space *mapping = vbo->tbo.bdev->dev_mapping;
 	pgoff_t num_marked;
 
 	num_marked = clean_record_shared_mapping_range
@@ -118,26 +117,25 @@ static void vmw_bo_dirty_scan_pagetable(struct vmw_buffer_object *vbo)
  *
  * This function may change the dirty-tracking method.
  */
-static void vmw_bo_dirty_scan_mkwrite(struct vmw_buffer_object *vbo)
+static void vmw_bo_dirty_scan_mkwrite(struct vmw_bo *vbo)
 {
 	struct vmw_bo_dirty *dirty = vbo->dirty;
-	unsigned long offset = drm_vma_node_start(&vbo->base.base.vma_node);
-	struct address_space *mapping = vbo->base.bdev->dev_mapping;
+	unsigned long offset = drm_vma_node_start(&vbo->tbo.base.vma_node);
+	struct address_space *mapping = vbo->tbo.bdev->dev_mapping;
 	pgoff_t num_marked;
 
 	if (dirty->end <= dirty->start)
 		return;
 
-	num_marked = wp_shared_mapping_range(vbo->base.bdev->dev_mapping,
-					dirty->start + offset,
-					dirty->end - dirty->start);
+	num_marked = wp_shared_mapping_range(vbo->tbo.bdev->dev_mapping,
+					     dirty->start + offset,
+					     dirty->end - dirty->start);
 
 	if (100UL * num_marked / dirty->bitmap_size >
-	    VMW_DIRTY_PERCENTAGE) {
+	    VMW_DIRTY_PERCENTAGE)
 		dirty->change_count++;
-	} else {
+	else
 		dirty->change_count = 0;
-	}
 
 	if (dirty->change_count > VMW_DIRTY_NUM_CHANGE_TRIGGERS) {
 		pgoff_t start = 0;
@@ -162,7 +160,7 @@ static void vmw_bo_dirty_scan_mkwrite(struct vmw_buffer_object *vbo)
  *
  * This function may change the dirty tracking method.
  */
-void vmw_bo_dirty_scan(struct vmw_buffer_object *vbo)
+void vmw_bo_dirty_scan(struct vmw_bo *vbo)
 {
 	struct vmw_bo_dirty *dirty = vbo->dirty;
 
@@ -183,12 +181,12 @@ void vmw_bo_dirty_scan(struct vmw_buffer_object *vbo)
  * when calling unmap_mapping_range(). This function makes sure we pick
  * up all dirty pages.
  */
-static void vmw_bo_dirty_pre_unmap(struct vmw_buffer_object *vbo,
+static void vmw_bo_dirty_pre_unmap(struct vmw_bo *vbo,
 				   pgoff_t start, pgoff_t end)
 {
 	struct vmw_bo_dirty *dirty = vbo->dirty;
-	unsigned long offset = drm_vma_node_start(&vbo->base.base.vma_node);
-	struct address_space *mapping = vbo->base.bdev->dev_mapping;
+	unsigned long offset = drm_vma_node_start(&vbo->tbo.base.vma_node);
+	struct address_space *mapping = vbo->tbo.bdev->dev_mapping;
 
 	if (dirty->method != VMW_BO_DIRTY_PAGETABLE || start >= end)
 		return;
@@ -208,11 +206,11 @@ static void vmw_bo_dirty_pre_unmap(struct vmw_buffer_object *vbo,
  *
  * This is similar to ttm_bo_unmap_virtual() except it takes a subrange.
  */
-void vmw_bo_dirty_unmap(struct vmw_buffer_object *vbo,
+void vmw_bo_dirty_unmap(struct vmw_bo *vbo,
 			pgoff_t start, pgoff_t end)
 {
-	unsigned long offset = drm_vma_node_start(&vbo->base.base.vma_node);
-	struct address_space *mapping = vbo->base.bdev->dev_mapping;
+	unsigned long offset = drm_vma_node_start(&vbo->tbo.base.vma_node);
+	struct address_space *mapping = vbo->tbo.bdev->dev_mapping;
 
 	vmw_bo_dirty_pre_unmap(vbo, start, end);
 	unmap_shared_mapping_range(mapping, (offset + start) << PAGE_SHIFT,
@@ -229,16 +227,12 @@ void vmw_bo_dirty_unmap(struct vmw_buffer_object *vbo,
  *
  * Return: Zero on success, -ENOMEM on memory allocation failure.
  */
-int vmw_bo_dirty_add(struct vmw_buffer_object *vbo)
+int vmw_bo_dirty_add(struct vmw_bo *vbo)
 {
 	struct vmw_bo_dirty *dirty = vbo->dirty;
-	pgoff_t num_pages = vbo->base.resource->num_pages;
-	size_t size, acc_size;
+	pgoff_t num_pages = PFN_UP(vbo->tbo.resource->size);
+	size_t size;
 	int ret;
-	static struct ttm_operation_ctx ctx = {
-		.interruptible = false,
-		.no_wait_gpu = false
-	};
 
 	if (dirty) {
 		dirty->ref_count++;
@@ -246,20 +240,12 @@ int vmw_bo_dirty_add(struct vmw_buffer_object *vbo)
 	}
 
 	size = sizeof(*dirty) + BITS_TO_LONGS(num_pages) * sizeof(long);
-	acc_size = ttm_round_pot(size);
-	ret = ttm_mem_global_alloc(&ttm_mem_glob, acc_size, &ctx);
-	if (ret) {
-		VMW_DEBUG_USER("Out of graphics memory for buffer object "
-			       "dirty tracker.\n");
-		return ret;
-	}
 	dirty = kvzalloc(size, GFP_KERNEL);
 	if (!dirty) {
 		ret = -ENOMEM;
 		goto out_no_dirty;
 	}
 
-	dirty->size = acc_size;
 	dirty->bitmap_size = num_pages;
 	dirty->start = dirty->bitmap_size;
 	dirty->end = 0;
@@ -267,8 +253,8 @@ int vmw_bo_dirty_add(struct vmw_buffer_object *vbo)
 	if (num_pages < PAGE_SIZE / sizeof(pte_t)) {
 		dirty->method = VMW_BO_DIRTY_PAGETABLE;
 	} else {
-		struct address_space *mapping = vbo->base.bdev->dev_mapping;
-		pgoff_t offset = drm_vma_node_start(&vbo->base.base.vma_node);
+		struct address_space *mapping = vbo->tbo.bdev->dev_mapping;
+		pgoff_t offset = drm_vma_node_start(&vbo->tbo.base.vma_node);
 
 		dirty->method = VMW_BO_DIRTY_MKWRITE;
 
@@ -285,7 +271,6 @@ int vmw_bo_dirty_add(struct vmw_buffer_object *vbo)
 	return 0;
 
 out_no_dirty:
-	ttm_mem_global_free(&ttm_mem_glob, acc_size);
 	return ret;
 }
 
@@ -299,15 +284,12 @@ out_no_dirty:
  *
  * Return: Zero on success, -ENOMEM on memory allocation failure.
  */
-void vmw_bo_dirty_release(struct vmw_buffer_object *vbo)
+void vmw_bo_dirty_release(struct vmw_bo *vbo)
 {
 	struct vmw_bo_dirty *dirty = vbo->dirty;
 
 	if (dirty && --dirty->ref_count == 0) {
-		size_t acc_size = dirty->size;
-
 		kvfree(dirty);
-		ttm_mem_global_free(&ttm_mem_glob, acc_size);
 		vbo->dirty = NULL;
 	}
 }
@@ -324,11 +306,11 @@ void vmw_bo_dirty_release(struct vmw_buffer_object *vbo)
  */
 void vmw_bo_dirty_transfer_to_res(struct vmw_resource *res)
 {
-	struct vmw_buffer_object *vbo = res->backup;
+	struct vmw_bo *vbo = res->guest_memory_bo;
 	struct vmw_bo_dirty *dirty = vbo->dirty;
 	pgoff_t start, cur, end;
-	unsigned long res_start = res->backup_offset;
-	unsigned long res_end = res->backup_offset + res->backup_size;
+	unsigned long res_start = res->guest_memory_offset;
+	unsigned long res_end = res->guest_memory_offset + res->guest_memory_size;
 
 	WARN_ON_ONCE(res_start & ~PAGE_MASK);
 	res_start >>= PAGE_SHIFT;
@@ -369,9 +351,9 @@ void vmw_bo_dirty_transfer_to_res(struct vmw_resource *res)
  */
 void vmw_bo_dirty_clear_res(struct vmw_resource *res)
 {
-	unsigned long res_start = res->backup_offset;
-	unsigned long res_end = res->backup_offset + res->backup_size;
-	struct vmw_buffer_object *vbo = res->backup;
+	unsigned long res_start = res->guest_memory_offset;
+	unsigned long res_end = res->guest_memory_offset + res->guest_memory_size;
+	struct vmw_bo *vbo = res->guest_memory_bo;
 	struct vmw_bo_dirty *dirty = vbo->dirty;
 
 	res_start >>= PAGE_SHIFT;
@@ -398,8 +380,7 @@ vm_fault_t vmw_bo_vm_mkwrite(struct vm_fault *vmf)
 	vm_fault_t ret;
 	unsigned long page_offset;
 	unsigned int save_flags;
-	struct vmw_buffer_object *vbo =
-		container_of(bo, typeof(*vbo), base);
+	struct vmw_bo *vbo = to_vmw_bo(&bo->base);
 
 	/*
 	 * mkwrite() doesn't handle the VM_FAULT_RETRY return value correctly.
@@ -413,7 +394,7 @@ vm_fault_t vmw_bo_vm_mkwrite(struct vm_fault *vmf)
 		return ret;
 
 	page_offset = vmf->pgoff - drm_vma_node_start(&bo->base.vma_node);
-	if (unlikely(page_offset >= bo->resource->num_pages)) {
+	if (unlikely(page_offset >= PFN_UP(bo->resource->size))) {
 		ret = VM_FAULT_SIGBUS;
 		goto out_unlock;
 	}
@@ -437,8 +418,7 @@ vm_fault_t vmw_bo_vm_fault(struct vm_fault *vmf)
 	struct vm_area_struct *vma = vmf->vma;
 	struct ttm_buffer_object *bo = (struct ttm_buffer_object *)
 	    vma->vm_private_data;
-	struct vmw_buffer_object *vbo =
-		container_of(bo, struct vmw_buffer_object, base);
+	struct vmw_bo *vbo = to_vmw_bo(&bo->base);
 	pgoff_t num_prefault;
 	pgprot_t prot;
 	vm_fault_t ret;
@@ -456,7 +436,7 @@ vm_fault_t vmw_bo_vm_fault(struct vm_fault *vmf)
 
 		page_offset = vmf->pgoff -
 			drm_vma_node_start(&bo->base.vma_node);
-		if (page_offset >= bo->resource->num_pages ||
+		if (page_offset >= PFN_UP(bo->resource->size) ||
 		    vmw_resources_clean(vbo, page_offset,
 					page_offset + PAGE_SIZE,
 					&allowed_prefault)) {
@@ -477,7 +457,7 @@ vm_fault_t vmw_bo_vm_fault(struct vm_fault *vmf)
 	else
 		prot = vm_get_page_prot(vma->vm_flags);
 
-	ret = ttm_bo_vm_fault_reserved(vmf, prot, num_prefault, 1);
+	ret = ttm_bo_vm_fault_reserved(vmf, prot, num_prefault);
 	if (ret == VM_FAULT_RETRY && !(vmf->flags & FAULT_FLAG_RETRY_NOWAIT))
 		return ret;
 
@@ -486,73 +466,3 @@ out_unlock:
 
 	return ret;
 }
-
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
-vm_fault_t vmw_bo_vm_huge_fault(struct vm_fault *vmf,
-				enum page_entry_size pe_size)
-{
-	struct vm_area_struct *vma = vmf->vma;
-	struct ttm_buffer_object *bo = (struct ttm_buffer_object *)
-	    vma->vm_private_data;
-	struct vmw_buffer_object *vbo =
-		container_of(bo, struct vmw_buffer_object, base);
-	pgprot_t prot;
-	vm_fault_t ret;
-	pgoff_t fault_page_size;
-	bool write = vmf->flags & FAULT_FLAG_WRITE;
-
-	switch (pe_size) {
-	case PE_SIZE_PMD:
-		fault_page_size = HPAGE_PMD_SIZE >> PAGE_SHIFT;
-		break;
-#ifdef CONFIG_HAVE_ARCH_TRANSPARENT_HUGEPAGE_PUD
-	case PE_SIZE_PUD:
-		fault_page_size = HPAGE_PUD_SIZE >> PAGE_SHIFT;
-		break;
-#endif
-	default:
-		WARN_ON_ONCE(1);
-		return VM_FAULT_FALLBACK;
-	}
-
-	/* Always do write dirty-tracking and COW on PTE level. */
-	if (write && (READ_ONCE(vbo->dirty) || is_cow_mapping(vma->vm_flags)))
-		return VM_FAULT_FALLBACK;
-
-	ret = ttm_bo_vm_reserve(bo, vmf);
-	if (ret)
-		return ret;
-
-	if (vbo->dirty) {
-		pgoff_t allowed_prefault;
-		unsigned long page_offset;
-
-		page_offset = vmf->pgoff -
-			drm_vma_node_start(&bo->base.vma_node);
-		if (page_offset >= bo->resource->num_pages ||
-		    vmw_resources_clean(vbo, page_offset,
-					page_offset + PAGE_SIZE,
-					&allowed_prefault)) {
-			ret = VM_FAULT_SIGBUS;
-			goto out_unlock;
-		}
-
-		/*
-		 * Write protect, so we get a new fault on write, and can
-		 * split.
-		 */
-		prot = vm_get_page_prot(vma->vm_flags & ~VM_SHARED);
-	} else {
-		prot = vm_get_page_prot(vma->vm_flags);
-	}
-
-	ret = ttm_bo_vm_fault_reserved(vmf, prot, 1, fault_page_size);
-	if (ret == VM_FAULT_RETRY && !(vmf->flags & FAULT_FLAG_RETRY_NOWAIT))
-		return ret;
-
-out_unlock:
-	dma_resv_unlock(bo->base.resv);
-
-	return ret;
-}
-#endif

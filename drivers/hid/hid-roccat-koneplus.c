@@ -431,6 +431,9 @@ static int koneplus_probe(struct hid_device *hdev,
 {
 	int retval;
 
+	if (!hid_is_usb(hdev))
+		return -EINVAL;
+
 	retval = hid_parse(hdev);
 	if (retval) {
 		hid_err(hdev, "parse failed\n");
@@ -546,7 +549,7 @@ static int __init koneplus_init(void)
 	int retval;
 
 	/* class name has to be same as driver name */
-	koneplus_class = class_create(THIS_MODULE, "koneplus");
+	koneplus_class = class_create("koneplus");
 	if (IS_ERR(koneplus_class))
 		return PTR_ERR(koneplus_class);
 	koneplus_class->dev_groups = koneplus_groups;

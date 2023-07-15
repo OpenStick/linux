@@ -204,8 +204,8 @@ static int pass_ack(struct migrate_reuseport_test_case *test_case)
 {
 	int err;
 
-	err = bpf_link__detach(test_case->link);
-	if (!ASSERT_OK(err, "bpf_link__detach"))
+	err = bpf_link__destroy(test_case->link);
+	if (!ASSERT_OK(err, "bpf_link__destroy"))
 		return -1;
 
 	test_case->link = NULL;
@@ -488,7 +488,7 @@ static void run_test(struct migrate_reuseport_test_case *test_case,
 			goto close_servers;
 	}
 
-	/* Tie requests to the first four listners */
+	/* Tie requests to the first four listeners */
 	err = start_clients(test_case);
 	if (!ASSERT_OK(err, "start_clients"))
 		goto close_clients;
@@ -541,7 +541,7 @@ close_servers:
 	}
 }
 
-void test_migrate_reuseport(void)
+void serial_test_migrate_reuseport(void)
 {
 	struct test_migrate_reuseport *skel;
 	int i;

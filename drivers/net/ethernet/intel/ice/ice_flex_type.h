@@ -3,202 +3,26 @@
 
 #ifndef _ICE_FLEX_TYPE_H_
 #define _ICE_FLEX_TYPE_H_
+#include "ice_ddp.h"
 
-#define ICE_FV_OFFSET_INVAL	0x1FF
-
-/* Extraction Sequence (Field Vector) Table */
-struct ice_fv_word {
-	u8 prot_id;
-	u16 off;		/* Offset within the protocol header */
-	u8 resvrd;
-} __packed;
-
-#define ICE_MAX_FV_WORDS 48
-struct ice_fv {
-	struct ice_fv_word ew[ICE_MAX_FV_WORDS];
-};
-
-/* Package and segment headers and tables */
-struct ice_pkg_hdr {
-	struct ice_pkg_ver pkg_format_ver;
-	__le32 seg_count;
-	__le32 seg_offset[];
-};
-
-/* generic segment */
-struct ice_generic_seg_hdr {
-#define SEGMENT_TYPE_METADATA	0x00000001
-#define SEGMENT_TYPE_ICE	0x00000010
-	__le32 seg_type;
-	struct ice_pkg_ver seg_format_ver;
-	__le32 seg_size;
-	char seg_id[ICE_PKG_NAME_SIZE];
-};
-
-/* ice specific segment */
-
-union ice_device_id {
-	struct {
-		__le16 device_id;
-		__le16 vendor_id;
-	} dev_vend_id;
-	__le32 id;
-};
-
-struct ice_device_id_entry {
-	union ice_device_id device;
-	union ice_device_id sub_device;
-};
-
-struct ice_seg {
-	struct ice_generic_seg_hdr hdr;
-	__le32 device_table_count;
-	struct ice_device_id_entry device_table[];
-};
-
-struct ice_nvm_table {
-	__le32 table_count;
-	__le32 vers[];
-};
-
-struct ice_buf {
-#define ICE_PKG_BUF_SIZE	4096
-	u8 buf[ICE_PKG_BUF_SIZE];
-};
-
-struct ice_buf_table {
-	__le32 buf_count;
-	struct ice_buf buf_array[];
-};
-
-/* global metadata specific segment */
-struct ice_global_metadata_seg {
-	struct ice_generic_seg_hdr hdr;
-	struct ice_pkg_ver pkg_ver;
-	__le32 rsvd;
-	char pkg_name[ICE_PKG_NAME_SIZE];
-};
-
-#define ICE_MIN_S_OFF		12
-#define ICE_MAX_S_OFF		4095
-#define ICE_MIN_S_SZ		1
-#define ICE_MAX_S_SZ		4084
-
-/* section information */
-struct ice_section_entry {
-	__le32 type;
-	__le16 offset;
-	__le16 size;
-};
-
-#define ICE_MIN_S_COUNT		1
-#define ICE_MAX_S_COUNT		511
-#define ICE_MIN_S_DATA_END	12
-#define ICE_MAX_S_DATA_END	4096
-
-#define ICE_METADATA_BUF	0x80000000
-
-struct ice_buf_hdr {
-	__le16 section_count;
-	__le16 data_end;
-	struct ice_section_entry section_entry[];
-};
-
-#define ICE_MAX_ENTRIES_IN_BUF(hd_sz, ent_sz) ((ICE_PKG_BUF_SIZE - \
-	struct_size((struct ice_buf_hdr *)0, section_entry, 1) - (hd_sz)) /\
-	(ent_sz))
-
-/* ice package section IDs */
-#define ICE_SID_METADATA		1
-#define ICE_SID_XLT0_SW			10
-#define ICE_SID_XLT_KEY_BUILDER_SW	11
-#define ICE_SID_XLT1_SW			12
-#define ICE_SID_XLT2_SW			13
-#define ICE_SID_PROFID_TCAM_SW		14
-#define ICE_SID_PROFID_REDIR_SW		15
-#define ICE_SID_FLD_VEC_SW		16
-#define ICE_SID_CDID_KEY_BUILDER_SW	17
-
-struct ice_meta_sect {
-	struct ice_pkg_ver ver;
-#define ICE_META_SECT_NAME_SIZE	28
-	char name[ICE_META_SECT_NAME_SIZE];
-	__le32 track_id;
-};
-
-#define ICE_SID_CDID_REDIR_SW		18
-
-#define ICE_SID_XLT0_ACL		20
-#define ICE_SID_XLT_KEY_BUILDER_ACL	21
-#define ICE_SID_XLT1_ACL		22
-#define ICE_SID_XLT2_ACL		23
-#define ICE_SID_PROFID_TCAM_ACL		24
-#define ICE_SID_PROFID_REDIR_ACL	25
-#define ICE_SID_FLD_VEC_ACL		26
-#define ICE_SID_CDID_KEY_BUILDER_ACL	27
-#define ICE_SID_CDID_REDIR_ACL		28
-
-#define ICE_SID_XLT0_FD			30
-#define ICE_SID_XLT_KEY_BUILDER_FD	31
-#define ICE_SID_XLT1_FD			32
-#define ICE_SID_XLT2_FD			33
-#define ICE_SID_PROFID_TCAM_FD		34
-#define ICE_SID_PROFID_REDIR_FD		35
-#define ICE_SID_FLD_VEC_FD		36
-#define ICE_SID_CDID_KEY_BUILDER_FD	37
-#define ICE_SID_CDID_REDIR_FD		38
-
-#define ICE_SID_XLT0_RSS		40
-#define ICE_SID_XLT_KEY_BUILDER_RSS	41
-#define ICE_SID_XLT1_RSS		42
-#define ICE_SID_XLT2_RSS		43
-#define ICE_SID_PROFID_TCAM_RSS		44
-#define ICE_SID_PROFID_REDIR_RSS	45
-#define ICE_SID_FLD_VEC_RSS		46
-#define ICE_SID_CDID_KEY_BUILDER_RSS	47
-#define ICE_SID_CDID_REDIR_RSS		48
-
-#define ICE_SID_RXPARSER_BOOST_TCAM	56
-#define ICE_SID_TXPARSER_BOOST_TCAM	66
-
-#define ICE_SID_XLT0_PE			80
-#define ICE_SID_XLT_KEY_BUILDER_PE	81
-#define ICE_SID_XLT1_PE			82
-#define ICE_SID_XLT2_PE			83
-#define ICE_SID_PROFID_TCAM_PE		84
-#define ICE_SID_PROFID_REDIR_PE		85
-#define ICE_SID_FLD_VEC_PE		86
-#define ICE_SID_CDID_KEY_BUILDER_PE	87
-#define ICE_SID_CDID_REDIR_PE		88
-
-/* Label Metadata section IDs */
-#define ICE_SID_LBL_FIRST		0x80000010
-#define ICE_SID_LBL_RXPARSER_TMEM	0x80000018
-/* The following define MUST be updated to reflect the last label section ID */
-#define ICE_SID_LBL_LAST		0x80000038
-
-enum ice_block {
-	ICE_BLK_SW = 0,
-	ICE_BLK_ACL,
-	ICE_BLK_FD,
-	ICE_BLK_RSS,
-	ICE_BLK_PE,
-	ICE_BLK_COUNT
-};
-
-enum ice_sect {
-	ICE_XLT0 = 0,
-	ICE_XLT_KB,
-	ICE_XLT1,
-	ICE_XLT2,
-	ICE_PROF_TCAM,
-	ICE_PROF_REDIR,
-	ICE_VEC_TBL,
-	ICE_CDID_KB,
-	ICE_CDID_REDIR,
-	ICE_SECT_COUNT
-};
-
+/* Packet Type (PTYPE) values */
+#define ICE_PTYPE_MAC_PAY		1
+#define ICE_PTYPE_IPV4_PAY		23
+#define ICE_PTYPE_IPV4_UDP_PAY		24
+#define ICE_PTYPE_IPV4_TCP_PAY		26
+#define ICE_PTYPE_IPV4_SCTP_PAY		27
+#define ICE_PTYPE_IPV6_PAY		89
+#define ICE_PTYPE_IPV6_UDP_PAY		90
+#define ICE_PTYPE_IPV6_TCP_PAY		92
+#define ICE_PTYPE_IPV6_SCTP_PAY		93
+#define ICE_MAC_IPV4_ESP		160
+#define ICE_MAC_IPV6_ESP		161
+#define ICE_MAC_IPV4_AH			162
+#define ICE_MAC_IPV6_AH			163
+#define ICE_MAC_IPV4_NAT_T_ESP		164
+#define ICE_MAC_IPV6_NAT_T_ESP		165
+#define ICE_MAC_IPV4_GTPU		329
+#define ICE_MAC_IPV6_GTPU		330
 #define ICE_MAC_IPV4_GTPU_IPV4_FRAG	331
 #define ICE_MAC_IPV4_GTPU_IPV4_PAY	332
 #define ICE_MAC_IPV4_GTPU_IPV4_UDP_PAY	333
@@ -219,6 +43,10 @@ enum ice_sect {
 #define ICE_MAC_IPV6_GTPU_IPV6_UDP_PAY	348
 #define ICE_MAC_IPV6_GTPU_IPV6_TCP	349
 #define ICE_MAC_IPV6_GTPU_IPV6_ICMPV6	350
+#define ICE_MAC_IPV4_PFCP_SESSION	352
+#define ICE_MAC_IPV6_PFCP_SESSION	354
+#define ICE_MAC_IPV4_L2TPV3		360
+#define ICE_MAC_IPV6_L2TPV3		361
 
 /* Attributes that can modify PTYPE definitions.
  *
@@ -257,114 +85,14 @@ struct ice_ptype_attributes {
 	enum ice_ptype_attrib_type attrib;
 };
 
-/* package labels */
-struct ice_label {
-	__le16 value;
-#define ICE_PKG_LABEL_SIZE	64
-	char name[ICE_PKG_LABEL_SIZE];
-};
-
-struct ice_label_section {
-	__le16 count;
-	struct ice_label label[];
-};
-
-#define ICE_MAX_LABELS_IN_BUF ICE_MAX_ENTRIES_IN_BUF( \
-	struct_size((struct ice_label_section *)0, label, 1) - \
-	sizeof(struct ice_label), sizeof(struct ice_label))
-
-struct ice_sw_fv_section {
-	__le16 count;
-	__le16 base_offset;
-	struct ice_fv fv[];
-};
-
-/* The BOOST TCAM stores the match packet header in reverse order, meaning
- * the fields are reversed; in addition, this means that the normally big endian
- * fields of the packet are now little endian.
- */
-struct ice_boost_key_value {
-#define ICE_BOOST_REMAINING_HV_KEY	15
-	u8 remaining_hv_key[ICE_BOOST_REMAINING_HV_KEY];
-	__le16 hv_dst_port_key;
-	__le16 hv_src_port_key;
-	u8 tcam_search_key;
-} __packed;
-
-struct ice_boost_key {
-	struct ice_boost_key_value key;
-	struct ice_boost_key_value key2;
-};
-
-/* package Boost TCAM entry */
-struct ice_boost_tcam_entry {
-	__le16 addr;
-	__le16 reserved;
-	/* break up the 40 bytes of key into different fields */
-	struct ice_boost_key key;
-	u8 boost_hit_index_group;
-	/* The following contains bitfields which are not on byte boundaries.
-	 * These fields are currently unused by driver software.
-	 */
-#define ICE_BOOST_BIT_FIELDS		43
-	u8 bit_fields[ICE_BOOST_BIT_FIELDS];
-};
-
-struct ice_boost_tcam_section {
-	__le16 count;
-	__le16 reserved;
-	struct ice_boost_tcam_entry tcam[];
-};
-
-#define ICE_MAX_BST_TCAMS_IN_BUF ICE_MAX_ENTRIES_IN_BUF( \
-	struct_size((struct ice_boost_tcam_section *)0, tcam, 1) - \
-	sizeof(struct ice_boost_tcam_entry), \
-	sizeof(struct ice_boost_tcam_entry))
-
-struct ice_xlt1_section {
-	__le16 count;
-	__le16 offset;
-	u8 value[];
-};
-
-struct ice_xlt2_section {
-	__le16 count;
-	__le16 offset;
-	__le16 value[];
-};
-
-struct ice_prof_redir_section {
-	__le16 count;
-	__le16 offset;
-	u8 redir_value[];
-};
-
-/* package buffer building */
-
-struct ice_buf_build {
-	struct ice_buf buf;
-	u16 reserved_section_table_entries;
-};
-
-struct ice_pkg_enum {
-	struct ice_buf_table *buf_table;
-	u32 buf_idx;
-
-	u32 type;
-	struct ice_buf_hdr *buf;
-	u32 sect_idx;
-	void *sect;
-	u32 sect_type;
-
-	u32 entry_idx;
-	void *(*handler)(u32 sect_type, void *section, u32 index, u32 *offset);
-};
-
 /* Tunnel enabling */
 
 enum ice_tunnel_type {
 	TNL_VXLAN = 0,
 	TNL_GENEVE,
+	TNL_GRETAP,
+	TNL_GTPC,
+	TNL_GTPU,
 	__TNL_TYPE_CNT,
 	TNL_LAST = 0xFF,
 	TNL_ALL = 0xFF,
@@ -389,6 +117,19 @@ struct ice_tunnel_table {
 	struct ice_tunnel_entry tbl[ICE_TUNNEL_MAX_ENTRIES];
 	u16 count;
 	u16 valid_count[__TNL_TYPE_CNT];
+};
+
+struct ice_dvm_entry {
+	u16 boost_addr;
+	u16 enable;
+	struct ice_boost_tcam_entry *boost_entry;
+};
+
+#define ICE_DVM_MAX_ENTRIES	48
+
+struct ice_dvm_table {
+	struct ice_dvm_entry tbl[ICE_DVM_MAX_ENTRIES];
+	u16 count;
 };
 
 struct ice_pkg_es {
@@ -603,4 +344,40 @@ struct ice_chs_chg {
 };
 
 #define ICE_FLOW_PTYPE_MAX		ICE_XLT1_CNT
+
+enum ice_prof_type {
+	ICE_PROF_NON_TUN = 0x1,
+	ICE_PROF_TUN_UDP = 0x2,
+	ICE_PROF_TUN_GRE = 0x4,
+	ICE_PROF_TUN_GTPU = 0x8,
+	ICE_PROF_TUN_GTPC = 0x10,
+	ICE_PROF_TUN_ALL = 0x1E,
+	ICE_PROF_ALL = 0xFF,
+};
+
+/* Number of bits/bytes contained in meta init entry. Note, this should be a
+ * multiple of 32 bits.
+ */
+#define ICE_META_INIT_BITS	192
+#define ICE_META_INIT_DW_CNT	(ICE_META_INIT_BITS / (sizeof(__le32) * \
+				 BITS_PER_BYTE))
+
+/* The meta init Flag field starts at this bit */
+#define ICE_META_FLAGS_ST		123
+
+/* The entry and bit to check for Double VLAN Mode (DVM) support */
+#define ICE_META_VLAN_MODE_ENTRY	0
+#define ICE_META_FLAG_VLAN_MODE		60
+#define ICE_META_VLAN_MODE_BIT		(ICE_META_FLAGS_ST + \
+					 ICE_META_FLAG_VLAN_MODE)
+
+struct ice_meta_init_entry {
+	__le32 bm[ICE_META_INIT_DW_CNT];
+};
+
+struct ice_meta_init_section {
+	__le16 count;
+	__le16 offset;
+	struct ice_meta_init_entry entry;
+};
 #endif /* _ICE_FLEX_TYPE_H_ */

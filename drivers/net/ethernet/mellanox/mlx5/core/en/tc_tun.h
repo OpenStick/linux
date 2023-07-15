@@ -51,6 +51,7 @@ struct mlx5e_tc_tunnel {
 			    void *headers_v);
 	bool (*encap_info_equal)(struct mlx5e_encap_key *a,
 				 struct mlx5e_encap_key *b);
+	int (*get_remote_ifindex)(struct net_device *mirred_dev);
 };
 
 extern struct mlx5e_tc_tunnel vxlan_tunnel;
@@ -93,7 +94,8 @@ mlx5e_tc_tun_update_header_ipv6(struct mlx5e_priv *priv,
 #endif
 int mlx5e_tc_tun_route_lookup(struct mlx5e_priv *priv,
 			      struct mlx5_flow_spec *spec,
-			      struct mlx5_flow_attr *attr);
+			      struct mlx5_flow_attr *attr,
+			      struct net_device *filter_dev);
 
 bool mlx5e_tc_tun_device_to_offload(struct mlx5e_priv *priv,
 				    struct net_device *netdev);
@@ -113,6 +115,9 @@ int mlx5e_tc_tun_parse_udp_ports(struct mlx5e_priv *priv,
 bool mlx5e_tc_tun_encap_info_equal_generic(struct mlx5e_encap_key *a,
 					   struct mlx5e_encap_key *b);
 
+bool mlx5e_tc_tun_encap_info_equal_options(struct mlx5e_encap_key *a,
+					   struct mlx5e_encap_key *b,
+					   __be16 tun_flags);
 #endif /* CONFIG_MLX5_ESWITCH */
 
 #endif //__MLX5_EN_TC_TUNNEL_H__

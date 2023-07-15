@@ -14,6 +14,7 @@
 #include <net/nfc/nci.h>
 #include <net/nfc/nci_core.h>
 #include <linux/nfc.h>
+#include <linux/kcov.h>
 
 struct nci_data {
 	u8 conn_id;
@@ -153,7 +154,7 @@ static int nci_hci_send_data(struct nci_dev *ndev, u8 pipe,
 
 	i = 0;
 	skb = nci_skb_alloc(ndev, conn_info->max_pkt_payload_len +
-			    NCI_DATA_HDR_SIZE, GFP_KERNEL);
+			    NCI_DATA_HDR_SIZE, GFP_ATOMIC);
 	if (!skb)
 		return -ENOMEM;
 
@@ -184,7 +185,7 @@ static int nci_hci_send_data(struct nci_dev *ndev, u8 pipe,
 		if (i < data_len) {
 			skb = nci_skb_alloc(ndev,
 					    conn_info->max_pkt_payload_len +
-					    NCI_DATA_HDR_SIZE, GFP_KERNEL);
+					    NCI_DATA_HDR_SIZE, GFP_ATOMIC);
 			if (!skb)
 				return -ENOMEM;
 
@@ -409,7 +410,8 @@ static void nci_hci_msg_rx_work(struct work_struct *work)
 	const struct nci_hcp_message *message;
 	u8 pipe, type, instruction;
 
-	while ((skb = skb_dequeue(&hdev->msg_rx_queue)) != NULL) {
+	for (; (skb = skb_dequeue(&hdev->msg_rx_queue)); kcov_remote_stop()) {
+		kcov_remote_start_common(skb_get_kcov_handle(skb));
 		pipe = NCI_HCP_MSG_GET_PIPE(skb->data[0]);
 		skb_pull(skb, NCI_HCI_HCP_PACKET_HEADER_LEN);
 		message = (struct nci_hcp_message *)skb->data;
@@ -431,8 +433,6 @@ void nci_hci_data_received_cb(void *context,
 	struct sk_buff *hcp_skb;
 	struct sk_buff *frag_skb;
 	int msg_len;
-
-	pr_debug("\n");
 
 	if (err) {
 		nci_req_complete(ndev, err);
@@ -547,8 +547,6 @@ static u8 nci_hci_create_pipe(struct nci_dev *ndev, u8 dest_host,
 
 static int nci_hci_delete_pipe(struct nci_dev *ndev, u8 pipe)
 {
-	pr_debug("\n");
-
 	return nci_hci_send_cmd(ndev, NCI_HCI_ADMIN_GATE,
 				NCI_HCI_ADM_DELETE_PIPE, &pipe, 1, NULL);
 }

@@ -92,11 +92,8 @@ static void init_vdso(void)
 		printf("[WARN]\tfailed to find time in vDSO\n");
 
 	vdso_getcpu = (getcpu_t)dlsym(vdso, "__vdso_getcpu");
-	if (!vdso_getcpu) {
-		/* getcpu() was never wired up in the 32-bit vDSO. */
-		printf("[%s]\tfailed to find getcpu in vDSO\n",
-		       sizeof(long) == 8 ? "WARN" : "NOTE");
-	}
+	if (!vdso_getcpu)
+		printf("[WARN]\tfailed to find getcpu in vDSO\n");
 }
 
 static int init_vsys(void)
@@ -497,7 +494,7 @@ static int test_process_vm_readv(void)
 	}
 
 	if (vsyscall_map_r) {
-		if (!memcmp(buf, (const void *)0xffffffffff600000, 4096)) {
+		if (!memcmp(buf, remote.iov_base, sizeof(buf))) {
 			printf("[OK]\tIt worked and read correct data\n");
 		} else {
 			printf("[FAIL]\tIt worked but returned incorrect data\n");

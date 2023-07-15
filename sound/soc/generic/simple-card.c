@@ -28,6 +28,30 @@ static const struct snd_soc_ops simple_ops = {
 	.hw_params	= asoc_simple_hw_params,
 };
 
+static int asoc_simple_parse_platform(struct device_node *node,
+				      struct snd_soc_dai_link_component *dlc)
+{
+	struct of_phandle_args args;
+	int ret;
+
+	if (!node)
+		return 0;
+
+	/*
+	 * Get node via "sound-dai = <&phandle port>"
+	 * it will be used as xxx_of_node on soc_bind_dai_link()
+	 */
+	ret = of_parse_phandle_with_args(node, DAI, CELL, 0, &args);
+	if (ret)
+		return ret;
+
+	/* dai_name is not required and may not exist for plat component */
+
+	dlc->of_node = args.np;
+
+	return 0;
+}
+
 static int asoc_simple_parse_dai(struct device_node *node,
 				 struct snd_soc_dai_link_component *dlc,
 				 int *is_single_link)
@@ -289,7 +313,7 @@ static int simple_dai_link_of(struct asoc_simple_priv *priv,
 	if (ret < 0)
 		goto dai_link_of_err;
 
-	ret = asoc_simple_parse_dai(plat, platforms, NULL);
+	ret = asoc_simple_parse_platform(plat, platforms);
 	if (ret < 0)
 		goto dai_link_of_err;
 
@@ -369,8 +393,7 @@ static int __simple_for_each_link(struct asoc_simple_priv *priv,
 			 * or has convert-xxx property
 			 */
 			if (dpcm_selectable &&
-			    (num > 2 ||
-			     adata.convert_rate || adata.convert_channels)) {
+			    (num > 2 || asoc_simple_is_convert_required(&adata))) {
 				/*
 				 * np
 				 *	 |1(CPU)|0(Codec)  li->cpu
@@ -399,6 +422,7 @@ static int __simple_for_each_link(struct asoc_simple_priv *priv,
 		}
 
 		of_node_put(codec);
+		of_node_put(plat);
 		node = of_get_next_child(top, node);
 	} while (!is_top && node);
 
@@ -486,9 +510,24 @@ static int simple_count_noml(struct asoc_simple_priv *priv,
 		return -EINVAL;
 	}
 
+	/*
+	 * DON'T REMOVE platforms
+	 *
+	 * Some CPU might be using soc-generic-dmaengine-pcm. This means CPU and Platform
+	 * are different Component, but are sharing same component->dev.
+	 * Simple Card had been supported it without special Platform selection.
+	 * We need platforms here.
+	 *
+	 * In case of no Platform, it will be Platform == CPU, but Platform will be
+	 * ignored by snd_soc_rtd_add_component().
+	 *
+	 * see
+	 *	simple-card-utils.c :: asoc_simple_canonicalize_platform()
+	 */
 	li->num[li->link].cpus		= 1;
-	li->num[li->link].codecs	= 1;
 	li->num[li->link].platforms	= 1;
+
+	li->num[li->link].codecs	= 1;
 
 	li->link += 1;
 
@@ -508,6 +547,11 @@ static int simple_count_dpcm(struct asoc_simple_priv *priv,
 	}
 
 	if (li->cpu) {
+		/*
+		 * DON'T REMOVE platforms
+		 * see
+		 *	simple_count_noml()
+		 */
 		li->num[li->link].cpus		= 1;
 		li->num[li->link].platforms	= 1;
 
@@ -600,6 +644,10 @@ static int simple_soc_probe(struct snd_soc_card *card)
 	if (ret < 0)
 		return ret;
 
+	ret = asoc_simple_init_aux_jacks(priv, PREFIX);
+	if (ret < 0)
+		return ret;
+
 	return 0;
 }
 
@@ -642,8 +690,7 @@ static int asoc_simple_probe(struct platform_device *pdev)
 
 		ret = simple_parse_of(priv, li);
 		if (ret < 0) {
-			if (ret != -EPROBE_DEFER)
-				dev_err(dev, "parse error %d\n", ret);
+			dev_err_probe(dev, ret, "parse error\n");
 			goto err;
 		}
 

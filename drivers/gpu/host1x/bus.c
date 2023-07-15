@@ -5,6 +5,7 @@
  */
 
 #include <linux/debugfs.h>
+#include <linux/dma-mapping.h>
 #include <linux/host1x.h>
 #include <linux/of.h>
 #include <linux/seq_file.h>
@@ -337,7 +338,7 @@ static int host1x_device_match(struct device *dev, struct device_driver *drv)
 	return strcmp(dev_name(dev), drv->name) == 0;
 }
 
-static int host1x_device_uevent(struct device *dev,
+static int host1x_device_uevent(const struct device *dev,
 				struct kobj_uevent_env *env)
 {
 	struct device_node *np = dev->parent->of_node;
@@ -742,6 +743,7 @@ EXPORT_SYMBOL(host1x_driver_unregister);
  */
 void __host1x_client_init(struct host1x_client *client, struct lock_class_key *key)
 {
+	host1x_bo_cache_init(&client->cache);
 	INIT_LIST_HEAD(&client->list);
 	__mutex_init(&client->lock, "host1x client lock", key);
 	client->usecount = 0;
@@ -761,7 +763,6 @@ EXPORT_SYMBOL(host1x_client_exit);
 /**
  * __host1x_client_register() - register a host1x client
  * @client: host1x client
- * @key: lock class key for the client-specific mutex
  *
  * Registers a host1x client with each host1x controller instance. Note that
  * each client will only match their parent host1x controller and will only be
@@ -802,7 +803,7 @@ EXPORT_SYMBOL(__host1x_client_register);
  * Removes a host1x client from its host1x controller instance. If a logical
  * device has already been initialized, it will be torn down.
  */
-int host1x_client_unregister(struct host1x_client *client)
+void host1x_client_unregister(struct host1x_client *client)
 {
 	struct host1x_client *c;
 	struct host1x *host1x;
@@ -814,7 +815,7 @@ int host1x_client_unregister(struct host1x_client *client)
 		err = host1x_del_client(host1x, client);
 		if (!err) {
 			mutex_unlock(&devices_lock);
-			return 0;
+			return;
 		}
 	}
 
@@ -830,7 +831,7 @@ int host1x_client_unregister(struct host1x_client *client)
 
 	mutex_unlock(&clients_lock);
 
-	return 0;
+	host1x_bo_cache_destroy(&client->cache);
 }
 EXPORT_SYMBOL(host1x_client_unregister);
 
@@ -904,3 +905,78 @@ unlock:
 	return err;
 }
 EXPORT_SYMBOL(host1x_client_resume);
+
+struct host1x_bo_mapping *host1x_bo_pin(struct device *dev, struct host1x_bo *bo,
+					enum dma_data_direction dir,
+					struct host1x_bo_cache *cache)
+{
+	struct host1x_bo_mapping *mapping;
+
+	if (cache) {
+		mutex_lock(&cache->lock);
+
+		list_for_each_entry(mapping, &cache->mappings, entry) {
+			if (mapping->bo == bo && mapping->direction == dir) {
+				kref_get(&mapping->ref);
+				goto unlock;
+			}
+		}
+	}
+
+	mapping = bo->ops->pin(dev, bo, dir);
+	if (IS_ERR(mapping))
+		goto unlock;
+
+	spin_lock(&mapping->bo->lock);
+	list_add_tail(&mapping->list, &bo->mappings);
+	spin_unlock(&mapping->bo->lock);
+
+	if (cache) {
+		INIT_LIST_HEAD(&mapping->entry);
+		mapping->cache = cache;
+
+		list_add_tail(&mapping->entry, &cache->mappings);
+
+		/* bump reference count to track the copy in the cache */
+		kref_get(&mapping->ref);
+	}
+
+unlock:
+	if (cache)
+		mutex_unlock(&cache->lock);
+
+	return mapping;
+}
+EXPORT_SYMBOL(host1x_bo_pin);
+
+static void __host1x_bo_unpin(struct kref *ref)
+{
+	struct host1x_bo_mapping *mapping = to_host1x_bo_mapping(ref);
+
+	/*
+	 * When the last reference of the mapping goes away, make sure to remove the mapping from
+	 * the cache.
+	 */
+	if (mapping->cache)
+		list_del(&mapping->entry);
+
+	spin_lock(&mapping->bo->lock);
+	list_del(&mapping->list);
+	spin_unlock(&mapping->bo->lock);
+
+	mapping->bo->ops->unpin(mapping);
+}
+
+void host1x_bo_unpin(struct host1x_bo_mapping *mapping)
+{
+	struct host1x_bo_cache *cache = mapping->cache;
+
+	if (cache)
+		mutex_lock(&cache->lock);
+
+	kref_put(&mapping->ref, __host1x_bo_unpin);
+
+	if (cache)
+		mutex_unlock(&cache->lock);
+}
+EXPORT_SYMBOL(host1x_bo_unpin);

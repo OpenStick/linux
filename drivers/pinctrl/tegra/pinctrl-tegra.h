@@ -15,6 +15,8 @@ struct tegra_pmx {
 	const struct tegra_pinctrl_soc_data *soc;
 	const char **group_pins;
 
+	struct pinctrl_gpio_range gpio_range;
+	struct pinctrl_desc desc;
 	int nbanks;
 	void __iomem **regs;
 	u32 *backup_regs;
@@ -118,6 +120,7 @@ struct tegra_function {
  * @slwr_width:		Slew Rising field width.
  * @slwf_bit:		Slew Falling register bit.
  * @slwf_width:		Slew Falling field width.
+ * @lpdr_bit:		Base driver enabling bit.
  * @drvtype_bit:	Drive type register bit.
  * @parked_bitmask:	Parked register mask. 0 if unsupported.
  *
@@ -161,6 +164,7 @@ struct tegra_pingroup {
 	s32 drvup_bit:6;
 	s32 slwr_bit:6;
 	s32 slwf_bit:6;
+	s32 lpdr_bit:6;
 	s32 drvtype_bit:6;
 	s32 drvdn_width:6;
 	s32 drvup_width:6;

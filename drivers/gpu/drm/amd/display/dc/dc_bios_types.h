@@ -140,7 +140,8 @@ struct dc_vbios_funcs {
 	enum bp_result (*enable_lvtma_control)(
 		struct dc_bios *bios,
 		uint8_t uc_pwr_on,
-		uint8_t panel_instance);
+		uint8_t panel_instance,
+		uint8_t bypass_panel_control_wait);
 
 	enum bp_result (*get_soc_bb_info)(
 		struct dc_bios *dcb,
@@ -156,6 +157,11 @@ struct dc_vbios_funcs {
 	enum bp_result (*get_lttpr_interop)(
 			struct dc_bios *dcb,
 			uint8_t *dce_caps);
+
+	enum bp_result (*get_connector_speed_cap_info)(
+		struct dc_bios *bios,
+		struct graphics_object_id object_id,
+		struct bp_connector_speed_cap_info *info);
 };
 
 struct bios_registers {

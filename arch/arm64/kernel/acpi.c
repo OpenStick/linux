@@ -13,6 +13,7 @@
 #define pr_fmt(fmt) "ACPI: " fmt
 
 #include <linux/acpi.h>
+#include <linux/arm-smccc.h>
 #include <linux/cpumask.h>
 #include <linux/efi.h>
 #include <linux/efi-bgrt.h>
@@ -22,6 +23,7 @@
 #include <linux/irq_work.h>
 #include <linux/memblock.h>
 #include <linux/of_fdt.h>
+#include <linux/libfdt.h>
 #include <linux/smp.h>
 #include <linux/serial_core.h>
 #include <linux/pgtable.h>
@@ -62,29 +64,22 @@ static int __init parse_acpi(char *arg)
 }
 early_param("acpi", parse_acpi);
 
-static int __init dt_scan_depth1_nodes(unsigned long node,
-				       const char *uname, int depth,
-				       void *data)
+static bool __init dt_is_stub(void)
 {
-	/*
-	 * Ignore anything not directly under the root node; we'll
-	 * catch its parent instead.
-	 */
-	if (depth != 1)
-		return 0;
+	int node;
 
-	if (strcmp(uname, "chosen") == 0)
-		return 0;
+	fdt_for_each_subnode(node, initial_boot_params, 0) {
+		const char *name = fdt_get_name(initial_boot_params, node, NULL);
+		if (strcmp(name, "chosen") == 0)
+			continue;
+		if (strcmp(name, "hypervisor") == 0 &&
+		    of_flat_dt_is_compatible(node, "xen,xen"))
+			continue;
 
-	if (strcmp(uname, "hypervisor") == 0 &&
-	    of_flat_dt_is_compatible(node, "xen,xen"))
-		return 0;
+		return false;
+	}
 
-	/*
-	 * This node at depth 1 is neither a chosen node nor a xen node,
-	 * which we do not expect.
-	 */
-	return 1;
+	return true;
 }
 
 /*
@@ -205,8 +200,7 @@ void __init acpi_boot_table_init(void)
 	 *   and ACPI has not been [force] enabled (acpi=on|force)
 	 */
 	if (param_acpi_off ||
-	    (!param_acpi_on && !param_acpi_force &&
-	     of_scan_flat_dt(dt_scan_depth1_nodes, NULL)))
+	    (!param_acpi_on && !param_acpi_force && !dt_is_stub()))
 		goto done;
 
 	/*
@@ -358,7 +352,7 @@ void __iomem *acpi_os_ioremap(acpi_physical_address phys, acpi_size size)
 				prot = __acpi_get_writethrough_mem_attribute();
 		}
 	}
-	return __ioremap(phys, size, prot);
+	return ioremap_prot(phys, size, pgprot_val(prot));
 }
 
 /*
@@ -418,3 +412,108 @@ void arch_reserve_mem_area(acpi_physical_address addr, size_t size)
 {
 	memblock_mark_nomap(addr, size);
 }
+
+#ifdef CONFIG_ACPI_FFH
+/*
+ * Implements ARM64 specific callbacks to support ACPI FFH Operation Region as
+ * specified in https://developer.arm.com/docs/den0048/latest
+ */
+struct acpi_ffh_data {
+	struct acpi_ffh_info info;
+	void (*invoke_ffh_fn)(unsigned long a0, unsigned long a1,
+			      unsigned long a2, unsigned long a3,
+			      unsigned long a4, unsigned long a5,
+			      unsigned long a6, unsigned long a7,
+			      struct arm_smccc_res *args,
+			      struct arm_smccc_quirk *res);
+	void (*invoke_ffh64_fn)(const struct arm_smccc_1_2_regs *args,
+				struct arm_smccc_1_2_regs *res);
+};
+
+int acpi_ffh_address_space_arch_setup(void *handler_ctxt, void **region_ctxt)
+{
+	enum arm_smccc_conduit conduit;
+	struct acpi_ffh_data *ffh_ctxt;
+
+	if (arm_smccc_get_version() < ARM_SMCCC_VERSION_1_2)
+		return -EOPNOTSUPP;
+
+	conduit = arm_smccc_1_1_get_conduit();
+	if (conduit == SMCCC_CONDUIT_NONE) {
+		pr_err("%s: invalid SMCCC conduit\n", __func__);
+		return -EOPNOTSUPP;
+	}
+
+	ffh_ctxt = kzalloc(sizeof(*ffh_ctxt), GFP_KERNEL);
+	if (!ffh_ctxt)
+		return -ENOMEM;
+
+	if (conduit == SMCCC_CONDUIT_SMC) {
+		ffh_ctxt->invoke_ffh_fn = __arm_smccc_smc;
+		ffh_ctxt->invoke_ffh64_fn = arm_smccc_1_2_smc;
+	} else {
+		ffh_ctxt->invoke_ffh_fn = __arm_smccc_hvc;
+		ffh_ctxt->invoke_ffh64_fn = arm_smccc_1_2_hvc;
+	}
+
+	memcpy(ffh_ctxt, handler_ctxt, sizeof(ffh_ctxt->info));
+
+	*region_ctxt = ffh_ctxt;
+	return AE_OK;
+}
+
+static bool acpi_ffh_smccc_owner_allowed(u32 fid)
+{
+	int owner = ARM_SMCCC_OWNER_NUM(fid);
+
+	if (owner == ARM_SMCCC_OWNER_STANDARD ||
+	    owner == ARM_SMCCC_OWNER_SIP || owner == ARM_SMCCC_OWNER_OEM)
+		return true;
+
+	return false;
+}
+
+int acpi_ffh_address_space_arch_handler(acpi_integer *value, void *region_context)
+{
+	int ret = 0;
+	struct acpi_ffh_data *ffh_ctxt = region_context;
+
+	if (ffh_ctxt->info.offset == 0) {
+		/* SMC/HVC 32bit call */
+		struct arm_smccc_res res;
+		u32 a[8] = { 0 }, *ptr = (u32 *)value;
+
+		if (!ARM_SMCCC_IS_FAST_CALL(*ptr) || ARM_SMCCC_IS_64(*ptr) ||
+		    !acpi_ffh_smccc_owner_allowed(*ptr) ||
+		    ffh_ctxt->info.length > 32) {
+			ret = AE_ERROR;
+		} else {
+			int idx, len = ffh_ctxt->info.length >> 2;
+
+			for (idx = 0; idx < len; idx++)
+				a[idx] = *(ptr + idx);
+
+			ffh_ctxt->invoke_ffh_fn(a[0], a[1], a[2], a[3], a[4],
+						a[5], a[6], a[7], &res, NULL);
+			memcpy(value, &res, sizeof(res));
+		}
+
+	} else if (ffh_ctxt->info.offset == 1) {
+		/* SMC/HVC 64bit call */
+		struct arm_smccc_1_2_regs *r = (struct arm_smccc_1_2_regs *)value;
+
+		if (!ARM_SMCCC_IS_FAST_CALL(r->a0) || !ARM_SMCCC_IS_64(r->a0) ||
+		    !acpi_ffh_smccc_owner_allowed(r->a0) ||
+		    ffh_ctxt->info.length > sizeof(*r)) {
+			ret = AE_ERROR;
+		} else {
+			ffh_ctxt->invoke_ffh64_fn(r, r);
+			memcpy(value, r, ffh_ctxt->info.length);
+		}
+	} else {
+		ret = AE_ERROR;
+	}
+
+	return ret;
+}
+#endif /* CONFIG_ACPI_FFH */

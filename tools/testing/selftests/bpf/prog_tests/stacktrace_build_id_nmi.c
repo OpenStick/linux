@@ -2,21 +2,6 @@
 #include <test_progs.h>
 #include "test_stacktrace_build_id.skel.h"
 
-static __u64 read_perf_max_sample_freq(void)
-{
-	__u64 sample_freq = 5000; /* fallback to 5000 on error */
-	FILE *f;
-	__u32 duration = 0;
-
-	f = fopen("/proc/sys/kernel/perf_event_max_sample_rate", "r");
-	if (f == NULL)
-		return sample_freq;
-	CHECK(fscanf(f, "%llu", &sample_freq) != 1, "Get max sample rate",
-		  "return default value: 5000,err %d\n", -errno);
-	fclose(f);
-	return sample_freq;
-}
-
 void test_stacktrace_build_id_nmi(void)
 {
 	int control_map_fd, stackid_hmap_fd, stackmap_fd;
@@ -27,12 +12,11 @@ void test_stacktrace_build_id_nmi(void)
 		.type = PERF_TYPE_HARDWARE,
 		.config = PERF_COUNT_HW_CPU_CYCLES,
 	};
-	__u32 key, previous_key, val, duration = 0;
-	char buf[256];
-	int i, j;
+	__u32 key, prev_key, val, duration = 0;
+	char buf[BPF_BUILD_ID_SIZE];
 	struct bpf_stack_build_id id_offs[PERF_MAX_STACK_DEPTH];
-	int build_id_matches = 0;
-	int retry = 1;
+	int build_id_matches = 0, build_id_size;
+	int i, retry = 1;
 
 	attr.sample_freq = read_perf_max_sample_freq();
 
@@ -42,7 +26,7 @@ retry:
 		return;
 
 	/* override program type */
-	bpf_program__set_perf_event(skel->progs.oncpu);
+	bpf_program__set_type(skel->progs.oncpu, BPF_PROG_TYPE_PERF_EVENT);
 
 	err = test_stacktrace_build_id__load(skel);
 	if (CHECK(err, "skel_load", "skeleton load failed: %d\n", err))
@@ -94,35 +78,32 @@ retry:
 		  "err %d errno %d\n", err, errno))
 		goto cleanup;
 
-	err = extract_build_id(buf, 256);
+	build_id_size = read_build_id("urandom_read", buf, sizeof(buf));
+	err = build_id_size < 0 ? build_id_size : 0;
 
 	if (CHECK(err, "get build_id with readelf",
 		  "err %d errno %d\n", err, errno))
 		goto cleanup;
 
-	err = bpf_map_get_next_key(stackmap_fd, NULL, &key);
+	err = bpf_map__get_next_key(skel->maps.stackmap, NULL, &key, sizeof(key));
 	if (CHECK(err, "get_next_key from stackmap",
 		  "err %d, errno %d\n", err, errno))
 		goto cleanup;
 
 	do {
-		char build_id[64];
-
-		err = bpf_map_lookup_elem(stackmap_fd, &key, id_offs);
+		err = bpf_map__lookup_elem(skel->maps.stackmap, &key, sizeof(key),
+					   id_offs, sizeof(id_offs), 0);
 		if (CHECK(err, "lookup_elem from stackmap",
 			  "err %d, errno %d\n", err, errno))
 			goto cleanup;
 		for (i = 0; i < PERF_MAX_STACK_DEPTH; ++i)
 			if (id_offs[i].status == BPF_STACK_BUILD_ID_VALID &&
 			    id_offs[i].offset != 0) {
-				for (j = 0; j < 20; ++j)
-					sprintf(build_id + 2 * j, "%02x",
-						id_offs[i].build_id[j] & 0xff);
-				if (strstr(buf, build_id) != NULL)
+				if (memcmp(buf, id_offs[i].build_id, build_id_size) == 0)
 					build_id_matches = 1;
 			}
-		previous_key = key;
-	} while (bpf_map_get_next_key(stackmap_fd, &previous_key, &key) == 0);
+		prev_key = key;
+	} while (bpf_map__get_next_key(skel->maps.stackmap, &prev_key, &key, sizeof(key)) == 0);
 
 	/* stack_map_get_build_id_offset() is racy and sometimes can return
 	 * BPF_STACK_BUILD_ID_IP instead of BPF_STACK_BUILD_ID_VALID;

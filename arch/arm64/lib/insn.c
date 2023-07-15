@@ -20,91 +20,6 @@
 #define AARCH64_INSN_N_BIT	BIT(22)
 #define AARCH64_INSN_LSL_12	BIT(22)
 
-static const int aarch64_insn_encoding_class[] = {
-	AARCH64_INSN_CLS_UNKNOWN,
-	AARCH64_INSN_CLS_UNKNOWN,
-	AARCH64_INSN_CLS_SVE,
-	AARCH64_INSN_CLS_UNKNOWN,
-	AARCH64_INSN_CLS_LDST,
-	AARCH64_INSN_CLS_DP_REG,
-	AARCH64_INSN_CLS_LDST,
-	AARCH64_INSN_CLS_DP_FPSIMD,
-	AARCH64_INSN_CLS_DP_IMM,
-	AARCH64_INSN_CLS_DP_IMM,
-	AARCH64_INSN_CLS_BR_SYS,
-	AARCH64_INSN_CLS_BR_SYS,
-	AARCH64_INSN_CLS_LDST,
-	AARCH64_INSN_CLS_DP_REG,
-	AARCH64_INSN_CLS_LDST,
-	AARCH64_INSN_CLS_DP_FPSIMD,
-};
-
-enum aarch64_insn_encoding_class __kprobes aarch64_get_insn_class(u32 insn)
-{
-	return aarch64_insn_encoding_class[(insn >> 25) & 0xf];
-}
-
-bool __kprobes aarch64_insn_is_steppable_hint(u32 insn)
-{
-	if (!aarch64_insn_is_hint(insn))
-		return false;
-
-	switch (insn & 0xFE0) {
-	case AARCH64_INSN_HINT_XPACLRI:
-	case AARCH64_INSN_HINT_PACIA_1716:
-	case AARCH64_INSN_HINT_PACIB_1716:
-	case AARCH64_INSN_HINT_PACIAZ:
-	case AARCH64_INSN_HINT_PACIASP:
-	case AARCH64_INSN_HINT_PACIBZ:
-	case AARCH64_INSN_HINT_PACIBSP:
-	case AARCH64_INSN_HINT_BTI:
-	case AARCH64_INSN_HINT_BTIC:
-	case AARCH64_INSN_HINT_BTIJ:
-	case AARCH64_INSN_HINT_BTIJC:
-	case AARCH64_INSN_HINT_NOP:
-		return true;
-	default:
-		return false;
-	}
-}
-
-bool aarch64_insn_is_branch_imm(u32 insn)
-{
-	return (aarch64_insn_is_b(insn) || aarch64_insn_is_bl(insn) ||
-		aarch64_insn_is_tbz(insn) || aarch64_insn_is_tbnz(insn) ||
-		aarch64_insn_is_cbz(insn) || aarch64_insn_is_cbnz(insn) ||
-		aarch64_insn_is_bcond(insn));
-}
-
-bool __kprobes aarch64_insn_uses_literal(u32 insn)
-{
-	/* ldr/ldrsw (literal), prfm */
-
-	return aarch64_insn_is_ldr_lit(insn) ||
-		aarch64_insn_is_ldrsw_lit(insn) ||
-		aarch64_insn_is_adr_adrp(insn) ||
-		aarch64_insn_is_prfm_lit(insn);
-}
-
-bool __kprobes aarch64_insn_is_branch(u32 insn)
-{
-	/* b, bl, cb*, tb*, ret*, b.cond, br*, blr* */
-
-	return aarch64_insn_is_b(insn) ||
-		aarch64_insn_is_bl(insn) ||
-		aarch64_insn_is_cbz(insn) ||
-		aarch64_insn_is_cbnz(insn) ||
-		aarch64_insn_is_tbz(insn) ||
-		aarch64_insn_is_tbnz(insn) ||
-		aarch64_insn_is_ret(insn) ||
-		aarch64_insn_is_ret_auth(insn) ||
-		aarch64_insn_is_br(insn) ||
-		aarch64_insn_is_br_auth(insn) ||
-		aarch64_insn_is_blr(insn) ||
-		aarch64_insn_is_blr_auth(insn) ||
-		aarch64_insn_is_bcond(insn);
-}
-
 static int __kprobes aarch64_get_imm_shift_mask(enum aarch64_insn_imm_type type,
 						u32 *maskp, int *shiftp)
 {
@@ -299,36 +214,31 @@ static u32 aarch64_insn_encode_register(enum aarch64_insn_register_type type,
 	return insn;
 }
 
+static const u32 aarch64_insn_ldst_size[] = {
+	[AARCH64_INSN_SIZE_8] = 0,
+	[AARCH64_INSN_SIZE_16] = 1,
+	[AARCH64_INSN_SIZE_32] = 2,
+	[AARCH64_INSN_SIZE_64] = 3,
+};
+
 static u32 aarch64_insn_encode_ldst_size(enum aarch64_insn_size_type type,
 					 u32 insn)
 {
 	u32 size;
 
-	switch (type) {
-	case AARCH64_INSN_SIZE_8:
-		size = 0;
-		break;
-	case AARCH64_INSN_SIZE_16:
-		size = 1;
-		break;
-	case AARCH64_INSN_SIZE_32:
-		size = 2;
-		break;
-	case AARCH64_INSN_SIZE_64:
-		size = 3;
-		break;
-	default:
+	if (type < AARCH64_INSN_SIZE_8 || type > AARCH64_INSN_SIZE_64) {
 		pr_err("%s: unknown size encoding %d\n", __func__, type);
 		return AARCH64_BREAK_FAULT;
 	}
 
+	size = aarch64_insn_ldst_size[type];
 	insn &= ~GENMASK(31, 30);
 	insn |= size << 30;
 
 	return insn;
 }
 
-static inline long branch_imm_common(unsigned long pc, unsigned long addr,
+static inline long label_imm_common(unsigned long pc, unsigned long addr,
 				     long range)
 {
 	long offset;
@@ -359,7 +269,7 @@ u32 __kprobes aarch64_insn_gen_branch_imm(unsigned long pc, unsigned long addr,
 	 * ARM64 virtual address arrangement guarantees all kernel and module
 	 * texts are within +/-128M.
 	 */
-	offset = branch_imm_common(pc, addr, SZ_128M);
+	offset = label_imm_common(pc, addr, SZ_128M);
 	if (offset >= SZ_128M)
 		return AARCH64_BREAK_FAULT;
 
@@ -387,7 +297,7 @@ u32 aarch64_insn_gen_comp_branch_imm(unsigned long pc, unsigned long addr,
 	u32 insn;
 	long offset;
 
-	offset = branch_imm_common(pc, addr, SZ_1M);
+	offset = label_imm_common(pc, addr, SZ_1M);
 	if (offset >= SZ_1M)
 		return AARCH64_BREAK_FAULT;
 
@@ -426,7 +336,7 @@ u32 aarch64_insn_gen_cond_branch_imm(unsigned long pc, unsigned long addr,
 	u32 insn;
 	long offset;
 
-	offset = branch_imm_common(pc, addr, SZ_1M);
+	offset = label_imm_common(pc, addr, SZ_1M);
 
 	insn = aarch64_insn_get_bcond_value();
 
@@ -438,16 +348,6 @@ u32 aarch64_insn_gen_cond_branch_imm(unsigned long pc, unsigned long addr,
 
 	return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_19, insn,
 					     offset >> 2);
-}
-
-u32 __kprobes aarch64_insn_gen_hint(enum aarch64_insn_hint_cr_op op)
-{
-	return aarch64_insn_get_hint_value() | op;
-}
-
-u32 __kprobes aarch64_insn_gen_nop(void)
-{
-	return aarch64_insn_gen_hint(AARCH64_INSN_HINT_NOP);
 }
 
 u32 aarch64_insn_gen_branch_reg(enum aarch64_insn_register reg,
@@ -502,6 +402,72 @@ u32 aarch64_insn_gen_load_store_reg(enum aarch64_insn_register reg,
 
 	return aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RM, insn,
 					    offset);
+}
+
+u32 aarch64_insn_gen_load_store_imm(enum aarch64_insn_register reg,
+				    enum aarch64_insn_register base,
+				    unsigned int imm,
+				    enum aarch64_insn_size_type size,
+				    enum aarch64_insn_ldst_type type)
+{
+	u32 insn;
+	u32 shift;
+
+	if (size < AARCH64_INSN_SIZE_8 || size > AARCH64_INSN_SIZE_64) {
+		pr_err("%s: unknown size encoding %d\n", __func__, type);
+		return AARCH64_BREAK_FAULT;
+	}
+
+	shift = aarch64_insn_ldst_size[size];
+	if (imm & ~(BIT(12 + shift) - BIT(shift))) {
+		pr_err("%s: invalid imm: %d\n", __func__, imm);
+		return AARCH64_BREAK_FAULT;
+	}
+
+	imm >>= shift;
+
+	switch (type) {
+	case AARCH64_INSN_LDST_LOAD_IMM_OFFSET:
+		insn = aarch64_insn_get_ldr_imm_value();
+		break;
+	case AARCH64_INSN_LDST_STORE_IMM_OFFSET:
+		insn = aarch64_insn_get_str_imm_value();
+		break;
+	default:
+		pr_err("%s: unknown load/store encoding %d\n", __func__, type);
+		return AARCH64_BREAK_FAULT;
+	}
+
+	insn = aarch64_insn_encode_ldst_size(size, insn);
+
+	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RT, insn, reg);
+
+	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RN, insn,
+					    base);
+
+	return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_12, insn, imm);
+}
+
+u32 aarch64_insn_gen_load_literal(unsigned long pc, unsigned long addr,
+				  enum aarch64_insn_register reg,
+				  bool is64bit)
+{
+	u32 insn;
+	long offset;
+
+	offset = label_imm_common(pc, addr, SZ_1M);
+	if (offset >= SZ_1M)
+		return AARCH64_BREAK_FAULT;
+
+	insn = aarch64_insn_get_ldr_lit_value();
+
+	if (is64bit)
+		insn |= BIT(30);
+
+	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RT, insn, reg);
+
+	return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_19, insn,
+					     offset >> 2);
 }
 
 u32 aarch64_insn_gen_load_store_pair(enum aarch64_insn_register reg1,
@@ -578,10 +544,16 @@ u32 aarch64_insn_gen_load_store_ex(enum aarch64_insn_register reg,
 
 	switch (type) {
 	case AARCH64_INSN_LDST_LOAD_EX:
+	case AARCH64_INSN_LDST_LOAD_ACQ_EX:
 		insn = aarch64_insn_get_load_ex_value();
+		if (type == AARCH64_INSN_LDST_LOAD_ACQ_EX)
+			insn |= BIT(15);
 		break;
 	case AARCH64_INSN_LDST_STORE_EX:
+	case AARCH64_INSN_LDST_STORE_REL_EX:
 		insn = aarch64_insn_get_store_ex_value();
+		if (type == AARCH64_INSN_LDST_STORE_REL_EX)
+			insn |= BIT(15);
 		break;
 	default:
 		pr_err("%s: unknown load/store exclusive encoding %d\n", __func__, type);
@@ -603,12 +575,65 @@ u32 aarch64_insn_gen_load_store_ex(enum aarch64_insn_register reg,
 					    state);
 }
 
-u32 aarch64_insn_gen_ldadd(enum aarch64_insn_register result,
-			   enum aarch64_insn_register address,
-			   enum aarch64_insn_register value,
-			   enum aarch64_insn_size_type size)
+#ifdef CONFIG_ARM64_LSE_ATOMICS
+static u32 aarch64_insn_encode_ldst_order(enum aarch64_insn_mem_order_type type,
+					  u32 insn)
 {
-	u32 insn = aarch64_insn_get_ldadd_value();
+	u32 order;
+
+	switch (type) {
+	case AARCH64_INSN_MEM_ORDER_NONE:
+		order = 0;
+		break;
+	case AARCH64_INSN_MEM_ORDER_ACQ:
+		order = 2;
+		break;
+	case AARCH64_INSN_MEM_ORDER_REL:
+		order = 1;
+		break;
+	case AARCH64_INSN_MEM_ORDER_ACQREL:
+		order = 3;
+		break;
+	default:
+		pr_err("%s: unknown mem order %d\n", __func__, type);
+		return AARCH64_BREAK_FAULT;
+	}
+
+	insn &= ~GENMASK(23, 22);
+	insn |= order << 22;
+
+	return insn;
+}
+
+u32 aarch64_insn_gen_atomic_ld_op(enum aarch64_insn_register result,
+				  enum aarch64_insn_register address,
+				  enum aarch64_insn_register value,
+				  enum aarch64_insn_size_type size,
+				  enum aarch64_insn_mem_atomic_op op,
+				  enum aarch64_insn_mem_order_type order)
+{
+	u32 insn;
+
+	switch (op) {
+	case AARCH64_INSN_MEM_ATOMIC_ADD:
+		insn = aarch64_insn_get_ldadd_value();
+		break;
+	case AARCH64_INSN_MEM_ATOMIC_CLR:
+		insn = aarch64_insn_get_ldclr_value();
+		break;
+	case AARCH64_INSN_MEM_ATOMIC_EOR:
+		insn = aarch64_insn_get_ldeor_value();
+		break;
+	case AARCH64_INSN_MEM_ATOMIC_SET:
+		insn = aarch64_insn_get_ldset_value();
+		break;
+	case AARCH64_INSN_MEM_ATOMIC_SWP:
+		insn = aarch64_insn_get_swp_value();
+		break;
+	default:
+		pr_err("%s: unimplemented mem atomic op %d\n", __func__, op);
+		return AARCH64_BREAK_FAULT;
+	}
 
 	switch (size) {
 	case AARCH64_INSN_SIZE_32:
@@ -621,6 +646,8 @@ u32 aarch64_insn_gen_ldadd(enum aarch64_insn_register result,
 
 	insn = aarch64_insn_encode_ldst_size(size, insn);
 
+	insn = aarch64_insn_encode_ldst_order(order, insn);
+
 	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RT, insn,
 					    result);
 
@@ -631,87 +658,68 @@ u32 aarch64_insn_gen_ldadd(enum aarch64_insn_register result,
 					    value);
 }
 
-u32 aarch64_insn_gen_stadd(enum aarch64_insn_register address,
-			   enum aarch64_insn_register value,
-			   enum aarch64_insn_size_type size)
+static u32 aarch64_insn_encode_cas_order(enum aarch64_insn_mem_order_type type,
+					 u32 insn)
 {
-	/*
-	 * STADD is simply encoded as an alias for LDADD with XZR as
-	 * the destination register.
-	 */
-	return aarch64_insn_gen_ldadd(AARCH64_INSN_REG_ZR, address,
-				      value, size);
-}
-
-static u32 aarch64_insn_encode_prfm_imm(enum aarch64_insn_prfm_type type,
-					enum aarch64_insn_prfm_target target,
-					enum aarch64_insn_prfm_policy policy,
-					u32 insn)
-{
-	u32 imm_type = 0, imm_target = 0, imm_policy = 0;
+	u32 order;
 
 	switch (type) {
-	case AARCH64_INSN_PRFM_TYPE_PLD:
+	case AARCH64_INSN_MEM_ORDER_NONE:
+		order = 0;
 		break;
-	case AARCH64_INSN_PRFM_TYPE_PLI:
-		imm_type = BIT(0);
+	case AARCH64_INSN_MEM_ORDER_ACQ:
+		order = BIT(22);
 		break;
-	case AARCH64_INSN_PRFM_TYPE_PST:
-		imm_type = BIT(1);
+	case AARCH64_INSN_MEM_ORDER_REL:
+		order = BIT(15);
+		break;
+	case AARCH64_INSN_MEM_ORDER_ACQREL:
+		order = BIT(15) | BIT(22);
 		break;
 	default:
-		pr_err("%s: unknown prfm type encoding %d\n", __func__, type);
+		pr_err("%s: unknown mem order %d\n", __func__, type);
 		return AARCH64_BREAK_FAULT;
 	}
 
-	switch (target) {
-	case AARCH64_INSN_PRFM_TARGET_L1:
-		break;
-	case AARCH64_INSN_PRFM_TARGET_L2:
-		imm_target = BIT(0);
-		break;
-	case AARCH64_INSN_PRFM_TARGET_L3:
-		imm_target = BIT(1);
-		break;
-	default:
-		pr_err("%s: unknown prfm target encoding %d\n", __func__, target);
-		return AARCH64_BREAK_FAULT;
-	}
-
-	switch (policy) {
-	case AARCH64_INSN_PRFM_POLICY_KEEP:
-		break;
-	case AARCH64_INSN_PRFM_POLICY_STRM:
-		imm_policy = BIT(0);
-		break;
-	default:
-		pr_err("%s: unknown prfm policy encoding %d\n", __func__, policy);
-		return AARCH64_BREAK_FAULT;
-	}
-
-	/* In this case, imm5 is encoded into Rt field. */
-	insn &= ~GENMASK(4, 0);
-	insn |= imm_policy | (imm_target << 1) | (imm_type << 3);
+	insn &= ~(BIT(15) | BIT(22));
+	insn |= order;
 
 	return insn;
 }
 
-u32 aarch64_insn_gen_prefetch(enum aarch64_insn_register base,
-			      enum aarch64_insn_prfm_type type,
-			      enum aarch64_insn_prfm_target target,
-			      enum aarch64_insn_prfm_policy policy)
+u32 aarch64_insn_gen_cas(enum aarch64_insn_register result,
+			 enum aarch64_insn_register address,
+			 enum aarch64_insn_register value,
+			 enum aarch64_insn_size_type size,
+			 enum aarch64_insn_mem_order_type order)
 {
-	u32 insn = aarch64_insn_get_prfm_value();
+	u32 insn;
 
-	insn = aarch64_insn_encode_ldst_size(AARCH64_INSN_SIZE_64, insn);
+	switch (size) {
+	case AARCH64_INSN_SIZE_32:
+	case AARCH64_INSN_SIZE_64:
+		break;
+	default:
+		pr_err("%s: unimplemented size encoding %d\n", __func__, size);
+		return AARCH64_BREAK_FAULT;
+	}
 
-	insn = aarch64_insn_encode_prfm_imm(type, target, policy, insn);
+	insn = aarch64_insn_get_cas_value();
+
+	insn = aarch64_insn_encode_ldst_size(size, insn);
+
+	insn = aarch64_insn_encode_cas_order(order, insn);
+
+	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RT, insn,
+					    result);
 
 	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RN, insn,
-					    base);
+					    address);
 
-	return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_12, insn, 0);
+	return aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RS, insn,
+					    value);
 }
+#endif
 
 u32 aarch64_insn_gen_add_sub_imm(enum aarch64_insn_register dst,
 				 enum aarch64_insn_register src,
@@ -1379,7 +1387,7 @@ static u32 aarch64_encode_immediate(u64 imm,
 		 * Compute the rotation to get a continuous set of
 		 * ones, with the first bit set at position 0
 		 */
-		ror = fls(~imm);
+		ror = fls64(~imm);
 	}
 
 	/*
@@ -1455,4 +1463,49 @@ u32 aarch64_insn_gen_extr(enum aarch64_insn_variant variant,
 	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RD, insn, Rd);
 	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RN, insn, Rn);
 	return aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RM, insn, Rm);
+}
+
+u32 aarch64_insn_gen_dmb(enum aarch64_insn_mb_type type)
+{
+	u32 opt;
+	u32 insn;
+
+	switch (type) {
+	case AARCH64_INSN_MB_SY:
+		opt = 0xf;
+		break;
+	case AARCH64_INSN_MB_ST:
+		opt = 0xe;
+		break;
+	case AARCH64_INSN_MB_LD:
+		opt = 0xd;
+		break;
+	case AARCH64_INSN_MB_ISH:
+		opt = 0xb;
+		break;
+	case AARCH64_INSN_MB_ISHST:
+		opt = 0xa;
+		break;
+	case AARCH64_INSN_MB_ISHLD:
+		opt = 0x9;
+		break;
+	case AARCH64_INSN_MB_NSH:
+		opt = 0x7;
+		break;
+	case AARCH64_INSN_MB_NSHST:
+		opt = 0x6;
+		break;
+	case AARCH64_INSN_MB_NSHLD:
+		opt = 0x5;
+		break;
+	default:
+		pr_err("%s: unknown dmb type %d\n", __func__, type);
+		return AARCH64_BREAK_FAULT;
+	}
+
+	insn = aarch64_insn_get_dmb_value();
+	insn &= ~GENMASK(11, 8);
+	insn |= (opt << 8);
+
+	return insn;
 }

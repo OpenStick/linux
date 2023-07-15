@@ -226,9 +226,9 @@ static int byt_wm5102_init(struct snd_soc_pcm_runtime *runtime)
 
 	jack_type = ARIZONA_JACK_MASK | SND_JACK_BTN_0 | SND_JACK_BTN_1 |
 		    SND_JACK_BTN_2 | SND_JACK_BTN_3;
-	ret = snd_soc_card_jack_new(card, "Headset", jack_type,
-				    &priv->jack, byt_wm5102_pins,
-				    ARRAY_SIZE(byt_wm5102_pins));
+	ret = snd_soc_card_jack_new_pins(card, "Headset", jack_type,
+					 &priv->jack, byt_wm5102_pins,
+					 ARRAY_SIZE(byt_wm5102_pins));
 	if (ret) {
 		dev_err(card->dev, "Error creating jack: %d\n", ret);
 		return ret;
@@ -248,7 +248,7 @@ static int byt_wm5102_codec_fixup(struct snd_soc_pcm_runtime *rtd,
 							  SNDRV_PCM_HW_PARAM_CHANNELS);
 	int ret;
 
-	/* The DSP will covert the FE rate to 48k, stereo */
+	/* The DSP will convert the FE rate to 48k, stereo */
 	rate->min = 48000;
 	rate->max = 48000;
 	channels->min = 2;
@@ -265,7 +265,7 @@ static int byt_wm5102_codec_fixup(struct snd_soc_pcm_runtime *rtd,
 	ret = snd_soc_dai_set_fmt(asoc_rtd_to_cpu(rtd, 0),
 				  SND_SOC_DAIFMT_I2S     |
 				  SND_SOC_DAIFMT_NB_NF   |
-				  SND_SOC_DAIFMT_CBS_CFS);
+				  SND_SOC_DAIFMT_BP_FP);
 	if (ret) {
 		dev_err(rtd->dev, "Error setting format to I2S: %d\n", ret);
 		return ret;
@@ -349,7 +349,7 @@ static struct snd_soc_dai_link byt_wm5102_dais[] = {
 		.id = 0,
 		.no_pcm = 1,
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
-						| SND_SOC_DAIFMT_CBS_CFS,
+						| SND_SOC_DAIFMT_CBC_CFC,
 		.be_hw_params_fixup = byt_wm5102_codec_fixup,
 		.dpcm_playback = 1,
 		.dpcm_capture = 1,
@@ -389,7 +389,7 @@ static int snd_byt_wm5102_mc_probe(struct platform_device *pdev)
 	bool sof_parent;
 	int ret;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_ATOMIC);
+	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 
@@ -411,9 +411,9 @@ static int snd_byt_wm5102_mc_probe(struct platform_device *pdev)
 		return -ENOENT;
 	}
 	snprintf(codec_name, sizeof(codec_name), "spi-%s", acpi_dev_name(adev));
-	put_device(&adev->dev);
 
 	codec_dev = bus_find_device_by_name(&spi_bus_type, NULL, codec_name);
+	acpi_dev_put(adev);
 	if (!codec_dev)
 		return -EPROBE_DEFER;
 
@@ -421,8 +421,17 @@ static int snd_byt_wm5102_mc_probe(struct platform_device *pdev)
 	priv->spkvdd_en_gpio = gpiod_get(codec_dev, "wlf,spkvdd-ena", GPIOD_OUT_LOW);
 	put_device(codec_dev);
 
-	if (IS_ERR(priv->spkvdd_en_gpio))
-		return dev_err_probe(dev, PTR_ERR(priv->spkvdd_en_gpio), "getting spkvdd-GPIO\n");
+	if (IS_ERR(priv->spkvdd_en_gpio)) {
+		ret = PTR_ERR(priv->spkvdd_en_gpio);
+		/*
+		 * The spkvdd gpio-lookup is registered by: drivers/mfd/arizona-spi.c,
+		 * so -ENOENT means that arizona-spi hasn't probed yet.
+		 */
+		if (ret == -ENOENT)
+			ret = -EPROBE_DEFER;
+
+		return dev_err_probe(dev, ret, "getting spkvdd-GPIO\n");
+	}
 
 	/* override platform name, if required */
 	byt_wm5102_card.dev = dev;
@@ -457,13 +466,12 @@ out_put_gpio:
 	return ret;
 }
 
-static int snd_byt_wm5102_mc_remove(struct platform_device *pdev)
+static void snd_byt_wm5102_mc_remove(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
 	struct byt_wm5102_private *priv = snd_soc_card_get_drvdata(card);
 
 	gpiod_put(priv->spkvdd_en_gpio);
-	return 0;
 }
 
 static struct platform_driver snd_byt_wm5102_mc_driver = {
@@ -471,7 +479,7 @@ static struct platform_driver snd_byt_wm5102_mc_driver = {
 		.name = "bytcr_wm5102",
 	},
 	.probe = snd_byt_wm5102_mc_probe,
-	.remove = snd_byt_wm5102_mc_remove,
+	.remove_new = snd_byt_wm5102_mc_remove,
 };
 
 module_platform_driver(snd_byt_wm5102_mc_driver);

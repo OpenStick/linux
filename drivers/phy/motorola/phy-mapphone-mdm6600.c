@@ -629,11 +629,12 @@ idle:
 cleanup:
 	if (error < 0)
 		phy_mdm6600_device_power_off(ddata);
-
+	pm_runtime_disable(ddata->dev);
+	pm_runtime_dont_use_autosuspend(ddata->dev);
 	return error;
 }
 
-static int phy_mdm6600_remove(struct platform_device *pdev)
+static void phy_mdm6600_remove(struct platform_device *pdev)
 {
 	struct phy_mdm6600 *ddata = platform_get_drvdata(pdev);
 	struct gpio_desc *reset_gpio = ddata->ctrl_gpios[PHY_MDM6600_RESET];
@@ -652,13 +653,11 @@ static int phy_mdm6600_remove(struct platform_device *pdev)
 	cancel_delayed_work_sync(&ddata->modem_wake_work);
 	cancel_delayed_work_sync(&ddata->bootup_work);
 	cancel_delayed_work_sync(&ddata->status_work);
-
-	return 0;
 }
 
 static struct platform_driver phy_mdm6600_driver = {
 	.probe = phy_mdm6600_probe,
-	.remove = phy_mdm6600_remove,
+	.remove_new = phy_mdm6600_remove,
 	.driver = {
 		.name = "phy-mapphone-mdm6600",
 		.pm = &phy_mdm6600_pm_ops,

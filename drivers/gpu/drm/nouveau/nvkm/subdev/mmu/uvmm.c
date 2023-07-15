@@ -39,7 +39,7 @@ nvkm_uvmm_search(struct nvkm_client *client, u64 handle)
 	if (IS_ERR(object))
 		return (void *)object;
 
-	return nvkm_uvmm(object)->vmm;
+	return nvkm_vmm_ref(nvkm_uvmm(object)->vmm);
 }
 
 static int
@@ -299,7 +299,7 @@ nvkm_uvmm_mthd_page(struct nvkm_uvmm *uvmm, void *argv, u32 argc)
 	page = uvmm->vmm->func->page;
 	for (nr = 0; page[nr].shift; nr++);
 
-	if (!(ret = nvif_unpack(ret, &argv, &argc, args->v0, 0, 0, false))) {
+	if (!(nvif_unpack(ret, &argv, &argc, args->v0, 0, 0, false))) {
 		if ((index = args->v0.index) >= nr)
 			return -EINVAL;
 		type = page[index].type;

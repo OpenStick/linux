@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2021 FIXME
+// Copyright (c) 2023 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -24,29 +24,21 @@ static inline struct nt51017 *to_nt51017(struct drm_panel *panel)
 	return container_of(panel, struct nt51017, panel);
 }
 
-#define dsi_dcs_write_seq(dsi, seq...) do {				\
-		static const u8 d[] = { seq };				\
-		int ret;						\
-		ret = mipi_dsi_dcs_write_buffer(dsi, d, ARRAY_SIZE(d));	\
-		if (ret < 0)						\
-			return ret;					\
-	} while (0)
-
 static int nt51017_on(struct nt51017 *ctx)
 {
 	struct mipi_dsi_device *dsi = ctx->dsi;
 
-	dsi_dcs_write_seq(dsi, 0x83, 0x96);
-	dsi_dcs_write_seq(dsi, 0x84, 0x69);
-	dsi_dcs_write_seq(dsi, 0x92, 0x19);
-	dsi_dcs_write_seq(dsi, 0x95, 0x00);
-	dsi_dcs_write_seq(dsi, 0x83, 0x00);
-	dsi_dcs_write_seq(dsi, 0x84, 0x00);
-	dsi_dcs_write_seq(dsi, 0x90, 0x77);
-	dsi_dcs_write_seq(dsi, 0x94, 0xff);
-	dsi_dcs_write_seq(dsi, 0x96, 0xff);
-	dsi_dcs_write_seq(dsi, 0x91, 0xfd);
-	dsi_dcs_write_seq(dsi, 0x90, 0x77);
+	mipi_dsi_dcs_write_seq(dsi, 0x83, 0x96);
+	mipi_dsi_dcs_write_seq(dsi, 0x84, 0x69);
+	mipi_dsi_dcs_write_seq(dsi, 0x92, 0x19);
+	mipi_dsi_dcs_write_seq(dsi, 0x95, 0x00);
+	mipi_dsi_dcs_write_seq(dsi, 0x83, 0x00);
+	mipi_dsi_dcs_write_seq(dsi, 0x84, 0x00);
+	mipi_dsi_dcs_write_seq(dsi, 0x90, 0x77);
+	mipi_dsi_dcs_write_seq(dsi, 0x94, 0xff);
+	mipi_dsi_dcs_write_seq(dsi, 0x96, 0xff);
+	mipi_dsi_dcs_write_seq(dsi, 0x91, 0xfd);
+	mipi_dsi_dcs_write_seq(dsi, 0x90, 0x77);
 
 	return 0;
 }
@@ -163,7 +155,10 @@ static int nt51017_probe(struct mipi_dsi_device *dsi)
 	dsi->lanes = 4;
 	dsi->format = MIPI_DSI_FMT_RGB888;
 	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST |
-			  MIPI_DSI_MODE_NO_EOT_PACKET;
+			  MIPI_DSI_MODE_NO_EOT_PACKET |
+			  MIPI_DSI_MODE_VIDEO_NO_HFP |
+			  MIPI_DSI_MODE_VIDEO_NO_HBP |
+			  MIPI_DSI_MODE_VIDEO_NO_HSA;
 
 	drm_panel_init(&ctx->panel, dev, &nt51017_panel_funcs,
 		       DRM_MODE_CONNECTOR_DSI);
@@ -184,7 +179,7 @@ static int nt51017_probe(struct mipi_dsi_device *dsi)
 	return 0;
 }
 
-static int nt51017_remove(struct mipi_dsi_device *dsi)
+static void nt51017_remove(struct mipi_dsi_device *dsi)
 {
 	struct nt51017 *ctx = mipi_dsi_get_drvdata(dsi);
 	int ret;
@@ -194,8 +189,6 @@ static int nt51017_remove(struct mipi_dsi_device *dsi)
 		dev_err(&dsi->dev, "Failed to detach from DSI host: %d\n", ret);
 
 	drm_panel_remove(&ctx->panel);
-
-	return 0;
 }
 
 static const struct of_device_id nt51017_of_match[] = {
@@ -216,4 +209,4 @@ module_mipi_dsi_driver(nt51017_driver);
 
 MODULE_AUTHOR("linux-mdss-dsi-panel-driver-generator <fix@me>"); // FIXME
 MODULE_DESCRIPTION("DRM driver for NT51017 wxga video mode dsi panel");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

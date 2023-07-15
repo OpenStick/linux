@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2021 FIXME
+// Copyright (c) 2023 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -27,14 +27,6 @@ struct ea8061v_ams497ee01 *to_ea8061v_ams497ee01(struct drm_panel *panel)
 	return container_of(panel, struct ea8061v_ams497ee01, panel);
 }
 
-#define dsi_dcs_write_seq(dsi, seq...) do {				\
-		static const u8 d[] = { seq };				\
-		int ret;						\
-		ret = mipi_dsi_dcs_write_buffer(dsi, d, ARRAY_SIZE(d));	\
-		if (ret < 0)						\
-			return ret;					\
-	} while (0)
-
 static void ea8061v_ams497ee01_reset(struct ea8061v_ams497ee01 *ctx)
 {
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
@@ -53,23 +45,24 @@ static int ea8061v_ams497ee01_on(struct ea8061v_ams497ee01 *ctx)
 
 	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
-	dsi_dcs_write_seq(dsi, 0xf0, 0x5a, 0x5a);
-	dsi_dcs_write_seq(dsi, 0xf1, 0x5a, 0x5a);
-	dsi_dcs_write_seq(dsi, 0xb8, 0x19, 0x10);
-	dsi_dcs_write_seq(dsi, 0xba, 0x57);
-	dsi_dcs_write_seq(dsi, 0xfc, 0x5a, 0x5a);
-	dsi_dcs_write_seq(dsi, 0xb0, 0x0b);
-	dsi_dcs_write_seq(dsi, 0xd2, 0x00, 0x85);
-	dsi_dcs_write_seq(dsi, 0xcb, 0x70);
-	dsi_dcs_write_seq(dsi, 0xfc, 0xa5, 0xa5);
-	dsi_dcs_write_seq(dsi, 0xca,
-			  0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x80, 0x80, 0x80,
-			  0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
-			  0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
-			  0x80, 0x80, 0x80, 0x00, 0x00, 0x00);
-	dsi_dcs_write_seq(dsi, 0xb2, 0x00, 0x00, 0x00, 0x0a);
-	dsi_dcs_write_seq(dsi, 0xb6, 0x5c, 0x8a);
-	dsi_dcs_write_seq(dsi, 0xf7, 0x01);
+	mipi_dsi_dcs_write_seq(dsi, 0xf0, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq(dsi, 0xf1, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq(dsi, 0xb8, 0x19, 0x10);
+	mipi_dsi_dcs_write_seq(dsi, 0xba, 0x57);
+	mipi_dsi_dcs_write_seq(dsi, 0xfc, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq(dsi, 0xb0, 0x0b);
+	mipi_dsi_dcs_write_seq(dsi, 0xd2, 0x00, 0x85);
+	mipi_dsi_dcs_write_seq(dsi, 0xcb, 0x70);
+	mipi_dsi_dcs_write_seq(dsi, 0xfc, 0xa5, 0xa5);
+	mipi_dsi_dcs_write_seq(dsi, 0xca,
+			       0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x80, 0x80,
+			       0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+			       0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+			       0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00, 0x00,
+			       0x00);
+	mipi_dsi_dcs_write_seq(dsi, 0xb2, 0x00, 0x00, 0x00, 0x0a);
+	mipi_dsi_dcs_write_seq(dsi, 0xb6, 0x5c, 0x8a);
+	mipi_dsi_dcs_write_seq(dsi, 0xf7, 0x01);
 
 	ret = mipi_dsi_dcs_exit_sleep_mode(dsi);
 	if (ret < 0) {
@@ -78,7 +71,7 @@ static int ea8061v_ams497ee01_on(struct ea8061v_ams497ee01 *ctx)
 	}
 	msleep(120);
 
-	dsi_dcs_write_seq(dsi, 0xf1, 0xa5, 0xa5);
+	mipi_dsi_dcs_write_seq(dsi, 0xf1, 0xa5, 0xa5);
 
 	ret = mipi_dsi_dcs_set_display_on(dsi);
 	if (ret < 0) {
@@ -247,7 +240,7 @@ static int ea8061v_ams497ee01_probe(struct mipi_dsi_device *dsi)
 	return 0;
 }
 
-static int ea8061v_ams497ee01_remove(struct mipi_dsi_device *dsi)
+static void ea8061v_ams497ee01_remove(struct mipi_dsi_device *dsi)
 {
 	struct ea8061v_ams497ee01 *ctx = mipi_dsi_get_drvdata(dsi);
 	int ret;
@@ -257,8 +250,6 @@ static int ea8061v_ams497ee01_remove(struct mipi_dsi_device *dsi)
 		dev_err(&dsi->dev, "Failed to detach from DSI host: %d\n", ret);
 
 	drm_panel_remove(&ctx->panel);
-
-	return 0;
 }
 
 static const struct of_device_id ea8061v_ams497ee01_of_match[] = {
@@ -279,4 +270,4 @@ module_mipi_dsi_driver(ea8061v_ams497ee01_driver);
 
 MODULE_AUTHOR("linux-mdss-dsi-panel-driver-generator <fix@me>"); // FIXME
 MODULE_DESCRIPTION("DRM driver for ss_dsi_panel_EA8061V_AMS497EE01_HD");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

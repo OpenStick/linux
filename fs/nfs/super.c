@@ -149,7 +149,7 @@ int __init register_nfs_fs(void)
 	ret = nfs_register_sysctl();
 	if (ret < 0)
 		goto error_2;
-	ret = register_shrinker(&acl_shrinker);
+	ret = register_shrinker(&acl_shrinker, "nfs-acl");
 	if (ret < 0)
 		goto error_3;
 #ifdef CONFIG_NFS_V4_2
@@ -692,10 +692,6 @@ int nfs_show_stats(struct seq_file *m, struct dentry *root)
 			totals.events[i] += stats->events[i];
 		for (i = 0; i < __NFSIOS_BYTESMAX; i++)
 			totals.bytes[i] += stats->bytes[i];
-#ifdef CONFIG_NFS_FSCACHE
-		for (i = 0; i < __NFSIOS_FSCACHEMAX; i++)
-			totals.fscache[i] += stats->fscache[i];
-#endif
 
 		preempt_enable();
 	}
@@ -706,13 +702,6 @@ int nfs_show_stats(struct seq_file *m, struct dentry *root)
 	seq_puts(m, "\n\tbytes:\t");
 	for (i = 0; i < __NFSIOS_BYTESMAX; i++)
 		seq_printf(m, "%Lu ", totals.bytes[i]);
-#ifdef CONFIG_NFS_FSCACHE
-	if (nfss->options & NFS_OPTION_FSCACHE) {
-		seq_puts(m, "\n\tfsc:\t");
-		for (i = 0; i < __NFSIOS_FSCACHEMAX; i++)
-			seq_printf(m, "%Lu ", totals.fscache[i]);
-	}
-#endif
 	seq_putc(m, '\n');
 
 	rpc_clnt_show_stats(m, nfss->client);
@@ -822,8 +811,7 @@ static int nfs_request_mount(struct fs_context *fc,
 {
 	struct nfs_fs_context *ctx = nfs_fc2context(fc);
 	struct nfs_mount_request request = {
-		.sap		= (struct sockaddr *)
-						&ctx->mount_server.address,
+		.sap		= &ctx->mount_server._address,
 		.dirpath	= ctx->nfs_server.export_path,
 		.protocol	= ctx->mount_server.protocol,
 		.fh		= root_fh,
@@ -854,7 +842,7 @@ static int nfs_request_mount(struct fs_context *fc,
 	 * Construct the mount server's address.
 	 */
 	if (ctx->mount_server.address.sa_family == AF_UNSPEC) {
-		memcpy(request.sap, &ctx->nfs_server.address,
+		memcpy(request.sap, &ctx->nfs_server._address,
 		       ctx->nfs_server.addrlen);
 		ctx->mount_server.addrlen = ctx->nfs_server.addrlen;
 	}
@@ -1004,6 +992,7 @@ int nfs_reconfigure(struct fs_context *fc)
 	struct nfs_fs_context *ctx = nfs_fc2context(fc);
 	struct super_block *sb = fc->root->d_sb;
 	struct nfs_server *nfss = sb->s_fs_info;
+	int ret;
 
 	sync_filesystem(sb);
 
@@ -1028,7 +1017,11 @@ int nfs_reconfigure(struct fs_context *fc)
 	}
 
 	/* compare new mount options with old ones */
-	return nfs_compare_remount_data(nfss, ctx);
+	ret = nfs_compare_remount_data(nfss, ctx);
+	if (ret)
+		return ret;
+
+	return nfs_probe_server(nfss, NFS_FH(d_inode(fc->root)));
 }
 EXPORT_SYMBOL_GPL(nfs_reconfigure);
 
@@ -1046,22 +1039,31 @@ static void nfs_fill_super(struct super_block *sb, struct nfs_fs_context *ctx)
 	if (ctx->bsize)
 		sb->s_blocksize = nfs_block_size(ctx->bsize, &sb->s_blocksize_bits);
 
-	if (server->nfs_client->rpc_ops->version != 2) {
-		/* The VFS shouldn't apply the umask to mode bits. We will do
-		 * so ourselves when necessary.
+	switch (server->nfs_client->rpc_ops->version) {
+	case 2:
+		sb->s_time_gran = 1000;
+		sb->s_time_min = 0;
+		sb->s_time_max = U32_MAX;
+		break;
+	case 3:
+		/*
+		 * The VFS shouldn't apply the umask to mode bits.
+		 * We will do so ourselves when necessary.
 		 */
 		sb->s_flags |= SB_POSIXACL;
 		sb->s_time_gran = 1;
-		sb->s_export_op = &nfs_export_ops;
-	} else
-		sb->s_time_gran = 1000;
-
-	if (server->nfs_client->rpc_ops->version != 4) {
 		sb->s_time_min = 0;
 		sb->s_time_max = U32_MAX;
-	} else {
+		sb->s_export_op = &nfs_export_ops;
+		break;
+	case 4:
+		sb->s_flags |= SB_POSIXACL;
+		sb->s_time_gran = 1;
 		sb->s_time_min = S64_MIN;
 		sb->s_time_max = S64_MAX;
+		if (server->caps & NFS_CAP_ATOMIC_OPEN_V1)
+			sb->s_export_op = &nfs_export_ops;
+		break;
 	}
 
 	sb->s_magic = NFS_SUPER_MAGIC;
@@ -1199,42 +1201,42 @@ static int nfs_compare_super(struct super_block *sb, struct fs_context *fc)
 }
 
 #ifdef CONFIG_NFS_FSCACHE
-static void nfs_get_cache_cookie(struct super_block *sb,
-				 struct nfs_fs_context *ctx)
+static int nfs_get_cache_cookie(struct super_block *sb,
+				struct nfs_fs_context *ctx)
 {
 	struct nfs_server *nfss = NFS_SB(sb);
 	char *uniq = NULL;
 	int ulen = 0;
 
-	nfss->fscache_key = NULL;
 	nfss->fscache = NULL;
 
 	if (!ctx)
-		return;
+		return 0;
 
 	if (ctx->clone_data.sb) {
 		struct nfs_server *mnt_s = NFS_SB(ctx->clone_data.sb);
 		if (!(mnt_s->options & NFS_OPTION_FSCACHE))
-			return;
-		if (mnt_s->fscache_key) {
-			uniq = mnt_s->fscache_key->key.uniquifier;
-			ulen = mnt_s->fscache_key->key.uniq_len;
+			return 0;
+		if (mnt_s->fscache_uniq) {
+			uniq = mnt_s->fscache_uniq;
+			ulen = strlen(uniq);
 		}
 	} else {
 		if (!(ctx->options & NFS_OPTION_FSCACHE))
-			return;
+			return 0;
 		if (ctx->fscache_uniq) {
 			uniq = ctx->fscache_uniq;
 			ulen = strlen(ctx->fscache_uniq);
 		}
 	}
 
-	nfs_fscache_get_super_cookie(sb, uniq, ulen);
+	return nfs_fscache_get_super_cookie(sb, uniq, ulen);
 }
 #else
-static void nfs_get_cache_cookie(struct super_block *sb,
-				 struct nfs_fs_context *ctx)
+static int nfs_get_cache_cookie(struct super_block *sb,
+				struct nfs_fs_context *ctx)
 {
+	return 0;
 }
 #endif
 
@@ -1260,9 +1262,6 @@ int nfs_get_tree_common(struct fs_context *fc)
 	if (ctx->clone_data.sb)
 		if (ctx->clone_data.sb->s_flags & SB_SYNCHRONOUS)
 			fc->sb_flags |= SB_SYNCHRONOUS;
-
-	if (server->caps & NFS_CAP_SECURITY_LABEL)
-		fc->lsm_flags |= SECURITY_LSM_NATIVE_LABELS;
 
 	/* Get a superblock - note that we may end up sharing one that already exists */
 	fc->s_fs_info = server;
@@ -1294,7 +1293,9 @@ int nfs_get_tree_common(struct fs_context *fc)
 			s->s_blocksize_bits = bsize;
 			s->s_blocksize = 1U << bsize;
 		}
-		nfs_get_cache_cookie(s, ctx);
+		error = nfs_get_cache_cookie(s, ctx);
+		if (error < 0)
+			goto error_splat_super;
 	}
 
 	error = nfs_get_root(s, fc);

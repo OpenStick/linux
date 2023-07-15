@@ -136,14 +136,17 @@ void noinstr do_io_irq(struct pt_regs *regs)
 {
 	irqentry_state_t state = irqentry_enter(regs);
 	struct pt_regs *old_regs = set_irq_regs(regs);
-	int from_idle;
+	bool from_idle;
 
-	irq_enter();
+	irq_enter_rcu();
 
-	if (user_mode(regs))
+	if (user_mode(regs)) {
 		update_timer_sys();
+		if (static_branch_likely(&cpu_has_bear))
+			current->thread.last_break = regs->last_break;
+	}
 
-	from_idle = !user_mode(regs) && regs->psw.addr == (unsigned long)psw_idle_exit;
+	from_idle = test_and_clear_cpu_flag(CIF_ENABLED_WAIT);
 	if (from_idle)
 		account_idle_time_irq();
 
@@ -155,7 +158,8 @@ void noinstr do_io_irq(struct pt_regs *regs)
 			do_irq_async(regs, IO_INTERRUPT);
 	} while (MACHINE_IS_LPAR && irq_pending(regs));
 
-	irq_exit();
+	irq_exit_rcu();
+
 	set_irq_regs(old_regs);
 	irqentry_exit(regs, state);
 
@@ -167,24 +171,27 @@ void noinstr do_ext_irq(struct pt_regs *regs)
 {
 	irqentry_state_t state = irqentry_enter(regs);
 	struct pt_regs *old_regs = set_irq_regs(regs);
-	int from_idle;
+	bool from_idle;
 
-	irq_enter();
+	irq_enter_rcu();
 
-	if (user_mode(regs))
+	if (user_mode(regs)) {
 		update_timer_sys();
+		if (static_branch_likely(&cpu_has_bear))
+			current->thread.last_break = regs->last_break;
+	}
 
 	regs->int_code = S390_lowcore.ext_int_code_addr;
 	regs->int_parm = S390_lowcore.ext_params;
 	regs->int_parm_long = S390_lowcore.ext_params2;
 
-	from_idle = !user_mode(regs) && regs->psw.addr == (unsigned long)psw_idle_exit;
+	from_idle = test_and_clear_cpu_flag(CIF_ENABLED_WAIT);
 	if (from_idle)
 		account_idle_time_irq();
 
 	do_irq_async(regs, EXT_INTERRUPT);
 
-	irq_exit();
+	irq_exit_rcu();
 	set_irq_regs(old_regs);
 	irqentry_exit(regs, state);
 
@@ -198,7 +205,7 @@ static void show_msi_interrupt(struct seq_file *p, int irq)
 	unsigned long flags;
 	int cpu;
 
-	irq_lock_sparse();
+	rcu_read_lock();
 	desc = irq_to_desc(irq);
 	if (!desc)
 		goto out;
@@ -217,7 +224,7 @@ static void show_msi_interrupt(struct seq_file *p, int irq)
 	seq_putc(p, '\n');
 	raw_spin_unlock_irqrestore(&desc->lock, flags);
 out:
-	irq_unlock_sparse();
+	rcu_read_unlock();
 }
 
 /*
@@ -335,7 +342,7 @@ static irqreturn_t do_ext_interrupt(int irq, void *dummy)
 	struct ext_int_info *p;
 	int index;
 
-	ext_code = *(struct ext_code *) &regs->int_code;
+	ext_code.int_code = regs->int_code;
 	if (ext_code.code != EXT_IRQ_CLK_COMP)
 		set_cpu_flag(CIF_NOHZ_DELAY);
 

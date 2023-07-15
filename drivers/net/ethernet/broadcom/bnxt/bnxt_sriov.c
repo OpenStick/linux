@@ -307,7 +307,7 @@ int bnxt_set_vf_bw(struct net_device *dev, int vf_id, int min_tx_rate,
 		return -EINVAL;
 	}
 
-	if (min_tx_rate > pf_link_speed || min_tx_rate > max_tx_rate) {
+	if (min_tx_rate > pf_link_speed) {
 		netdev_info(bp->dev, "min tx rate %d is invalid for VF %d\n",
 			    min_tx_rate, vf_id);
 		return -EINVAL;
@@ -623,7 +623,7 @@ static int bnxt_hwrm_func_vf_resc_cfg(struct bnxt *bp, int num_vfs, bool reset)
 		hw_resc->max_stat_ctxs -= le16_to_cpu(req->min_stat_ctx) * n;
 		hw_resc->max_vnics -= le16_to_cpu(req->min_vnics) * n;
 		if (bp->flags & BNXT_FLAG_CHIP_P5)
-			hw_resc->max_irqs -= vf_msix * n;
+			hw_resc->max_nqs -= vf_msix;
 
 		rc = pf->active_vfs;
 	}
@@ -749,7 +749,6 @@ int bnxt_cfg_hw_sriov(struct bnxt *bp, int *num_vfs, bool reset)
 		*num_vfs = rc;
 	}
 
-	bnxt_ulp_sriov_cfg(bp, *num_vfs);
 	return 0;
 }
 
@@ -826,11 +825,30 @@ static int bnxt_sriov_enable(struct bnxt *bp, int *num_vfs)
 	if (rc)
 		goto err_out2;
 
+	if (bp->eswitch_mode != DEVLINK_ESWITCH_MODE_SWITCHDEV)
+		return 0;
+
+	/* Create representors for VFs in switchdev mode */
+	devl_lock(bp->dl);
+	rc = bnxt_vf_reps_create(bp);
+	devl_unlock(bp->dl);
+	if (rc) {
+		netdev_info(bp->dev, "Cannot enable VFS as representors cannot be created\n");
+		goto err_out3;
+	}
+
 	return 0;
+
+err_out3:
+	/* Disable SR-IOV */
+	pci_disable_sriov(bp->pdev);
 
 err_out2:
 	/* Free the resources reserved for various VF's */
 	bnxt_hwrm_func_vf_resource_free(bp, *num_vfs);
+
+	/* Restore the max resources */
+	bnxt_hwrm_func_qcaps(bp);
 
 err_out1:
 	bnxt_free_vf_resources(bp);
@@ -846,7 +864,7 @@ void bnxt_sriov_disable(struct bnxt *bp)
 		return;
 
 	/* synchronize VF and VF-rep create and destroy */
-	mutex_lock(&bp->sriov_lock);
+	devl_lock(bp->dl);
 	bnxt_vf_reps_destroy(bp);
 
 	if (pci_vfs_assigned(bp->pdev)) {
@@ -859,7 +877,7 @@ void bnxt_sriov_disable(struct bnxt *bp)
 		/* Free the HW resources reserved for various VF's */
 		bnxt_hwrm_func_vf_resource_free(bp, num_vfs);
 	}
-	mutex_unlock(&bp->sriov_lock);
+	devl_unlock(bp->dl);
 
 	bnxt_free_vf_resources(bp);
 
@@ -867,8 +885,6 @@ void bnxt_sriov_disable(struct bnxt *bp)
 	rtnl_lock();
 	bnxt_restore_pf_fw_resources(bp);
 	rtnl_unlock();
-
-	bnxt_ulp_sriov_cfg(bp, 0);
 }
 
 int bnxt_sriov_configure(struct pci_dev *pdev, int num_vfs)
@@ -1151,7 +1167,7 @@ void bnxt_hwrm_exec_fwd_req(struct bnxt *bp)
 	}
 }
 
-int bnxt_approve_mac(struct bnxt *bp, u8 *mac, bool strict)
+int bnxt_approve_mac(struct bnxt *bp, const u8 *mac, bool strict)
 {
 	struct hwrm_func_vf_cfg_input *req;
 	int rc = 0;
@@ -1217,7 +1233,7 @@ void bnxt_update_vf_mac(struct bnxt *bp)
 
 	/* overwrite netdev dev_addr with admin VF MAC */
 	if (is_valid_ether_addr(bp->vf.mac_addr))
-		memcpy(bp->dev->dev_addr, bp->vf.mac_addr, ETH_ALEN);
+		eth_hw_addr_set(bp->dev, bp->vf.mac_addr);
 update_vf_mac_exit:
 	hwrm_req_drop(bp, req);
 	if (inform_pf)
@@ -1246,7 +1262,7 @@ void bnxt_update_vf_mac(struct bnxt *bp)
 {
 }
 
-int bnxt_approve_mac(struct bnxt *bp, u8 *mac, bool strict)
+int bnxt_approve_mac(struct bnxt *bp, const u8 *mac, bool strict)
 {
 	return 0;
 }

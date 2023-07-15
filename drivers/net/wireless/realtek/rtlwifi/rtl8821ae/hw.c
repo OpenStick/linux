@@ -26,8 +26,10 @@ static void _rtl8821ae_return_beacon_queue_skb(struct ieee80211_hw *hw)
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 	struct rtl_pci *rtlpci = rtl_pcidev(rtl_pcipriv(hw));
 	struct rtl8192_tx_ring *ring = &rtlpci->tx_ring[BEACON_QUEUE];
+	struct sk_buff_head free_list;
 	unsigned long flags;
 
+	skb_queue_head_init(&free_list);
 	spin_lock_irqsave(&rtlpriv->locks.irq_th_lock, flags);
 	while (skb_queue_len(&ring->queue)) {
 		struct rtl_tx_desc *entry = &ring->desc[ring->idx];
@@ -37,10 +39,12 @@ static void _rtl8821ae_return_beacon_queue_skb(struct ieee80211_hw *hw)
 				 rtlpriv->cfg->ops->get_desc(hw, (u8 *)entry,
 						true, HW_DESC_TXBUFF_ADDR),
 				 skb->len, DMA_TO_DEVICE);
-		kfree_skb(skb);
+		__skb_queue_tail(&free_list, skb);
 		ring->idx = (ring->idx + 1) % ring->entries;
 	}
 	spin_unlock_irqrestore(&rtlpriv->locks.irq_th_lock, flags);
+
+	__skb_queue_purge(&free_list);
 }
 
 static void _rtl8821ae_set_bcn_ctrl_reg(struct ieee80211_hw *hw,
@@ -3300,20 +3304,20 @@ static void rtl8821ae_update_hal_rate_table(struct ieee80211_hw *hw,
 	u16 shortgi_rate;
 	u32 tmp_ratr_value;
 	u8 curtxbw_40mhz = mac->bw_40;
-	u8 b_curshortgi_40mhz = (sta->ht_cap.cap & IEEE80211_HT_CAP_SGI_40) ?
+	u8 b_curshortgi_40mhz = (sta->deflink.ht_cap.cap & IEEE80211_HT_CAP_SGI_40) ?
 				1 : 0;
-	u8 b_curshortgi_20mhz = (sta->ht_cap.cap & IEEE80211_HT_CAP_SGI_20) ?
+	u8 b_curshortgi_20mhz = (sta->deflink.ht_cap.cap & IEEE80211_HT_CAP_SGI_20) ?
 				1 : 0;
 	enum wireless_mode wirelessmode = mac->mode;
 
 	if (rtlhal->current_bandtype == BAND_ON_5G)
-		ratr_value = sta->supp_rates[1] << 4;
+		ratr_value = sta->deflink.supp_rates[1] << 4;
 	else
-		ratr_value = sta->supp_rates[0];
+		ratr_value = sta->deflink.supp_rates[0];
 	if (mac->opmode == NL80211_IFTYPE_ADHOC)
 		ratr_value = 0xfff;
-	ratr_value |= (sta->ht_cap.mcs.rx_mask[1] << 20 |
-			sta->ht_cap.mcs.rx_mask[0] << 12);
+	ratr_value |= (sta->deflink.ht_cap.mcs.rx_mask[1] << 20 |
+			sta->deflink.ht_cap.mcs.rx_mask[0] << 12);
 	switch (wirelessmode) {
 	case WIRELESS_MODE_B:
 		if (ratr_value & 0x0000000c)
@@ -3484,12 +3488,12 @@ static bool _rtl8821ae_get_ra_shortgi(struct ieee80211_hw *hw, struct ieee80211_
 			      u8 mac_id)
 {
 	bool b_short_gi = false;
-	u8 b_curshortgi_40mhz = (sta->ht_cap.cap & IEEE80211_HT_CAP_SGI_40) ?
+	u8 b_curshortgi_40mhz = (sta->deflink.ht_cap.cap & IEEE80211_HT_CAP_SGI_40) ?
 				1 : 0;
-	u8 b_curshortgi_20mhz = (sta->ht_cap.cap & IEEE80211_HT_CAP_SGI_20) ?
+	u8 b_curshortgi_20mhz = (sta->deflink.ht_cap.cap & IEEE80211_HT_CAP_SGI_20) ?
 				1 : 0;
 	u8 b_curshortgi_80mhz = 0;
-	b_curshortgi_80mhz = (sta->vht_cap.cap &
+	b_curshortgi_80mhz = (sta->deflink.vht_cap.cap &
 			      IEEE80211_VHT_CAP_SHORT_GI_80) ? 1 : 0;
 
 	if (mac_id == MAC_ID_STATIC_FOR_BROADCAST_MULTICAST)
@@ -3512,7 +3516,7 @@ static void rtl8821ae_update_hal_rate_mask(struct ieee80211_hw *hw,
 	u32 ratr_bitmap;
 	u8 ratr_index;
 	enum wireless_mode wirelessmode = 0;
-	u8 curtxbw_40mhz = (sta->ht_cap.cap & IEEE80211_HT_CAP_SUP_WIDTH_20_40)
+	u8 curtxbw_40mhz = (sta->deflink.ht_cap.cap & IEEE80211_HT_CAP_SUP_WIDTH_20_40)
 				? 1 : 0;
 	bool b_shortgi = false;
 	u8 rate_mask[7];
@@ -3534,22 +3538,22 @@ static void rtl8821ae_update_hal_rate_mask(struct ieee80211_hw *hw,
 	if (wirelessmode == WIRELESS_MODE_N_5G ||
 	    wirelessmode == WIRELESS_MODE_AC_5G ||
 	    wirelessmode == WIRELESS_MODE_A)
-		ratr_bitmap = sta->supp_rates[NL80211_BAND_5GHZ] << 4;
+		ratr_bitmap = sta->deflink.supp_rates[NL80211_BAND_5GHZ] << 4;
 	else
-		ratr_bitmap = sta->supp_rates[NL80211_BAND_2GHZ];
+		ratr_bitmap = sta->deflink.supp_rates[NL80211_BAND_2GHZ];
 
 	if (mac->opmode == NL80211_IFTYPE_ADHOC)
 		ratr_bitmap = 0xfff;
 
 	if (wirelessmode == WIRELESS_MODE_N_24G
 		|| wirelessmode == WIRELESS_MODE_N_5G)
-		ratr_bitmap |= (sta->ht_cap.mcs.rx_mask[1] << 20 |
-				sta->ht_cap.mcs.rx_mask[0] << 12);
+		ratr_bitmap |= (sta->deflink.ht_cap.mcs.rx_mask[1] << 20 |
+				sta->deflink.ht_cap.mcs.rx_mask[0] << 12);
 	else if (wirelessmode == WIRELESS_MODE_AC_24G
 		|| wirelessmode == WIRELESS_MODE_AC_5G
 		|| wirelessmode == WIRELESS_MODE_AC_ONLY)
 		ratr_bitmap |= _rtl8821ae_rate_to_bitmap_2ssvht(
-				sta->vht_cap.vht_mcs.rx_mcs_map) << 12;
+				sta->deflink.vht_cap.vht_mcs.rx_mcs_map) << 12;
 
 	b_shortgi = _rtl8821ae_get_ra_shortgi(hw, sta, macid);
 	rf_type = _rtl8821ae_get_ra_rftype(hw, wirelessmode, ratr_bitmap);

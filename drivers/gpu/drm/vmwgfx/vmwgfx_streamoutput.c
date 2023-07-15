@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR MIT
 /**************************************************************************
  *
- * Copyright © 2018-2019 VMware, Inc., Palo Alto, CA., USA
+ * Copyright © 2018-2023 VMware, Inc., Palo Alto, CA., USA
  * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -26,11 +26,12 @@
  *
  **************************************************************************/
 
-#include <drm/ttm/ttm_placement.h>
-
+#include "vmwgfx_binding.h"
+#include "vmwgfx_bo.h"
 #include "vmwgfx_drv.h"
 #include "vmwgfx_resource_priv.h"
-#include "vmwgfx_binding.h"
+
+#include <drm/ttm/ttm_placement.h>
 
 /**
  * struct vmw_dx_streamoutput - Streamoutput resource metadata.
@@ -60,14 +61,13 @@ static int vmw_dx_streamoutput_unbind(struct vmw_resource *res, bool readback,
 static void vmw_dx_streamoutput_commit_notify(struct vmw_resource *res,
 					      enum vmw_cmdbuf_res_state state);
 
-static size_t vmw_streamoutput_size;
-
 static const struct vmw_res_func vmw_dx_streamoutput_func = {
 	.res_type = vmw_res_streamoutput,
-	.needs_backup = true,
+	.needs_guest_memory = true,
 	.may_evict = false,
 	.type_name = "DX streamoutput",
-	.backup_placement = &vmw_mob_placement,
+	.domain = VMW_BO_DOMAIN_MOB,
+	.busy_domain = VMW_BO_DOMAIN_MOB,
 	.create = vmw_dx_streamoutput_create,
 	.destroy = NULL, /* Command buffer managed resource. */
 	.bind = vmw_dx_streamoutput_bind,
@@ -106,8 +106,8 @@ static int vmw_dx_streamoutput_unscrub(struct vmw_resource *res)
 	cmd->header.id = SVGA_3D_CMD_DX_BIND_STREAMOUTPUT;
 	cmd->header.size = sizeof(cmd->body);
 	cmd->body.soid = so->id;
-	cmd->body.mobid = res->backup->base.resource->start;
-	cmd->body.offsetInBytes = res->backup_offset;
+	cmd->body.mobid = res->guest_memory_bo->tbo.resource->start;
+	cmd->body.offsetInBytes = res->guest_memory_offset;
 	cmd->body.sizeInBytes = so->size;
 	vmw_cmd_commit(dev_priv, sizeof(*cmd));
 
@@ -197,7 +197,7 @@ static int vmw_dx_streamoutput_unbind(struct vmw_resource *res, bool readback,
 	struct vmw_fence_obj *fence;
 	int ret;
 
-	if (WARN_ON(res->backup->base.resource->mem_type != VMW_PL_MOB))
+	if (WARN_ON(res->guest_memory_bo->tbo.resource->mem_type != VMW_PL_MOB))
 		return -EINVAL;
 
 	mutex_lock(&dev_priv->binding_mutex);
@@ -254,12 +254,10 @@ vmw_dx_streamoutput_lookup(struct vmw_cmdbuf_res_manager *man,
 
 static void vmw_dx_streamoutput_res_free(struct vmw_resource *res)
 {
-	struct vmw_private *dev_priv = res->dev_priv;
 	struct vmw_dx_streamoutput *so = vmw_res_to_dx_streamoutput(res);
 
 	vmw_resource_unreference(&so->cotable);
 	kfree(so);
-	ttm_mem_global_free(vmw_mem_glob(dev_priv), vmw_streamoutput_size);
 }
 
 static void vmw_dx_streamoutput_hw_destroy(struct vmw_resource *res)
@@ -284,27 +282,10 @@ int vmw_dx_streamoutput_add(struct vmw_cmdbuf_res_manager *man,
 	struct vmw_dx_streamoutput *so;
 	struct vmw_resource *res;
 	struct vmw_private *dev_priv = ctx->dev_priv;
-	struct ttm_operation_ctx ttm_opt_ctx = {
-		.interruptible = true,
-		.no_wait_gpu = false
-	};
 	int ret;
-
-	if (!vmw_streamoutput_size)
-		vmw_streamoutput_size = ttm_round_pot(sizeof(*so));
-
-	ret = ttm_mem_global_alloc(vmw_mem_glob(dev_priv),
-				   vmw_streamoutput_size, &ttm_opt_ctx);
-	if (ret) {
-		if (ret != -ERESTARTSYS)
-			DRM_ERROR("Out of graphics memory for streamout.\n");
-		return ret;
-	}
 
 	so = kmalloc(sizeof(*so), GFP_KERNEL);
 	if (!so) {
-		ttm_mem_global_free(vmw_mem_glob(dev_priv),
-				    vmw_streamoutput_size);
 		return -ENOMEM;
 	}
 

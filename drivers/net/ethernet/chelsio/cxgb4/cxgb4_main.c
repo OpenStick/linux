@@ -51,7 +51,6 @@
 #include <linux/mutex.h>
 #include <linux/netdevice.h>
 #include <linux/pci.h>
-#include <linux/aer.h>
 #include <linux/rtnetlink.h>
 #include <linux/sched.h>
 #include <linux/seq_file.h>
@@ -3468,7 +3467,7 @@ static int cxgb_set_mac_addr(struct net_device *dev, void *p)
 	if (ret < 0)
 		return ret;
 
-	memcpy(dev->dev_addr, addr->sa_data, dev->addr_len);
+	eth_hw_addr_set(dev, addr->sa_data);
 	return 0;
 }
 
@@ -3903,8 +3902,8 @@ static void cxgb4_mgmt_get_drvinfo(struct net_device *dev,
 {
 	struct adapter *adapter = netdev2adap(dev);
 
-	strlcpy(info->driver, cxgb4_driver_name, sizeof(info->driver));
-	strlcpy(info->bus_info, pci_name(adapter->pdev),
+	strscpy(info->driver, cxgb4_driver_name, sizeof(info->driver));
+	strscpy(info->bus_info, pci_name(adapter->pdev),
 		sizeof(info->bus_info));
 }
 
@@ -5047,28 +5046,24 @@ static int adap_init0(struct adapter *adap, int vpd_skip)
 	/* Allocate the memory for the vaious egress queue bitmaps
 	 * ie starving_fl, txq_maperr and blocked_fl.
 	 */
-	adap->sge.starving_fl =	kcalloc(BITS_TO_LONGS(adap->sge.egr_sz),
-					sizeof(long), GFP_KERNEL);
+	adap->sge.starving_fl = bitmap_zalloc(adap->sge.egr_sz, GFP_KERNEL);
 	if (!adap->sge.starving_fl) {
 		ret = -ENOMEM;
 		goto bye;
 	}
 
-	adap->sge.txq_maperr = kcalloc(BITS_TO_LONGS(adap->sge.egr_sz),
-				       sizeof(long), GFP_KERNEL);
+	adap->sge.txq_maperr = bitmap_zalloc(adap->sge.egr_sz, GFP_KERNEL);
 	if (!adap->sge.txq_maperr) {
 		ret = -ENOMEM;
 		goto bye;
 	}
 
 #ifdef CONFIG_DEBUG_FS
-	adap->sge.blocked_fl = kcalloc(BITS_TO_LONGS(adap->sge.egr_sz),
-				       sizeof(long), GFP_KERNEL);
+	adap->sge.blocked_fl = bitmap_zalloc(adap->sge.egr_sz, GFP_KERNEL);
 	if (!adap->sge.blocked_fl) {
 		ret = -ENOMEM;
 		goto bye;
 	}
-	bitmap_zero(adap->sge.blocked_fl, adap->sge.egr_sz);
 #endif
 
 	params[0] = FW_PARAM_PFVF(CLIP_START);
@@ -5417,10 +5412,10 @@ bye:
 	adap_free_hma_mem(adap);
 	kfree(adap->sge.egr_map);
 	kfree(adap->sge.ingr_map);
-	kfree(adap->sge.starving_fl);
-	kfree(adap->sge.txq_maperr);
+	bitmap_free(adap->sge.starving_fl);
+	bitmap_free(adap->sge.txq_maperr);
 #ifdef CONFIG_DEBUG_FS
-	kfree(adap->sge.blocked_fl);
+	bitmap_free(adap->sge.blocked_fl);
 #endif
 	if (ret != -ETIMEDOUT && ret != -EIO)
 		t4_fw_bye(adap, adap->mbox);
@@ -5854,8 +5849,7 @@ static int alloc_msix_info(struct adapter *adap, u32 num_vec)
 	if (!msix_info)
 		return -ENOMEM;
 
-	adap->msix_bmap.msix_bmap = kcalloc(BITS_TO_LONGS(num_vec),
-					    sizeof(long), GFP_KERNEL);
+	adap->msix_bmap.msix_bmap = bitmap_zalloc(num_vec, GFP_KERNEL);
 	if (!adap->msix_bmap.msix_bmap) {
 		kfree(msix_info);
 		return -ENOMEM;
@@ -5870,7 +5864,7 @@ static int alloc_msix_info(struct adapter *adap, u32 num_vec)
 
 static void free_msix_info(struct adapter *adap)
 {
-	kfree(adap->msix_bmap.msix_bmap);
+	bitmap_free(adap->msix_bmap.msix_bmap);
 	kfree(adap->msix_info);
 }
 
@@ -6189,10 +6183,10 @@ static void free_some_resources(struct adapter *adapter)
 	cxgb4_cleanup_ethtool_filters(adapter);
 	kfree(adapter->sge.egr_map);
 	kfree(adapter->sge.ingr_map);
-	kfree(adapter->sge.starving_fl);
-	kfree(adapter->sge.txq_maperr);
+	bitmap_free(adapter->sge.starving_fl);
+	bitmap_free(adapter->sge.txq_maperr);
 #ifdef CONFIG_DEBUG_FS
-	kfree(adapter->sge.blocked_fl);
+	bitmap_free(adapter->sge.blocked_fl);
 #endif
 	disable_msi(adapter);
 
@@ -6495,21 +6489,21 @@ static const struct tlsdev_ops cxgb4_ktls_ops = {
 
 #if IS_ENABLED(CONFIG_CHELSIO_IPSEC_INLINE)
 
-static int cxgb4_xfrm_add_state(struct xfrm_state *x)
+static int cxgb4_xfrm_add_state(struct xfrm_state *x,
+				struct netlink_ext_ack *extack)
 {
 	struct adapter *adap = netdev2adap(x->xso.dev);
 	int ret;
 
 	if (!mutex_trylock(&uld_mutex)) {
-		dev_dbg(adap->pdev_dev,
-			"crypto uld critical resource is under use\n");
+		NL_SET_ERR_MSG_MOD(extack, "crypto uld critical resource is under use");
 		return -EBUSY;
 	}
 	ret = chcr_offload_state(adap, CXGB4_XFRMDEV_OPS);
 	if (ret)
 		goto out_unlock;
 
-	ret = adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_add(x);
+	ret = adap->uld[CXGB4_ULD_IPSEC].xfrmdev_ops->xdo_dev_state_add(x, extack);
 
 out_unlock:
 	mutex_unlock(&uld_mutex);
@@ -6608,7 +6602,6 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	static int adap_idx = 1;
 	int s_qpp, qpp, num_seg;
 	struct port_info *pi;
-	bool highdma = false;
 	enum chip_type chip;
 	void __iomem *regs;
 	int func, chip_ver;
@@ -6687,17 +6680,12 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		return 0;
 	}
 
-	if (!dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64))) {
-		highdma = true;
-	} else {
-		err = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
-		if (err) {
-			dev_err(&pdev->dev, "no usable DMA configuration\n");
-			goto out_free_adapter;
-		}
+	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+	if (err) {
+		dev_err(&pdev->dev, "no usable DMA configuration\n");
+		goto out_free_adapter;
 	}
 
-	pci_enable_pcie_error_reporting(pdev);
 	pci_set_master(pdev);
 	pci_save_state(pdev);
 	adap_idx++;
@@ -6823,7 +6811,7 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 			NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM |
 			NETIF_F_RXCSUM | NETIF_F_RXHASH | NETIF_F_GRO |
 			NETIF_F_HW_VLAN_CTAG_TX | NETIF_F_HW_VLAN_CTAG_RX |
-			NETIF_F_HW_TC | NETIF_F_NTUPLE;
+			NETIF_F_HW_TC | NETIF_F_NTUPLE | NETIF_F_HIGHDMA;
 
 		if (chip_ver > CHELSIO_T5) {
 			netdev->hw_enc_features |= NETIF_F_IP_CSUM |
@@ -6841,8 +6829,6 @@ static int init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 				netdev->udp_tunnel_nic_info = &cxgb_udp_tunnels;
 		}
 
-		if (highdma)
-			netdev->hw_features |= NETIF_F_HIGHDMA;
 		netdev->features |= netdev->hw_features;
 		netdev->vlan_features = netdev->features & VLAN_FEAT;
 #if IS_ENABLED(CONFIG_CHELSIO_TLS_DEVICE)
@@ -7104,7 +7090,6 @@ fw_attach_fail:
  out_unmap_bar0:
 	iounmap(regs);
  out_disable_device:
-	pci_disable_pcie_error_reporting(pdev);
 	pci_disable_device(pdev);
  out_release_regions:
 	pci_release_regions(pdev);
@@ -7183,7 +7168,6 @@ static void remove_one(struct pci_dev *pdev)
 	}
 #endif
 	iounmap(adapter->regs);
-	pci_disable_pcie_error_reporting(pdev);
 	if ((adapter->flags & CXGB4_DEV_ENABLED)) {
 		pci_disable_device(pdev);
 		adapter->flags &= ~CXGB4_DEV_ENABLED;

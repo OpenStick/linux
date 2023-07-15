@@ -119,7 +119,7 @@ struct perf_dlfilter_fns perf_dlfilter_fns;
 static int verbose;
 
 #define pr_debug(fmt, ...) do { \
-		if (verbose) \
+		if (verbose > 0) \
 			fprintf(stderr, fmt, ##__VA_ARGS__); \
 	} while (0)
 
@@ -308,8 +308,6 @@ int filter_event_early(void *data, const struct perf_dlfilter_sample *sample, vo
 
 int filter_event(void *data, const struct perf_dlfilter_sample *sample, void *ctx)
 {
-	struct filter_data *d = data;
-
 	pr_debug("%s API\n", __func__);
 
 	return do_checks(data, sample, ctx, false);

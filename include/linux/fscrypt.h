@@ -18,10 +18,21 @@
 #include <linux/slab.h>
 #include <uapi/linux/fscrypt.h>
 
-#define FS_CRYPTO_BLOCK_SIZE		16
+/*
+ * The lengths of all file contents blocks must be divisible by this value.
+ * This is needed to ensure that all contents encryption modes will work, as
+ * some of the supported modes don't support arbitrarily byte-aligned messages.
+ *
+ * Since the needed alignment is 16 bytes, most filesystems will meet this
+ * requirement naturally, as typical block sizes are powers of 2.  However, if a
+ * filesystem can generate arbitrarily byte-aligned block lengths (e.g., via
+ * compression), then it will need to pad to this alignment before encryption.
+ */
+#define FSCRYPT_CONTENTS_ALIGNMENT 16
 
 union fscrypt_policy;
 struct fscrypt_info;
+struct fs_parameter;
 struct seq_file;
 
 struct fscrypt_str {
@@ -118,9 +129,6 @@ struct fscrypt_operations {
 	 */
 	bool (*empty_dir)(struct inode *inode);
 
-	/* The filesystem's maximum ciphertext filename length, in bytes */
-	unsigned int max_namelen;
-
 	/*
 	 * Check whether the filesystem's inode numbers and UUID are stable,
 	 * meaning that they will never be changed even by offline operations
@@ -153,24 +161,21 @@ struct fscrypt_operations {
 				      int *ino_bits_ret, int *lblk_bits_ret);
 
 	/*
-	 * Return the number of block devices to which the filesystem may write
-	 * encrypted file contents.
+	 * Return an array of pointers to the block devices to which the
+	 * filesystem may write encrypted file contents, NULL if the filesystem
+	 * only has a single such block device, or an ERR_PTR() on error.
+	 *
+	 * On successful non-NULL return, *num_devs is set to the number of
+	 * devices in the returned array.  The caller must free the returned
+	 * array using kfree().
 	 *
 	 * If the filesystem can use multiple block devices (other than block
 	 * devices that aren't used for encrypted file contents, such as
 	 * external journal devices), and wants to support inline encryption,
 	 * then it must implement this function.  Otherwise it's not needed.
 	 */
-	int (*get_num_devices)(struct super_block *sb);
-
-	/*
-	 * If ->get_num_devices() returns a value greater than 1, then this
-	 * function is called to get the array of request_queues that the
-	 * filesystem is using -- one per block device.  (There may be duplicate
-	 * entries in this array, as block devices can share a request_queue.)
-	 */
-	void (*get_devices)(struct super_block *sb,
-			    struct request_queue **devs);
+	struct block_device **(*get_devices)(struct super_block *sb,
+					     unsigned int *num_devs);
 };
 
 static inline struct fscrypt_info *fscrypt_get_info(const struct inode *inode)
@@ -252,8 +257,8 @@ int fscrypt_encrypt_block_inplace(const struct inode *inode, struct page *page,
 				  unsigned int len, unsigned int offs,
 				  u64 lblk_num, gfp_t gfp_flags);
 
-int fscrypt_decrypt_pagecache_blocks(struct page *page, unsigned int len,
-				     unsigned int offs);
+int fscrypt_decrypt_pagecache_blocks(struct folio *folio, size_t len,
+				     size_t offs);
 int fscrypt_decrypt_block_inplace(const struct inode *inode, struct page *page,
 				  unsigned int len, unsigned int offs,
 				  u64 lblk_num);
@@ -268,6 +273,16 @@ static inline struct page *fscrypt_pagecache_page(struct page *bounce_page)
 	return (struct page *)page_private(bounce_page);
 }
 
+static inline bool fscrypt_is_bounce_folio(struct folio *folio)
+{
+	return folio->mapping == NULL;
+}
+
+static inline struct folio *fscrypt_pagecache_folio(struct folio *bounce_folio)
+{
+	return bounce_folio->private;
+}
+
 void fscrypt_free_bounce_page(struct page *bounce_page);
 
 /* policy.c */
@@ -276,16 +291,24 @@ int fscrypt_ioctl_get_policy(struct file *filp, void __user *arg);
 int fscrypt_ioctl_get_policy_ex(struct file *filp, void __user *arg);
 int fscrypt_ioctl_get_nonce(struct file *filp, void __user *arg);
 int fscrypt_has_permitted_context(struct inode *parent, struct inode *child);
+int fscrypt_context_for_new_inode(void *ctx, struct inode *inode);
 int fscrypt_set_context(struct inode *inode, void *fs_data);
 
 struct fscrypt_dummy_policy {
 	const union fscrypt_policy *policy;
 };
 
-int fscrypt_set_test_dummy_encryption(struct super_block *sb, const char *arg,
-				struct fscrypt_dummy_policy *dummy_policy);
+int fscrypt_parse_test_dummy_encryption(const struct fs_parameter *param,
+				    struct fscrypt_dummy_policy *dummy_policy);
+bool fscrypt_dummy_policies_equal(const struct fscrypt_dummy_policy *p1,
+				  const struct fscrypt_dummy_policy *p2);
 void fscrypt_show_test_dummy_encryption(struct seq_file *seq, char sep,
 					struct super_block *sb);
+static inline bool
+fscrypt_is_dummy_policy_set(const struct fscrypt_dummy_policy *dummy_policy)
+{
+	return dummy_policy->policy != NULL;
+}
 static inline void
 fscrypt_free_dummy_policy(struct fscrypt_dummy_policy *dummy_policy)
 {
@@ -294,7 +317,7 @@ fscrypt_free_dummy_policy(struct fscrypt_dummy_policy *dummy_policy)
 }
 
 /* keyring.c */
-void fscrypt_sb_free(struct super_block *sb);
+void fscrypt_destroy_keyring(struct super_block *sb);
 int fscrypt_ioctl_add_key(struct file *filp, void __user *arg);
 int fscrypt_ioctl_remove_key(struct file *filp, void __user *arg);
 int fscrypt_ioctl_remove_key_all_users(struct file *filp, void __user *arg);
@@ -308,6 +331,10 @@ void fscrypt_free_inode(struct inode *inode);
 int fscrypt_drop_inode(struct inode *inode);
 
 /* fname.c */
+int fscrypt_fname_encrypt(const struct inode *inode, const struct qstr *iname,
+			  u8 *out, unsigned int olen);
+bool fscrypt_fname_encrypted_size(const struct inode *inode, u32 orig_len,
+				  u32 max_len, u32 *encrypted_len_ret);
 int fscrypt_setup_filename(struct inode *inode, const struct qstr *iname,
 			   int lookup, struct fscrypt_name *fname);
 
@@ -329,7 +356,7 @@ u64 fscrypt_fname_siphash(const struct inode *dir, const struct qstr *name);
 int fscrypt_d_revalidate(struct dentry *dentry, unsigned int flags);
 
 /* bio.c */
-void fscrypt_decrypt_bio(struct bio *bio);
+bool fscrypt_decrypt_bio(struct bio *bio);
 int fscrypt_zeroout_range(const struct inode *inode, pgoff_t lblk,
 			  sector_t pblk, unsigned int len);
 
@@ -342,6 +369,7 @@ int __fscrypt_prepare_rename(struct inode *old_dir, struct dentry *old_dentry,
 			     unsigned int flags);
 int __fscrypt_prepare_lookup(struct inode *dir, struct dentry *dentry,
 			     struct fscrypt_name *fname);
+int fscrypt_prepare_lookup_partial(struct inode *dir, struct dentry *dentry);
 int __fscrypt_prepare_readdir(struct inode *dir);
 int __fscrypt_prepare_setattr(struct dentry *dentry, struct iattr *attr);
 int fscrypt_prepare_setflags(struct inode *inode,
@@ -403,9 +431,8 @@ static inline int fscrypt_encrypt_block_inplace(const struct inode *inode,
 	return -EOPNOTSUPP;
 }
 
-static inline int fscrypt_decrypt_pagecache_blocks(struct page *page,
-						   unsigned int len,
-						   unsigned int offs)
+static inline int fscrypt_decrypt_pagecache_blocks(struct folio *folio,
+						   size_t len, size_t offs)
 {
 	return -EOPNOTSUPP;
 }
@@ -424,6 +451,17 @@ static inline bool fscrypt_is_bounce_page(struct page *page)
 }
 
 static inline struct page *fscrypt_pagecache_page(struct page *bounce_page)
+{
+	WARN_ON_ONCE(1);
+	return ERR_PTR(-EINVAL);
+}
+
+static inline bool fscrypt_is_bounce_folio(struct folio *folio)
+{
+	return false;
+}
+
+static inline struct folio *fscrypt_pagecache_folio(struct folio *bounce_folio)
 {
 	WARN_ON_ONCE(1);
 	return ERR_PTR(-EINVAL);
@@ -470,10 +508,30 @@ static inline int fscrypt_set_context(struct inode *inode, void *fs_data)
 struct fscrypt_dummy_policy {
 };
 
+static inline int
+fscrypt_parse_test_dummy_encryption(const struct fs_parameter *param,
+				    struct fscrypt_dummy_policy *dummy_policy)
+{
+	return -EINVAL;
+}
+
+static inline bool
+fscrypt_dummy_policies_equal(const struct fscrypt_dummy_policy *p1,
+			     const struct fscrypt_dummy_policy *p2)
+{
+	return true;
+}
+
 static inline void fscrypt_show_test_dummy_encryption(struct seq_file *seq,
 						      char sep,
 						      struct super_block *sb)
 {
+}
+
+static inline bool
+fscrypt_is_dummy_policy_set(const struct fscrypt_dummy_policy *dummy_policy)
+{
+	return false;
 }
 
 static inline void
@@ -482,7 +540,7 @@ fscrypt_free_dummy_policy(struct fscrypt_dummy_policy *dummy_policy)
 }
 
 /* keyring.c */
-static inline void fscrypt_sb_free(struct super_block *sb)
+static inline void fscrypt_destroy_keyring(struct super_block *sb)
 {
 }
 
@@ -595,8 +653,9 @@ static inline int fscrypt_d_revalidate(struct dentry *dentry,
 }
 
 /* bio.c */
-static inline void fscrypt_decrypt_bio(struct bio *bio)
+static inline bool fscrypt_decrypt_bio(struct bio *bio)
 {
+	return true;
 }
 
 static inline int fscrypt_zeroout_range(const struct inode *inode, pgoff_t lblk,
@@ -632,6 +691,12 @@ static inline int __fscrypt_prepare_rename(struct inode *old_dir,
 static inline int __fscrypt_prepare_lookup(struct inode *dir,
 					   struct dentry *dentry,
 					   struct fscrypt_name *fname)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int fscrypt_prepare_lookup_partial(struct inode *dir,
+						 struct dentry *dentry)
 {
 	return -EOPNOTSUPP;
 }
@@ -717,6 +782,10 @@ bool fscrypt_mergeable_bio(struct bio *bio, const struct inode *inode,
 bool fscrypt_mergeable_bio_bh(struct bio *bio,
 			      const struct buffer_head *next_bh);
 
+bool fscrypt_dio_supported(struct inode *inode);
+
+u64 fscrypt_limit_io_blocks(const struct inode *inode, u64 lblk, u64 nr_blocks);
+
 #else /* CONFIG_FS_ENCRYPTION_INLINE_CRYPT */
 
 static inline bool __fscrypt_inode_uses_inline_crypto(const struct inode *inode)
@@ -744,6 +813,17 @@ static inline bool fscrypt_mergeable_bio_bh(struct bio *bio,
 					    const struct buffer_head *next_bh)
 {
 	return true;
+}
+
+static inline bool fscrypt_dio_supported(struct inode *inode)
+{
+	return !fscrypt_needs_contents_encryption(inode);
+}
+
+static inline u64 fscrypt_limit_io_blocks(const struct inode *inode, u64 lblk,
+					  u64 nr_blocks)
+{
+	return nr_blocks;
 }
 #endif /* !CONFIG_FS_ENCRYPTION_INLINE_CRYPT */
 

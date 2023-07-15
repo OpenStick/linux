@@ -12,7 +12,6 @@ static bool a2xx_idle(struct msm_gpu *gpu);
 
 static void a2xx_submit(struct msm_gpu *gpu, struct msm_gem_submit *submit)
 {
-	struct msm_drm_private *priv = gpu->dev->dev_private;
 	struct msm_ringbuffer *ring = submit->ring;
 	unsigned int i;
 
@@ -23,7 +22,7 @@ static void a2xx_submit(struct msm_gpu *gpu, struct msm_gem_submit *submit)
 			break;
 		case MSM_SUBMIT_CMD_CTX_RESTORE_BUF:
 			/* ignore if there has not been a ctx switch: */
-			if (priv->lastctx == submit->queue->ctx)
+			if (gpu->cur_ctx_seqno == submit->queue->ctx->seqno)
 				break;
 			fallthrough;
 		case MSM_SUBMIT_CMD_BUF:
@@ -54,6 +53,8 @@ static void a2xx_submit(struct msm_gpu *gpu, struct msm_gem_submit *submit)
 
 static bool a2xx_me_init(struct msm_gpu *gpu)
 {
+	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
+	struct a2xx_gpu *a2xx_gpu = to_a2xx_gpu(adreno_gpu);
 	struct msm_ringbuffer *ring = gpu->rb[0];
 
 	OUT_PKT3(ring, CP_ME_INIT, 18);
@@ -85,15 +86,20 @@ static bool a2xx_me_init(struct msm_gpu *gpu)
 	/* NQ and External Memory Swap */
 	OUT_RING(ring, 0x00000000);
 	/* protected mode error checking (0x1f2 is REG_AXXX_CP_INT_CNTL) */
-	OUT_RING(ring, 0x200001f2);
+	if (a2xx_gpu->protection_disabled)
+		OUT_RING(ring, 0x00000000);
+	else
+		OUT_RING(ring, 0x200001f2);
 	/* Disable header dumping and Header dump address */
 	OUT_RING(ring, 0x00000000);
 	/* Header dump size */
 	OUT_RING(ring, 0x00000000);
 
-	/* enable protected mode */
-	OUT_PKT3(ring, CP_SET_PROTECTED_MODE, 1);
-	OUT_RING(ring, 1);
+	if (!a2xx_gpu->protection_disabled) {
+		/* enable protected mode */
+		OUT_PKT3(ring, CP_SET_PROTECTED_MODE, 1);
+		OUT_RING(ring, 1);
+	}
 
 	adreno_flush(gpu, ring, REG_AXXX_CP_RB_WPTR);
 	return a2xx_idle(gpu);
@@ -102,6 +108,7 @@ static bool a2xx_me_init(struct msm_gpu *gpu)
 static int a2xx_hw_init(struct msm_gpu *gpu)
 {
 	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
+	struct a2xx_gpu *a2xx_gpu = to_a2xx_gpu(adreno_gpu);
 	dma_addr_t pt_base, tran_error;
 	uint32_t *ptr, len;
 	int i, ret;
@@ -221,6 +228,17 @@ static int a2xx_hw_init(struct msm_gpu *gpu)
 	ptr = (uint32_t *)(adreno_gpu->fw[ADRENO_FW_PM4]->data);
 	len = adreno_gpu->fw[ADRENO_FW_PM4]->size / 4;
 	DBG("loading PM4 ucode version: %x", ptr[1]);
+
+	/*
+	 * New firmware files seem to have GPU and firmware version in this
+	 * word (0x20xxxx for A200, 0x220xxx for A220, 0x225xxx for A225).
+	 * Older firmware files, which lack protection support, have 0 instead.
+	 */
+	if (ptr[1] == 0) {
+		dev_warn(gpu->dev->dev,
+			 "Legacy firmware detected, disabling protection support\n");
+		a2xx_gpu->protection_disabled = true;
+	}
 
 	gpu_write(gpu, REG_AXXX_CP_DEBUG,
 			AXXX_CP_DEBUG_MIU_128BIT_WRITE_ENABLE);
@@ -472,6 +490,7 @@ static u32 a2xx_get_rptr(struct msm_gpu *gpu, struct msm_ringbuffer *ring)
 static const struct adreno_gpu_funcs funcs = {
 	.base = {
 		.get_param = adreno_get_param,
+		.set_param = adreno_set_param,
 		.hw_init = a2xx_hw_init,
 		.pm_suspend = msm_gpu_pm_suspend,
 		.pm_resume = msm_gpu_pm_resume,

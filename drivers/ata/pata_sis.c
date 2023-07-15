@@ -525,7 +525,7 @@ static void sis_133_set_dmamode (struct ata_port *ap, struct ata_device *adev)
  *	Block UDMA6 on devices that do not support it.
  */
 
-static unsigned long sis_133_mode_filter(struct ata_device *adev, unsigned long mask)
+static unsigned int sis_133_mode_filter(struct ata_device *adev, unsigned int mask)
 {
 	struct ata_port *ap = adev->link->ap;
 	struct pci_dev *pdev = to_pci_dev(ap->host->dev);
@@ -539,7 +539,7 @@ static unsigned long sis_133_mode_filter(struct ata_device *adev, unsigned long 
 	return mask;
 }
 
-static struct scsi_host_template sis_sht = {
+static const struct scsi_host_template sis_sht = {
 	ATA_BMDMA_SHT(DRV_NAME),
 };
 

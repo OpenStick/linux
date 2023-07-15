@@ -10,7 +10,9 @@
 #include <linux/cdev.h>
 #include <linux/idr.h>
 #include <linux/pci.h>
+#include <linux/bitmap.h>
 #include <linux/perf_event.h>
+#include <linux/iommu.h>
 #include <uapi/linux/idxd.h>
 #include "registers.h"
 
@@ -30,6 +32,7 @@ enum idxd_dev_type {
 	IDXD_DEV_GROUP,
 	IDXD_DEV_ENGINE,
 	IDXD_DEV_CDEV,
+	IDXD_DEV_CDEV_FILE,
 	IDXD_DEV_MAX_TYPE,
 };
 
@@ -51,6 +54,9 @@ enum idxd_type {
 #define IDXD_NAME_SIZE		128
 #define IDXD_PMU_EVENT_MAX	64
 
+#define IDXD_ENQCMDS_RETRIES		32
+#define IDXD_ENQCMDS_MAX_RETRIES	64
+
 struct idxd_device_driver {
 	const char *name;
 	enum idxd_dev_type *type;
@@ -64,8 +70,8 @@ extern struct idxd_device_driver idxd_drv;
 extern struct idxd_device_driver idxd_dmaengine_drv;
 extern struct idxd_device_driver idxd_user_drv;
 
+#define INVALID_INT_HANDLE	-1
 struct idxd_irq_entry {
-	struct idxd_device *idxd;
 	int id;
 	int vector;
 	struct llist_head pending_llist;
@@ -75,6 +81,8 @@ struct idxd_irq_entry {
 	 * and irq thread processing error descriptor.
 	 */
 	spinlock_t list_lock;
+	int int_handle;
+	ioasid_t pasid;
 };
 
 struct idxd_group {
@@ -84,11 +92,13 @@ struct idxd_group {
 	int id;
 	int num_engines;
 	int num_wqs;
-	bool use_token_limit;
-	u8 tokens_allowed;
-	u8 tokens_reserved;
+	bool use_rdbuf_limit;
+	u8 rdbufs_allowed;
+	u8 rdbufs_reserved;
 	int tc_a;
 	int tc_b;
+	int desc_progress_limit;
+	int batch_progress_limit;
 };
 
 struct idxd_pmu {
@@ -118,6 +128,12 @@ struct idxd_pmu {
 
 #define IDXD_MAX_PRIORITY	0xf
 
+enum {
+	COUNTER_FAULTS = 0,
+	COUNTER_FAULT_FAILS,
+	COUNTER_MAX
+};
+
 enum idxd_wq_state {
 	IDXD_WQ_DISABLED = 0,
 	IDXD_WQ_ENABLED,
@@ -126,6 +142,8 @@ enum idxd_wq_state {
 enum idxd_wq_flag {
 	WQ_FLAG_DEDICATED = 0,
 	WQ_FLAG_BLOCK_ON_FAULT,
+	WQ_FLAG_ATS_DISABLE,
+	WQ_FLAG_PRS_DISABLE,
 };
 
 enum idxd_wq_type {
@@ -144,6 +162,10 @@ struct idxd_cdev {
 #define IDXD_ALLOCATED_BATCH_SIZE	128U
 #define WQ_NAME_SIZE   1024
 #define WQ_TYPE_SIZE   10
+
+#define WQ_DEFAULT_QUEUE_DEPTH		16
+#define WQ_DEFAULT_MAX_XFER		SZ_2M
+#define WQ_DEFAULT_MAX_BATCH		32
 
 enum idxd_op_type {
 	IDXD_OP_BLOCK = 0,
@@ -164,13 +186,17 @@ struct idxd_dma_chan {
 struct idxd_wq {
 	void __iomem *portal;
 	u32 portal_offset;
+	unsigned int enqcmds_retries;
 	struct percpu_ref wq_active;
 	struct completion wq_dead;
+	struct completion wq_resurrect;
 	struct idxd_dev idxd_dev;
 	struct idxd_cdev *idxd_cdev;
 	struct wait_queue_head err_queue;
+	struct workqueue_struct *wq;
 	struct idxd_device *idxd;
 	int id;
+	struct idxd_irq_entry ie;
 	enum idxd_wq_type type;
 	struct idxd_group *group;
 	int client_count;
@@ -181,15 +207,15 @@ struct idxd_wq {
 	enum idxd_wq_state state;
 	unsigned long flags;
 	union wqcfg *wqcfg;
+	unsigned long *opcap_bmap;
+
 	struct dsa_hw_desc **hw_descs;
 	int num_descs;
 	union {
 		struct dsa_completion_record *compls;
 		struct iax_completion_record *iax_compls;
 	};
-	void *compls_raw;
 	dma_addr_t compls_addr;
-	dma_addr_t compls_addr_raw;
 	int compls_size;
 	struct idxd_desc **descs;
 	struct sbitmap_queue sbq;
@@ -197,7 +223,10 @@ struct idxd_wq {
 	char name[WQ_NAME_SIZE + 1];
 	u64 max_xfer_bytes;
 	u32 max_batch_size;
-	bool ats_dis;
+
+	/* Lock to protect upasid_xa access. */
+	struct mutex uc_lock;
+	struct xarray upasid_xa;
 };
 
 struct idxd_engine {
@@ -216,6 +245,7 @@ struct idxd_hw {
 	union engine_cap_reg engine_cap;
 	struct opcap opcap;
 	u32 cmd_cap;
+	union iaa_cap_reg iaa_cap;
 };
 
 enum idxd_device_state {
@@ -228,6 +258,7 @@ enum idxd_device_flag {
 	IDXD_FLAG_CONFIGURABLE = 0,
 	IDXD_FLAG_CMD_RUNNING,
 	IDXD_FLAG_PASID_ENABLED,
+	IDXD_FLAG_USER_PASID_ENABLED,
 };
 
 struct idxd_dma_dev {
@@ -241,6 +272,32 @@ struct idxd_driver_data {
 	struct device_type *dev_type;
 	int compl_size;
 	int align;
+	int evl_cr_off;
+	int cr_status_off;
+	int cr_result_off;
+};
+
+struct idxd_evl {
+	/* Lock to protect event log access. */
+	spinlock_t lock;
+	void *log;
+	dma_addr_t dma;
+	/* Total size of event log = number of entries * entry size. */
+	unsigned int log_size;
+	/* The number of entries in the event log. */
+	u16 size;
+	u16 head;
+	unsigned long *bmap;
+	bool batch_fail[IDXD_MAX_BATCH_IDENT];
+};
+
+struct idxd_evl_fault {
+	struct work_struct work;
+	struct idxd_wq *wq;
+	u8 status;
+
+	/* make this last member always */
+	struct __evl_entry entry[];
 };
 
 struct idxd_device {
@@ -253,6 +310,7 @@ struct idxd_device {
 	int id;
 	int major;
 	u32 cmd_status;
+	struct idxd_irq_entry ie;	/* misc irq, msix 0 */
 
 	struct pci_dev *pdev;
 	void __iomem *reg_base;
@@ -268,6 +326,8 @@ struct idxd_device {
 	unsigned int pasid;
 
 	int num_groups;
+	int irq_cnt;
+	bool request_int_handles;
 
 	u32 msix_perm_offset;
 	u32 wqcfg_offset;
@@ -278,26 +338,41 @@ struct idxd_device {
 	u32 max_batch_size;
 	int max_groups;
 	int max_engines;
-	int max_tokens;
+	int max_rdbufs;
 	int max_wqs;
 	int max_wq_size;
-	int token_limit;
-	int nr_tokens;		/* non-reserved tokens */
+	int rdbuf_limit;
+	int nr_rdbufs;		/* non-reserved read buffers */
 	unsigned int wqcfg_size;
+	unsigned long *wq_enable_map;
 
 	union sw_err_reg sw_err;
 	wait_queue_head_t cmd_waitq;
-	int num_wq_irqs;
-	struct idxd_irq_entry *irq_entries;
 
 	struct idxd_dma_dev *idxd_dma;
 	struct workqueue_struct *wq;
 	struct work_struct work;
 
-	int *int_handles;
-
 	struct idxd_pmu *idxd_pmu;
+
+	unsigned long *opcap_bmap;
+	struct idxd_evl *evl;
+	struct kmem_cache *evl_cache;
+
+	struct dentry *dbgfs_dir;
+	struct dentry *dbgfs_evl_file;
 };
+
+static inline unsigned int evl_ent_size(struct idxd_device *idxd)
+{
+	return idxd->hw.gen_cap.evl_support ?
+	       (32 * (1 << idxd->hw.gen_cap.evl_support)) : 0;
+}
+
+static inline unsigned int evl_size(struct idxd_device *idxd)
+{
+	return idxd->evl->size * evl_ent_size(idxd);
+}
 
 /* IDXD software descriptor */
 struct idxd_desc {
@@ -332,6 +407,7 @@ enum idxd_completion_status {
 #define engine_confdev(engine) &engine->idxd_dev.conf_dev
 #define group_confdev(group) &group->idxd_dev.conf_dev
 #define cdev_dev(cdev) &cdev->idxd_dev.conf_dev
+#define user_ctx_dev(ctx) (&(ctx)->idxd_dev.conf_dev)
 
 #define confdev_to_idxd_dev(dev) container_of(dev, struct idxd_dev, conf_dev)
 #define idxd_dev_to_idxd(idxd_dev) container_of(idxd_dev, struct idxd_device, idxd_dev)
@@ -380,6 +456,21 @@ static inline void idxd_dev_set_type(struct idxd_dev *idev, int type)
 	}
 
 	idev->type = type;
+}
+
+static inline struct idxd_irq_entry *idxd_get_ie(struct idxd_device *idxd, int idx)
+{
+	return (idx == 0) ? &idxd->ie : &idxd->wqs[idx - 1]->ie;
+}
+
+static inline struct idxd_wq *ie_to_wq(struct idxd_irq_entry *ie)
+{
+	return container_of(ie, struct idxd_wq, ie);
+}
+
+static inline struct idxd_device *ie_to_idxd(struct idxd_irq_entry *ie)
+{
+	return container_of(ie, struct idxd_device, ie);
 }
 
 extern struct bus_type dsa_bus_type;
@@ -444,9 +535,20 @@ static inline bool device_pasid_enabled(struct idxd_device *idxd)
 	return test_bit(IDXD_FLAG_PASID_ENABLED, &idxd->flags);
 }
 
-static inline bool device_swq_supported(struct idxd_device *idxd)
+static inline bool device_user_pasid_enabled(struct idxd_device *idxd)
 {
-	return (support_enqcmd && device_pasid_enabled(idxd));
+	return test_bit(IDXD_FLAG_USER_PASID_ENABLED, &idxd->flags);
+}
+
+static inline bool wq_pasid_enabled(struct idxd_wq *wq)
+{
+	return (is_idxd_wq_kernel(wq) && device_pasid_enabled(wq->idxd)) ||
+	       (is_idxd_wq_user(wq) && device_user_pasid_enabled(wq->idxd));
+}
+
+static inline bool wq_shared_supported(struct idxd_wq *wq)
+{
+	return (support_enqcmd && wq_pasid_enabled(wq));
 }
 
 enum idxd_portal_prot {
@@ -503,6 +605,38 @@ static inline int idxd_wq_refcount(struct idxd_wq *wq)
 	return wq->client_count;
 };
 
+/*
+ * Intel IAA does not support batch processing.
+ * The max batch size of device, max batch size of wq and
+ * max batch shift of wqcfg should be always 0 on IAA.
+ */
+static inline void idxd_set_max_batch_size(int idxd_type, struct idxd_device *idxd,
+					   u32 max_batch_size)
+{
+	if (idxd_type == IDXD_TYPE_IAX)
+		idxd->max_batch_size = 0;
+	else
+		idxd->max_batch_size = max_batch_size;
+}
+
+static inline void idxd_wq_set_max_batch_size(int idxd_type, struct idxd_wq *wq,
+					      u32 max_batch_size)
+{
+	if (idxd_type == IDXD_TYPE_IAX)
+		wq->max_batch_size = 0;
+	else
+		wq->max_batch_size = max_batch_size;
+}
+
+static inline void idxd_wqcfg_set_max_batch_shift(int idxd_type, union wqcfg *wqcfg,
+						  u32 max_batch_shift)
+{
+	if (idxd_type == IDXD_TYPE_IAX)
+		wqcfg->max_batch_shift = 0;
+	else
+		wqcfg->max_batch_shift = max_batch_shift;
+}
+
 int __must_check __idxd_driver_register(struct idxd_device_driver *idxd_drv,
 					struct module *module, const char *mod_name);
 #define idxd_driver_register(driver) \
@@ -520,17 +654,14 @@ void idxd_unregister_devices(struct idxd_device *idxd);
 int idxd_register_driver(void);
 void idxd_unregister_driver(void);
 void idxd_wqs_quiesce(struct idxd_device *idxd);
+bool idxd_queue_int_handle_resubmit(struct idxd_desc *desc);
+void multi_u64_to_bmap(unsigned long *bmap, u64 *val, int count);
 
 /* device interrupt control */
-void idxd_msix_perm_setup(struct idxd_device *idxd);
-void idxd_msix_perm_clear(struct idxd_device *idxd);
 irqreturn_t idxd_misc_thread(int vec, void *data);
 irqreturn_t idxd_wq_thread(int irq, void *data);
 void idxd_mask_error_interrupts(struct idxd_device *idxd);
 void idxd_unmask_error_interrupts(struct idxd_device *idxd);
-void idxd_mask_msix_vectors(struct idxd_device *idxd);
-void idxd_mask_msix_vector(struct idxd_device *idxd, int vec_id);
-void idxd_unmask_msix_vector(struct idxd_device *idxd, int vec_id);
 
 /* device control */
 int idxd_register_idxd_drv(void);
@@ -538,9 +669,7 @@ void idxd_unregister_idxd_drv(void);
 int idxd_device_drv_probe(struct idxd_dev *idxd_dev);
 void idxd_device_drv_remove(struct idxd_dev *idxd_dev);
 int drv_enable_wq(struct idxd_wq *wq);
-int __drv_enable_wq(struct idxd_wq *wq);
 void drv_disable_wq(struct idxd_wq *wq);
-void __drv_disable_wq(struct idxd_wq *wq);
 int idxd_device_init_reset(struct idxd_device *idxd);
 int idxd_device_enable(struct idxd_device *idxd);
 int idxd_device_disable(struct idxd_device *idxd);
@@ -566,22 +695,24 @@ int idxd_wq_map_portal(struct idxd_wq *wq);
 void idxd_wq_unmap_portal(struct idxd_wq *wq);
 int idxd_wq_set_pasid(struct idxd_wq *wq, int pasid);
 int idxd_wq_disable_pasid(struct idxd_wq *wq);
+void __idxd_wq_quiesce(struct idxd_wq *wq);
 void idxd_wq_quiesce(struct idxd_wq *wq);
 int idxd_wq_init_percpu_ref(struct idxd_wq *wq);
+void idxd_wq_free_irq(struct idxd_wq *wq);
+int idxd_wq_request_irq(struct idxd_wq *wq);
 
 /* submission */
 int idxd_submit_desc(struct idxd_wq *wq, struct idxd_desc *desc);
 struct idxd_desc *idxd_alloc_desc(struct idxd_wq *wq, enum idxd_op_type optype);
 void idxd_free_desc(struct idxd_wq *wq, struct idxd_desc *desc);
+int idxd_enqcmds(struct idxd_wq *wq, void __iomem *portal, const void *desc);
 
 /* dmaengine */
 int idxd_register_dma_device(struct idxd_device *idxd);
 void idxd_unregister_dma_device(struct idxd_device *idxd);
-int idxd_register_dma_channel(struct idxd_wq *wq);
-void idxd_unregister_dma_channel(struct idxd_wq *wq);
 void idxd_parse_completion_status(u8 status, enum dmaengine_tx_result *res);
 void idxd_dma_complete_txd(struct idxd_desc *desc,
-			   enum idxd_complete_type comp_type);
+			   enum idxd_complete_type comp_type, bool free_desc);
 
 /* cdev */
 int idxd_cdev_register(void);
@@ -589,6 +720,9 @@ void idxd_cdev_remove(void);
 int idxd_cdev_get_major(struct idxd_device *idxd);
 int idxd_wq_add_cdev(struct idxd_wq *wq);
 void idxd_wq_del_cdev(struct idxd_wq *wq);
+int idxd_copy_cr(struct idxd_wq *wq, ioasid_t pasid, unsigned long addr,
+		 void *buf, int len);
+void idxd_user_counter_increment(struct idxd_wq *wq, u32 pasid, int index);
 
 /* perfmon */
 #if IS_ENABLED(CONFIG_INTEL_IDXD_PERFMON)
@@ -605,10 +739,10 @@ static inline void perfmon_init(void) {}
 static inline void perfmon_exit(void) {}
 #endif
 
-static inline void complete_desc(struct idxd_desc *desc, enum idxd_complete_type reason)
-{
-	idxd_dma_complete_txd(desc, reason);
-	idxd_free_desc(desc->wq, desc);
-}
+/* debugfs */
+int idxd_device_init_debugfs(struct idxd_device *idxd);
+void idxd_device_remove_debugfs(struct idxd_device *idxd);
+int idxd_init_debugfs(void);
+void idxd_remove_debugfs(void);
 
 #endif

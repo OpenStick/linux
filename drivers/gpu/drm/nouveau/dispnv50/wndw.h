@@ -5,8 +5,6 @@
 #include "atom.h"
 #include "lut.h"
 
-#include <nvif/notify.h>
-
 struct nv50_wndw_ctxdma {
 	struct list_head head;
 	struct nvif_object object;
@@ -30,7 +28,6 @@ struct nv50_wndw {
 	struct nv50_dmac wndw;
 	struct nv50_dmac wimm;
 
-	struct nvif_notify notify;
 	u16 ntfy;
 	u16 sema;
 	u32 data;
@@ -38,10 +35,9 @@ struct nv50_wndw {
 
 int nv50_wndw_new_(const struct nv50_wndw_func *, struct drm_device *,
 		   enum drm_plane_type, const char *name, int index,
-		   const u32 *format, enum nv50_disp_interlock_type,
-		   u32 interlock_data, u32 heads, struct nv50_wndw **);
-void nv50_wndw_init(struct nv50_wndw *);
-void nv50_wndw_fini(struct nv50_wndw *);
+		   const u32 *format, u32 heads,
+		   enum nv50_disp_interlock_type, u32 interlock_data,
+		   struct nv50_wndw **);
 void nv50_wndw_flush_set(struct nv50_wndw *, u32 *interlock,
 			 struct nv50_wndw_atom *);
 void nv50_wndw_flush_clr(struct nv50_wndw *, u32 *interlock, bool flush,
@@ -64,7 +60,7 @@ struct nv50_wndw_func {
 	int (*ntfy_clr)(struct nv50_wndw *);
 	int (*ntfy_wait_begun)(struct nouveau_bo *, u32 offset,
 			       struct nvif_device *);
-	bool (*ilut)(struct nv50_wndw *, struct nv50_wndw_atom *, int);
+	void (*ilut)(struct nv50_wndw *wndw, struct nv50_wndw_atom *asyh, int size);
 	void (*csc)(struct nv50_wndw *, struct nv50_wndw_atom *,
 		    const struct drm_color_ctm *);
 	int (*csc_set)(struct nv50_wndw *, struct nv50_wndw_atom *);
@@ -129,7 +125,7 @@ int wndwc37e_update(struct nv50_wndw *, u32 *);
 
 int wndwc57e_new(struct nouveau_drm *, enum drm_plane_type, int, s32,
 		 struct nv50_wndw **);
-bool wndwc57e_ilut(struct nv50_wndw *, struct nv50_wndw_atom *, int);
+void wndwc57e_ilut(struct nv50_wndw *, struct nv50_wndw_atom *, int);
 int wndwc57e_ilut_set(struct nv50_wndw *, struct nv50_wndw_atom *);
 int wndwc57e_ilut_clr(struct nv50_wndw *);
 int wndwc57e_csc_set(struct nv50_wndw *, struct nv50_wndw_atom *);

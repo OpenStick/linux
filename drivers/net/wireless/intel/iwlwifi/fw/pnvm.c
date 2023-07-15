@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
- * Copyright(c) 2020-2021 Intel Corporation
+ * Copyright(c) 2020-2022 Intel Corporation
  */
 
 #include "iwl-drv.h"
@@ -33,7 +33,7 @@ static bool iwl_pnvm_complete_fn(struct iwl_notif_wait_data *notif_wait,
 static int iwl_pnvm_handle_section(struct iwl_trans *trans, const u8 *data,
 				   size_t len)
 {
-	struct iwl_ucode_tlv *tlv;
+	const struct iwl_ucode_tlv *tlv;
 	u32 sha1 = 0;
 	u16 mac_type = 0, rf_id = 0;
 	u8 *pnvm_data = NULL, *tmp;
@@ -47,7 +47,7 @@ static int iwl_pnvm_handle_section(struct iwl_trans *trans, const u8 *data,
 		u32 tlv_len, tlv_type;
 
 		len -= sizeof(*tlv);
-		tlv = (void *)data;
+		tlv = (const void *)data;
 
 		tlv_len = le32_to_cpu(tlv->length);
 		tlv_type = le32_to_cpu(tlv->type);
@@ -70,7 +70,7 @@ static int iwl_pnvm_handle_section(struct iwl_trans *trans, const u8 *data,
 				break;
 			}
 
-			sha1 = le32_to_cpup((__le32 *)data);
+			sha1 = le32_to_cpup((const __le32 *)data);
 
 			IWL_DEBUG_FW(trans,
 				     "Got IWL_UCODE_TLV_PNVM_VERSION %0x\n",
@@ -87,8 +87,8 @@ static int iwl_pnvm_handle_section(struct iwl_trans *trans, const u8 *data,
 			if (hw_match)
 				break;
 
-			mac_type = le16_to_cpup((__le16 *)data);
-			rf_id = le16_to_cpup((__le16 *)(data + sizeof(__le16)));
+			mac_type = le16_to_cpup((const __le16 *)data);
+			rf_id = le16_to_cpup((const __le16 *)(data + sizeof(__le16)));
 
 			IWL_DEBUG_FW(trans,
 				     "Got IWL_UCODE_TLV_HW_TYPE mac_type 0x%0x rf_id 0x%0x\n",
@@ -99,7 +99,7 @@ static int iwl_pnvm_handle_section(struct iwl_trans *trans, const u8 *data,
 				hw_match = true;
 			break;
 		case IWL_UCODE_TLV_SEC_RT: {
-			struct iwl_pnvm_section *section = (void *)data;
+			const struct iwl_pnvm_section *section = (const void *)data;
 			u32 data_len = tlv_len - sizeof(*section);
 
 			IWL_DEBUG_FW(trans,
@@ -107,7 +107,7 @@ static int iwl_pnvm_handle_section(struct iwl_trans *trans, const u8 *data,
 				     tlv_len);
 
 			/* TODO: remove, this is a deprecated separator */
-			if (le32_to_cpup((__le32 *)data) == 0xddddeeee) {
+			if (le32_to_cpup((const __le32 *)data) == 0xddddeeee) {
 				IWL_DEBUG_FW(trans, "Ignoring separator.\n");
 				break;
 			}
@@ -162,7 +162,7 @@ done:
 		goto out;
 	}
 
-	IWL_INFO(trans, "loaded PNVM version 0x%0x\n", sha1);
+	IWL_INFO(trans, "loaded PNVM version %08x\n", sha1);
 
 	ret = iwl_trans_set_pnvm(trans, pnvm_data, size);
 out:
@@ -173,7 +173,7 @@ out:
 static int iwl_pnvm_parse(struct iwl_trans *trans, const u8 *data,
 			  size_t len)
 {
-	struct iwl_ucode_tlv *tlv;
+	const struct iwl_ucode_tlv *tlv;
 
 	IWL_DEBUG_FW(trans, "Parsing PNVM file\n");
 
@@ -181,7 +181,7 @@ static int iwl_pnvm_parse(struct iwl_trans *trans, const u8 *data,
 		u32 tlv_len, tlv_type;
 
 		len -= sizeof(*tlv);
-		tlv = (void *)data;
+		tlv = (const void *)data;
 
 		tlv_len = le32_to_cpu(tlv->length);
 		tlv_type = le32_to_cpu(tlv->type);
@@ -193,8 +193,8 @@ static int iwl_pnvm_parse(struct iwl_trans *trans, const u8 *data,
 		}
 
 		if (tlv_type == IWL_UCODE_TLV_PNVM_SKU) {
-			struct iwl_sku_id *sku_id =
-				(void *)(data + sizeof(*tlv));
+			const struct iwl_sku_id *sku_id =
+				(const void *)(data + sizeof(*tlv));
 
 			IWL_DEBUG_FW(trans,
 				     "Got IWL_UCODE_TLV_PNVM_SKU len %d\n",
@@ -284,16 +284,19 @@ int iwl_pnvm_load(struct iwl_trans *trans,
 	/* First attempt to get the PNVM from BIOS */
 	package = iwl_uefi_get_pnvm(trans, &len);
 	if (!IS_ERR_OR_NULL(package)) {
-		data = kmemdup(package->data, len, GFP_KERNEL);
+		if (len >= sizeof(*package)) {
+			/* we need only the data */
+			len -= sizeof(*package);
+			data = kmemdup(package->data, len, GFP_KERNEL);
+		} else {
+			data = NULL;
+		}
 
 		/* free package regardless of whether kmemdup succeeded */
 		kfree(package);
 
-		if (data) {
-			/* we need only the data size */
-			len -= sizeof(*package);
+		if (data)
 			goto parse;
-		}
 	}
 
 	/* If it's not available, try from the filesystem */
@@ -315,7 +318,6 @@ parse:
 	kfree(data);
 
 skip_parse:
-	data = NULL;
 	/* now try to get the reduce power table, if not loaded yet */
 	if (!trans->reduce_power_loaded) {
 		data = iwl_uefi_get_reduced_power(trans, &len);
@@ -326,19 +328,16 @@ skip_parse:
 			 * trying again over and over.
 			 */
 			trans->reduce_power_loaded = true;
-
-			goto skip_reduce_power;
+		} else {
+			ret = iwl_trans_set_reduce_power(trans, data, len);
+			if (ret)
+				IWL_DEBUG_FW(trans,
+					     "Failed to set reduce power table %d\n",
+					     ret);
+			kfree(data);
 		}
 	}
 
-	ret = iwl_trans_set_reduce_power(trans, data, len);
-	if (ret)
-		IWL_DEBUG_FW(trans,
-			     "Failed to set reduce power table %d\n",
-			     ret);
-	kfree(data);
-
-skip_reduce_power:
 	iwl_init_notification_wait(notif_wait, &pnvm_wait,
 				   ntf_cmds, ARRAY_SIZE(ntf_cmds),
 				   iwl_pnvm_complete_fn, trans);

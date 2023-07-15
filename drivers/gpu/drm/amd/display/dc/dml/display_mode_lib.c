@@ -35,41 +35,59 @@
 #include "dcn30/display_rq_dlg_calc_30.h"
 #include "dcn31/display_mode_vba_31.h"
 #include "dcn31/display_rq_dlg_calc_31.h"
+#include "dcn314/display_mode_vba_314.h"
+#include "dcn314/display_rq_dlg_calc_314.h"
+#include "dcn32/display_mode_vba_32.h"
+#include "dcn32/display_rq_dlg_calc_32.h"
 #include "dml_logger.h"
 
-const struct dml_funcs dml20_funcs = {
+static const struct dml_funcs dml20_funcs = {
 	.validate = dml20_ModeSupportAndSystemConfigurationFull,
 	.recalculate = dml20_recalculate,
 	.rq_dlg_get_dlg_reg = dml20_rq_dlg_get_dlg_reg,
 	.rq_dlg_get_rq_reg = dml20_rq_dlg_get_rq_reg
 };
 
-const struct dml_funcs dml20v2_funcs = {
+static const struct dml_funcs dml20v2_funcs = {
 	.validate = dml20v2_ModeSupportAndSystemConfigurationFull,
 	.recalculate = dml20v2_recalculate,
 	.rq_dlg_get_dlg_reg = dml20v2_rq_dlg_get_dlg_reg,
 	.rq_dlg_get_rq_reg = dml20v2_rq_dlg_get_rq_reg
 };
 
-const struct dml_funcs dml21_funcs = {
-        .validate = dml21_ModeSupportAndSystemConfigurationFull,
-        .recalculate = dml21_recalculate,
-        .rq_dlg_get_dlg_reg = dml21_rq_dlg_get_dlg_reg,
-        .rq_dlg_get_rq_reg = dml21_rq_dlg_get_rq_reg
+static const struct dml_funcs dml21_funcs = {
+	.validate = dml21_ModeSupportAndSystemConfigurationFull,
+	.recalculate = dml21_recalculate,
+	.rq_dlg_get_dlg_reg = dml21_rq_dlg_get_dlg_reg,
+	.rq_dlg_get_rq_reg = dml21_rq_dlg_get_rq_reg
 };
 
-const struct dml_funcs dml30_funcs = {
+static const struct dml_funcs dml30_funcs = {
 	.validate = dml30_ModeSupportAndSystemConfigurationFull,
 	.recalculate = dml30_recalculate,
 	.rq_dlg_get_dlg_reg = dml30_rq_dlg_get_dlg_reg,
 	.rq_dlg_get_rq_reg = dml30_rq_dlg_get_rq_reg
 };
 
-const struct dml_funcs dml31_funcs = {
+static const struct dml_funcs dml31_funcs = {
 	.validate = dml31_ModeSupportAndSystemConfigurationFull,
 	.recalculate = dml31_recalculate,
 	.rq_dlg_get_dlg_reg = dml31_rq_dlg_get_dlg_reg,
 	.rq_dlg_get_rq_reg = dml31_rq_dlg_get_rq_reg
+};
+
+static const struct dml_funcs dml314_funcs = {
+	.validate = dml314_ModeSupportAndSystemConfigurationFull,
+	.recalculate = dml314_recalculate,
+	.rq_dlg_get_dlg_reg = dml314_rq_dlg_get_dlg_reg,
+	.rq_dlg_get_rq_reg = dml314_rq_dlg_get_rq_reg
+};
+
+static const struct dml_funcs dml32_funcs = {
+	.validate = dml32_ModeSupportAndSystemConfigurationFull,
+	.recalculate = dml32_recalculate,
+	.rq_dlg_get_dlg_reg_v2 = dml32_rq_dlg_get_dlg_reg,
+	.rq_dlg_get_rq_reg_v2 = dml32_rq_dlg_get_rq_reg
 };
 
 void dml_init_instance(struct display_mode_lib *lib,
@@ -82,6 +100,7 @@ void dml_init_instance(struct display_mode_lib *lib,
 	lib->project = project;
 	switch (project) {
 	case DML_PROJECT_NAVI10:
+	case DML_PROJECT_DCN201:
 		lib->funcs = dml20_funcs;
 		break;
 	case DML_PROJECT_NAVI10v2:
@@ -95,7 +114,14 @@ void dml_init_instance(struct display_mode_lib *lib,
 		break;
 	case DML_PROJECT_DCN31:
 	case DML_PROJECT_DCN31_FPGA:
+	case DML_PROJECT_DCN315:
 		lib->funcs = dml31_funcs;
+		break;
+	case DML_PROJECT_DCN314:
+		lib->funcs = dml314_funcs;
+		break;
+	case DML_PROJECT_DCN32:
+		lib->funcs = dml32_funcs;
 		break;
 
 	default:

@@ -2,13 +2,13 @@
 # Copyright 2018 Linaro Ltd.
 %YAML 1.2
 ---
-$id: "http://devicetree.org/schemas/net/intel,ixp4xx-ethernet.yaml#"
-$schema: "http://devicetree.org/meta-schemas/core.yaml#"
+$id: http://devicetree.org/schemas/net/intel,ixp4xx-ethernet.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
 
 title: Intel IXP4xx ethernet
 
 allOf:
-  - $ref: "ethernet-controller.yaml#"
+  - $ref: ethernet-controller.yaml#
 
 maintainers:
   - Linus Walleij <linus.walleij@linaro.org>
@@ -28,13 +28,19 @@ properties:
     description: Ethernet MMIO address range
 
   queue-rx:
-    $ref: '/schemas/types.yaml#/definitions/phandle-array'
-    maxItems: 1
+    $ref: /schemas/types.yaml#/definitions/phandle-array
+    items:
+      - items:
+          - description: phandle to the RX queue node
+          - description: RX queue instance to use
     description: phandle to the RX queue on the NPE
 
   queue-txready:
-    $ref: '/schemas/types.yaml#/definitions/phandle-array'
-    maxItems: 1
+    $ref: /schemas/types.yaml#/definitions/phandle-array
+    items:
+      - items:
+          - description: phandle to the TX READY queue node
+          - description: TX READY queue instance to use
     description: phandle to the TX READY queue on the NPE
 
   phy-mode: true
@@ -42,14 +48,17 @@ properties:
   phy-handle: true
 
   intel,npe-handle:
-    $ref: '/schemas/types.yaml#/definitions/phandle-array'
-    maxItems: 1
+    $ref: /schemas/types.yaml#/definitions/phandle-array
+    items:
+      - items:
+          - description: phandle to the NPE this ethernet instance is using
+          - description: the NPE instance to use
     description: phandle to the NPE this ethernet instance is using
       and the instance to use in the second cell
 
   mdio:
-    type: object
-    $ref: "mdio.yaml#"
+    $ref: mdio.yaml#
+    unevaluatedProperties: false
     description: optional node for embedded MDIO controller
 
 required:

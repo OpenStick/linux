@@ -747,7 +747,8 @@ batadv_reroute_unicast_packet(struct batadv_priv *bat_priv, struct sk_buff *skb,
 	struct batadv_orig_node *orig_node = NULL;
 	struct batadv_hard_iface *primary_if = NULL;
 	bool ret = false;
-	u8 *orig_addr, orig_ttvn;
+	const u8 *orig_addr;
+	u8 orig_ttvn;
 
 	if (batadv_is_my_client(bat_priv, dst_addr, vid)) {
 		primary_if = batadv_primary_if_get_selected(bat_priv);
@@ -1072,10 +1073,9 @@ int batadv_recv_unicast_tvlv(struct sk_buff *skb,
 	if (tvlv_buff_len > skb->len - hdr_size)
 		goto free_skb;
 
-	ret = batadv_tvlv_containers_process(bat_priv, false, NULL,
-					     unicast_tvlv_packet->src,
-					     unicast_tvlv_packet->dst,
-					     tvlv_buff, tvlv_buff_len);
+	ret = batadv_tvlv_containers_process(bat_priv, BATADV_UNICAST_TVLV,
+					     NULL, skb, tvlv_buff,
+					     tvlv_buff_len);
 
 	if (ret != NET_RX_SUCCESS) {
 		ret = batadv_route_unicast_packet(skb, recv_if);

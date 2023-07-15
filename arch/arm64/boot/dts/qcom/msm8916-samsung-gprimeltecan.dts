@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+/dts-v1/;
+
+#include "msm8916-samsung-gprime-common.dtsi"
+
+/ {
+	model = "Samsung Galaxy Grand Prime (CAN)";
+	compatible = "samsung,gprimeltecan", "qcom,msm8916";
+	chassis-type = "handset";
+
+	reserved-memory {
+		/* Additional memory used by Samsung firmware modifications */
+		tz-apps@85500000 {
+			reg = <0x0 0x85500000 0x0 0xb00000>;
+			no-map;
+		};
+
+		mpss_mem: mpss@86800000 {
+			reg = <0x0 0x86800000 0x0 0x5400000>;
+			no-map;
+		};
+
+		gps_mem: gps@8bc00000 {
+			reg = <0x0 0x8bc00000 0x0 0x200000>;
+			no-map;
+		};
+	};
+};
+
+&blsp_i2c6 {
+	status = "okay";
+
+	nfc@27 {
+		compatible = "samsung,s3fwrn5-i2c";
+		reg = <0x27>;
+
+		interrupt-parent = <&msmgpio>;
+		interrupts = <21 IRQ_TYPE_EDGE_RISING>;
+
+		en-gpios = <&msmgpio 20 GPIO_ACTIVE_HIGH>;
+		wake-gpios = <&msmgpio 49 GPIO_ACTIVE_HIGH>;
+
+		clocks = <&rpmcc RPM_SMD_BB_CLK2_PIN>;
+
+		pinctrl-0 = <&nfc_default>, <&nfc_clk_req>;
+		pinctrl-names = "default";
+	};
+};
+
+&bosch_accel {
+	status = "okay";
+};
+
+&bosch_magn {
+	status = "okay";
+};

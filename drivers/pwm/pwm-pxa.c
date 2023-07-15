@@ -6,6 +6,13 @@
  *
  * 2008-02-13	initial version
  *		eric miao <eric.miao@marvell.com>
+ *
+ * Links to reference manuals for some of the supported PWM chips can be found
+ * in Documentation/arm/marvell.rst.
+ *
+ * Limitations:
+ * - When PWM is stopped, the current PWM period stops abruptly at the next
+ *   input clock (PWMCR_SD is set) and the output is driven to inactive.
  */
 
 #include <linux/module.h>
@@ -58,13 +65,12 @@ static inline struct pxa_pwm_chip *to_pxa_pwm_chip(struct pwm_chip *chip)
  * duty_ns   = 10^9 * (PRESCALE + 1) * DC / PWM_CLK_RATE
  */
 static int pxa_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
-			  int duty_ns, int period_ns)
+			  u64 duty_ns, u64 period_ns)
 {
 	struct pxa_pwm_chip *pc = to_pxa_pwm_chip(chip);
 	unsigned long long c;
 	unsigned long period_cycles, prescale, pv, dc;
 	unsigned long offset;
-	int rc;
 
 	offset = pwm->hwpwm ? 0x10 : 0;
 
@@ -84,41 +90,50 @@ static int pxa_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 	if (duty_ns == period_ns)
 		dc = PWMDCR_FD;
 	else
-		dc = (pv + 1) * duty_ns / period_ns;
+		dc = mul_u64_u64_div_u64(pv + 1, duty_ns, period_ns);
 
-	/* NOTE: the clock to PWM has to be enabled first
-	 * before writing to the registers
-	 */
-	rc = clk_prepare_enable(pc->clk);
-	if (rc < 0)
-		return rc;
-
-	writel(prescale, pc->mmio_base + offset + PWMCR);
+	writel(prescale | PWMCR_SD, pc->mmio_base + offset + PWMCR);
 	writel(dc, pc->mmio_base + offset + PWMDCR);
 	writel(pv, pc->mmio_base + offset + PWMPCR);
 
-	clk_disable_unprepare(pc->clk);
 	return 0;
 }
 
-static int pxa_pwm_enable(struct pwm_chip *chip, struct pwm_device *pwm)
+static int pxa_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
+			 const struct pwm_state *state)
 {
 	struct pxa_pwm_chip *pc = to_pxa_pwm_chip(chip);
+	u64 duty_cycle;
+	int err;
 
-	return clk_prepare_enable(pc->clk);
-}
+	if (state->polarity != PWM_POLARITY_NORMAL)
+		return -EINVAL;
 
-static void pxa_pwm_disable(struct pwm_chip *chip, struct pwm_device *pwm)
-{
-	struct pxa_pwm_chip *pc = to_pxa_pwm_chip(chip);
+	err = clk_prepare_enable(pc->clk);
+	if (err)
+		return err;
+
+	duty_cycle = state->enabled ? state->duty_cycle : 0;
+
+	err = pxa_pwm_config(chip, pwm, duty_cycle, state->period);
+	if (err) {
+		clk_disable_unprepare(pc->clk);
+		return err;
+	}
+
+	if (state->enabled && !pwm->state.enabled)
+		return 0;
 
 	clk_disable_unprepare(pc->clk);
+
+	if (!state->enabled && pwm->state.enabled)
+		clk_disable_unprepare(pc->clk);
+
+	return 0;
 }
 
 static const struct pwm_ops pxa_pwm_ops = {
-	.config = pxa_pwm_config,
-	.enable = pxa_pwm_enable,
-	.disable = pxa_pwm_disable,
+	.apply = pxa_pwm_apply,
 	.owner = THIS_MODULE,
 };
 
@@ -148,20 +163,6 @@ static const struct platform_device_id *pxa_pwm_get_id_dt(struct device *dev)
 	return id ? id->data : NULL;
 }
 
-static struct pwm_device *
-pxa_pwm_of_xlate(struct pwm_chip *pc, const struct of_phandle_args *args)
-{
-	struct pwm_device *pwm;
-
-	pwm = pwm_request_from_chip(pc, 0, NULL);
-	if (IS_ERR(pwm))
-		return pwm;
-
-	pwm->args.period = args->args[0];
-
-	return pwm;
-}
-
 static int pwm_probe(struct platform_device *pdev)
 {
 	const struct platform_device_id *id = platform_get_device_id(pdev);
@@ -187,7 +188,7 @@ static int pwm_probe(struct platform_device *pdev)
 	pc->chip.npwm = (id->driver_data & HAS_SECONDARY_PWM) ? 2 : 1;
 
 	if (IS_ENABLED(CONFIG_OF)) {
-		pc->chip.of_xlate = pxa_pwm_of_xlate;
+		pc->chip.of_xlate = of_pwm_single_xlate;
 		pc->chip.of_pwm_n_cells = 1;
 	}
 

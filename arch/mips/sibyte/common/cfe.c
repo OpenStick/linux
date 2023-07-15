@@ -7,7 +7,6 @@
 #include <linux/kernel.h>
 #include <linux/linkage.h>
 #include <linux/mm.h>
-#include <linux/blkdev.h>
 #include <linux/memblock.h>
 #include <linux/pm.h>
 #include <linux/smp.h>
@@ -35,11 +34,6 @@
 #define MAX_RAM_SIZE (0x1fffffffULL)
 #endif
 #endif
-
-#define SIBYTE_MAX_MEM_REGIONS 8
-phys_addr_t board_mem_region_addrs[SIBYTE_MAX_MEM_REGIONS];
-phys_addr_t board_mem_region_sizes[SIBYTE_MAX_MEM_REGIONS];
-unsigned int board_mem_region_count;
 
 int cfe_cons_handle;
 
@@ -141,16 +135,6 @@ static __init void prom_meminit(void)
 				if (size > 512)
 					size -= 512;
 				memblock_add(addr, size);
-			}
-			board_mem_region_addrs[board_mem_region_count] = addr;
-			board_mem_region_sizes[board_mem_region_count] = size;
-			board_mem_region_count++;
-			if (board_mem_region_count ==
-			    SIBYTE_MAX_MEM_REGIONS) {
-				/*
-				 * Too many regions.  Need to configure more
-				 */
-				while(1);
 			}
 		}
 	}
@@ -311,7 +295,7 @@ void __init prom_init(void)
 #if defined(CONFIG_SIBYTE_BCM112X) || defined(CONFIG_SIBYTE_SB1250)
 	register_smp_ops(&sb_smp_ops);
 #endif
-#if defined(CONFIG_SIBYTE_BCM1x55) || defined(CONFIG_SIBYTE_BCM1x80)
+#ifdef CONFIG_SIBYTE_BCM1x80
 	register_smp_ops(&bcm1480_smp_ops);
 #endif
 }

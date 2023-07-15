@@ -10,19 +10,21 @@
 #include <linux/bitmap.h>
 #include <linux/bitops.h>
 #include <linux/ctype.h>
-#include <linux/gpio.h>
-#include <linux/gpio/consumer.h>
-#include <linux/gpio/driver.h>
-#include <linux/gpio/machine.h>
 #include <linux/idr.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/overflow.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
 
+#include <linux/gpio/consumer.h>
+#include <linux/gpio/driver.h>
+#include <linux/gpio/machine.h>
+
+#define AGGREGATOR_MAX_GPIOS 512
 
 /*
  * GPIO Aggregator sysfs interface
@@ -64,7 +66,7 @@ static int aggr_parse(struct gpio_aggregator *aggr)
 	unsigned int i, n = 0;
 	int error = 0;
 
-	bitmap = bitmap_alloc(ARCH_NR_GPIOS, GFP_KERNEL);
+	bitmap = bitmap_alloc(AGGREGATOR_MAX_GPIOS, GFP_KERNEL);
 	if (!bitmap)
 		return -ENOMEM;
 
@@ -84,13 +86,13 @@ static int aggr_parse(struct gpio_aggregator *aggr)
 		}
 
 		/* GPIO chip + offset(s) */
-		error = bitmap_parselist(offsets, bitmap, ARCH_NR_GPIOS);
+		error = bitmap_parselist(offsets, bitmap, AGGREGATOR_MAX_GPIOS);
 		if (error) {
 			pr_err("Cannot parse %s: %d\n", offsets, error);
 			goto free_bitmap;
 		}
 
-		for_each_set_bit(i, bitmap, ARCH_NR_GPIOS) {
+		for_each_set_bit(i, bitmap, AGGREGATOR_MAX_GPIOS) {
 			error = aggr_add_gpio(aggr, name, i, &n);
 			if (error)
 				goto free_bitmap;
@@ -247,6 +249,11 @@ struct gpiochip_fwd {
 	unsigned long tmp[];		/* values and descs for multiple ops */
 };
 
+#define fwd_tmp_values(fwd)	&(fwd)->tmp[0]
+#define fwd_tmp_descs(fwd)	(void *)&(fwd)->tmp[BITS_TO_LONGS((fwd)->chip.ngpio)]
+
+#define fwd_tmp_size(ngpios)	(BITS_TO_LONGS((ngpios)) + (ngpios))
+
 static int gpio_fwd_get_direction(struct gpio_chip *chip, unsigned int offset)
 {
 	struct gpiochip_fwd *fwd = gpiochip_get_data(chip);
@@ -273,26 +280,26 @@ static int gpio_fwd_get(struct gpio_chip *chip, unsigned int offset)
 {
 	struct gpiochip_fwd *fwd = gpiochip_get_data(chip);
 
-	return gpiod_get_value(fwd->descs[offset]);
+	return chip->can_sleep ? gpiod_get_value_cansleep(fwd->descs[offset])
+			       : gpiod_get_value(fwd->descs[offset]);
 }
 
 static int gpio_fwd_get_multiple(struct gpiochip_fwd *fwd, unsigned long *mask,
 				 unsigned long *bits)
 {
-	struct gpio_desc **descs;
-	unsigned long *values;
+	struct gpio_desc **descs = fwd_tmp_descs(fwd);
+	unsigned long *values = fwd_tmp_values(fwd);
 	unsigned int i, j = 0;
 	int error;
-
-	/* Both values bitmap and desc pointers are stored in tmp[] */
-	values = &fwd->tmp[0];
-	descs = (void *)&fwd->tmp[BITS_TO_LONGS(fwd->chip.ngpio)];
 
 	bitmap_clear(values, 0, fwd->chip.ngpio);
 	for_each_set_bit(i, mask, fwd->chip.ngpio)
 		descs[j++] = fwd->descs[i];
 
-	error = gpiod_get_array_value(j, descs, NULL, values);
+	if (fwd->chip.can_sleep)
+		error = gpiod_get_array_value_cansleep(j, descs, NULL, values);
+	else
+		error = gpiod_get_array_value(j, descs, NULL, values);
 	if (error)
 		return error;
 
@@ -327,26 +334,28 @@ static void gpio_fwd_set(struct gpio_chip *chip, unsigned int offset, int value)
 {
 	struct gpiochip_fwd *fwd = gpiochip_get_data(chip);
 
-	gpiod_set_value(fwd->descs[offset], value);
+	if (chip->can_sleep)
+		gpiod_set_value_cansleep(fwd->descs[offset], value);
+	else
+		gpiod_set_value(fwd->descs[offset], value);
 }
 
 static void gpio_fwd_set_multiple(struct gpiochip_fwd *fwd, unsigned long *mask,
 				  unsigned long *bits)
 {
-	struct gpio_desc **descs;
-	unsigned long *values;
+	struct gpio_desc **descs = fwd_tmp_descs(fwd);
+	unsigned long *values = fwd_tmp_values(fwd);
 	unsigned int i, j = 0;
-
-	/* Both values bitmap and desc pointers are stored in tmp[] */
-	values = &fwd->tmp[0];
-	descs = (void *)&fwd->tmp[BITS_TO_LONGS(fwd->chip.ngpio)];
 
 	for_each_set_bit(i, mask, fwd->chip.ngpio) {
 		__assign_bit(j, values, test_bit(i, bits));
 		descs[j++] = fwd->descs[i];
 	}
 
-	gpiod_set_array_value(j, descs, NULL, values);
+	if (fwd->chip.can_sleep)
+		gpiod_set_array_value_cansleep(j, descs, NULL, values);
+	else
+		gpiod_set_array_value(j, descs, NULL, values);
 }
 
 static void gpio_fwd_set_multiple_locked(struct gpio_chip *chip,
@@ -374,6 +383,13 @@ static int gpio_fwd_set_config(struct gpio_chip *chip, unsigned int offset,
 	return gpiod_set_config(fwd->descs[offset], config);
 }
 
+static int gpio_fwd_to_irq(struct gpio_chip *chip, unsigned int offset)
+{
+	struct gpiochip_fwd *fwd = gpiochip_get_data(chip);
+
+	return gpiod_to_irq(fwd->descs[offset]);
+}
+
 /**
  * gpiochip_fwd_create() - Create a new GPIO forwarder
  * @dev: Parent device pointer
@@ -398,8 +414,8 @@ static struct gpiochip_fwd *gpiochip_fwd_create(struct device *dev,
 	unsigned int i;
 	int error;
 
-	fwd = devm_kzalloc(dev, struct_size(fwd, tmp,
-			   BITS_TO_LONGS(ngpios) + ngpios), GFP_KERNEL);
+	fwd = devm_kzalloc(dev, struct_size(fwd, tmp, fwd_tmp_size(ngpios)),
+			   GFP_KERNEL);
 	if (!fwd)
 		return ERR_PTR(-ENOMEM);
 
@@ -414,7 +430,8 @@ static struct gpiochip_fwd *gpiochip_fwd_create(struct device *dev,
 	for (i = 0; i < ngpios; i++) {
 		struct gpio_chip *parent = gpiod_to_chip(descs[i]);
 
-		dev_dbg(dev, "%u => gpio-%d\n", i, desc_to_gpio(descs[i]));
+		dev_dbg(dev, "%u => gpio %d irq %d\n", i,
+			desc_to_gpio(descs[i]), gpiod_to_irq(descs[i]));
 
 		if (gpiod_cansleep(descs[i]))
 			chip->can_sleep = true;
@@ -432,6 +449,7 @@ static struct gpiochip_fwd *gpiochip_fwd_create(struct device *dev,
 	chip->get_multiple = gpio_fwd_get_multiple_locked;
 	chip->set = gpio_fwd_set;
 	chip->set_multiple = gpio_fwd_set_multiple_locked;
+	chip->to_irq = gpio_fwd_to_irq;
 	chip->base = -1;
 	chip->ngpio = ngpios;
 	fwd->descs = descs;

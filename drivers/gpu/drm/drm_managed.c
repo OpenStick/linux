@@ -8,6 +8,7 @@
 #include <drm/drm_managed.h>
 
 #include <linux/list.h>
+#include <linux/mutex.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 
@@ -262,3 +263,11 @@ void drmm_kfree(struct drm_device *dev, void *data)
 	free_dr(dr_match);
 }
 EXPORT_SYMBOL(drmm_kfree);
+
+void __drmm_mutex_release(struct drm_device *dev, void *res)
+{
+	struct mutex *lock = res;
+
+	mutex_destroy(lock);
+}
+EXPORT_SYMBOL(__drmm_mutex_release);

@@ -183,6 +183,7 @@ void nfcmrvl_nci_unregister_dev(struct nfcmrvl_private *priv)
 {
 	struct nci_dev *ndev = priv->ndev;
 
+	nci_unregister_device(ndev);
 	if (priv->ndev->nfc_dev->fw_download_in_progress)
 		nfcmrvl_fw_dnld_abort(priv);
 
@@ -191,7 +192,6 @@ void nfcmrvl_nci_unregister_dev(struct nfcmrvl_private *priv)
 	if (gpio_is_valid(priv->config.reset_n_io))
 		gpio_free(priv->config.reset_n_io);
 
-	nci_unregister_device(ndev);
 	nci_free_device(ndev);
 	kfree(priv);
 }
@@ -261,11 +261,7 @@ int nfcmrvl_parse_dt(struct device_node *node,
 		return reset_n_io;
 	}
 	pdata->reset_n_io = reset_n_io;
-
-	if (of_find_property(node, "hci-muxed", NULL))
-		pdata->hci_muxed = 1;
-	else
-		pdata->hci_muxed = 0;
+	pdata->hci_muxed = of_property_read_bool(node, "hci-muxed");
 
 	return 0;
 }

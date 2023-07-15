@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/**
+/*
  * meson-ir-tx.c - Amlogic Meson IR TX driver
  *
  * Copyright (c) 2021, SberDevices. All Rights Reserved.
@@ -323,10 +323,8 @@ static int __init meson_irtx_probe(struct platform_device *pdev)
 		return PTR_ERR(ir->reg_base);
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(dev, "no irq resource found\n");
+	if (irq < 0)
 		return -ENODEV;
-	}
 
 	ir->dev = dev;
 	ir->carrier = MIRTX_DEFAULT_CARRIER;
@@ -374,13 +372,11 @@ static int __init meson_irtx_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int meson_irtx_remove(struct platform_device *pdev)
+static void meson_irtx_remove(struct platform_device *pdev)
 {
 	struct rc_dev *rc = platform_get_drvdata(pdev);
 
 	rc_unregister_device(rc);
-
-	return 0;
 }
 
 static const struct of_device_id meson_irtx_dt_match[] = {
@@ -392,10 +388,9 @@ static const struct of_device_id meson_irtx_dt_match[] = {
 MODULE_DEVICE_TABLE(of, meson_irtx_dt_match);
 
 static struct platform_driver meson_irtx_pd = {
-	.remove = meson_irtx_remove,
+	.remove_new = meson_irtx_remove,
 	.driver = {
 		.name = DRIVER_NAME,
-		.owner  = THIS_MODULE,
 		.of_match_table = meson_irtx_dt_match,
 	},
 };

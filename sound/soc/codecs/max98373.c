@@ -5,6 +5,7 @@
 #include <linux/delay.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
+#include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/cdev.h>
@@ -30,7 +31,7 @@ static int max98373_dac_event(struct snd_soc_dapm_widget *w,
 			MAX98373_GLOBAL_EN_MASK, 1);
 		usleep_range(30000, 31000);
 		break;
-	case SND_SOC_DAPM_POST_PMD:
+	case SND_SOC_DAPM_PRE_PMD:
 		regmap_update_bits(max98373->regmap,
 			MAX98373_R20FF_GLOBAL_SHDN,
 			MAX98373_GLOBAL_EN_MASK, 0);
@@ -63,7 +64,7 @@ static const struct snd_kcontrol_new max98373_spkfb_control =
 static const struct snd_soc_dapm_widget max98373_dapm_widgets[] = {
 SND_SOC_DAPM_DAC_E("Amp Enable", "HiFi Playback",
 	MAX98373_R202B_PCM_RX_EN, 0, 0, max98373_dac_event,
-	SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_POST_PMD),
+	SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_PRE_PMD),
 SND_SOC_DAPM_MUX("DAI Sel Mux", SND_SOC_NOPM, 0, 0,
 	&max98373_dai_controls),
 SND_SOC_DAPM_OUTPUT("BE_OUT"),
@@ -436,12 +437,22 @@ const struct snd_soc_component_driver soc_codec_dev_max98373 = {
 	.num_dapm_routes	= ARRAY_SIZE(max98373_audio_map),
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
-	.non_legacy_dai_naming	= 1,
 };
 EXPORT_SYMBOL_GPL(soc_codec_dev_max98373);
 
+static int max98373_sdw_probe(struct snd_soc_component *component)
+{
+	int ret;
+
+	ret = pm_runtime_resume(component->dev);
+	if (ret < 0 && ret != -EACCES)
+		return ret;
+
+	return 0;
+}
+
 const struct snd_soc_component_driver soc_codec_dev_max98373_sdw = {
-	.probe			= NULL,
+	.probe			= max98373_sdw_probe,
 	.controls		= max98373_snd_controls,
 	.num_controls		= ARRAY_SIZE(max98373_snd_controls),
 	.dapm_widgets		= max98373_dapm_widgets,
@@ -450,7 +461,6 @@ const struct snd_soc_component_driver soc_codec_dev_max98373_sdw = {
 	.num_dapm_routes	= ARRAY_SIZE(max98373_audio_map),
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
-	.non_legacy_dai_naming	= 1,
 };
 EXPORT_SYMBOL_GPL(soc_codec_dev_max98373_sdw);
 

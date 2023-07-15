@@ -21,18 +21,18 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&gpio_keys_default>;
+		pinctrl-names = "default";
 
 		label = "GPIO Buttons";
 
-		volume-up {
+		volume-up-button {
 			label = "Volume Up";
 			gpios = <&msmgpio 108 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEUP>;
 		};
 
-		volume-down {
+		volume-down-button {
 			label = "Volume Down";
 			gpios = <&msmgpio 107 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEDOWN>;
@@ -50,8 +50,8 @@
 
 		startup-delay-us = <5000>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&sd_vmmc_en_default>;
+		pinctrl-names = "default";
 	};
 };
 
@@ -93,38 +93,42 @@
 	status = "okay";
 };
 
-&pronto {
-	status = "okay";
-};
-
 &sdhc_1 {
-	status = "okay";
-
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&sdc1_clk_on &sdc1_cmd_on &sdc1_data_on>;
 	pinctrl-1 = <&sdc1_clk_off &sdc1_cmd_off &sdc1_data_off>;
+	pinctrl-names = "default", "sleep";
+
+	status = "okay";
 };
 
 &sdhc_2 {
-	status = "okay";
-
 	vmmc-supply = <&reg_sd_vmmc>;
 
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&sdc2_clk_on &sdc2_cmd_on &sdc2_data_on &sdc2_cd_on>;
 	pinctrl-1 = <&sdc2_clk_off &sdc2_cmd_off &sdc2_data_off &sdc2_cd_off>;
+	pinctrl-names = "default", "sleep";
 
 	cd-gpios = <&msmgpio 38 GPIO_ACTIVE_HIGH>;
+
+	status = "okay";
 };
 
 &usb {
-	status = "okay";
 	dr_mode = "peripheral";
 	extcon = <&pm8916_usbin>;
+	status = "okay";
 };
 
 &usb_hs_phy {
 	extcon = <&pm8916_usbin>;
+};
+
+&wcnss {
+	status = "okay";
+};
+
+&wcnss_iris {
+	compatible = "qcom,wcn3620";
 };
 
 &smd_rpm_regulators {
@@ -229,18 +233,16 @@
 };
 
 &msmgpio {
-	gpio_keys_default: gpio-keys-default {
+	gpio_keys_default: gpio-keys-default-state {
 		pins = "gpio107", "gpio108";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-pull-up;
 	};
 
-	sd_vmmc_en_default: sd-vmmc-en-default {
+	sd_vmmc_en_default: sd-vmmc-en-default-state {
 		pins = "gpio60";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};

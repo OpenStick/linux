@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
- * Copyright (C) 2012-2014, 2018, 2020 Intel Corporation
+ * Copyright (C) 2012-2014, 2018, 2020-2021 Intel Corporation
  * Copyright (C) 2013-2015 Intel Mobile Communications GmbH
  * Copyright (C) 2016-2017 Intel Deutschland GmbH
  */
@@ -13,10 +13,12 @@
 #define PHY_BAND_6 (2)
 
 /* Supported channel width, vary if there is VHT support */
-#define PHY_VHT_CHANNEL_MODE20	(0x0)
-#define PHY_VHT_CHANNEL_MODE40	(0x1)
-#define PHY_VHT_CHANNEL_MODE80	(0x2)
-#define PHY_VHT_CHANNEL_MODE160	(0x3)
+#define IWL_PHY_CHANNEL_MODE20	0x0
+#define IWL_PHY_CHANNEL_MODE40	0x1
+#define IWL_PHY_CHANNEL_MODE80	0x2
+#define IWL_PHY_CHANNEL_MODE160	0x3
+/* and 320 MHz for EHT */
+#define IWL_PHY_CHANNEL_MODE320	0x4
 
 /*
  * Control channel position:
@@ -24,20 +26,17 @@
  * For VHT - bit-2 marks if the control is lower/upper relative to center-freq
  *   bits-1:0 mark the distance from the center freq. for 20Mhz, offset is 0.
  *                                   center_freq
- *                                        |
- * 40Mhz                          |_______|_______|
- * 80Mhz                  |_______|_______|_______|_______|
- * 160Mhz |_______|_______|_______|_______|_______|_______|_______|_______|
- * code      011     010     001     000  |  100     101     110    111
+ * For EHT - bit-3 is used for extended distance
+ *                                                |
+ * 40Mhz                                     |____|____|
+ * 80Mhz                                |____|____|____|____|
+ * 160Mhz                     |____|____|____|____|____|____|____|____|
+ * 320MHz |____|____|____|____|____|____|____|____|____|____|____|____|____|____|____|____|
+ * code    1011 1010 1001 1000 0011 0010 0001 0000 0100 0101 0110 0111 1100 1101 1110 1111
  */
-#define PHY_VHT_CTRL_POS_1_BELOW  (0x0)
-#define PHY_VHT_CTRL_POS_2_BELOW  (0x1)
-#define PHY_VHT_CTRL_POS_3_BELOW  (0x2)
-#define PHY_VHT_CTRL_POS_4_BELOW  (0x3)
-#define PHY_VHT_CTRL_POS_1_ABOVE  (0x4)
-#define PHY_VHT_CTRL_POS_2_ABOVE  (0x5)
-#define PHY_VHT_CTRL_POS_3_ABOVE  (0x6)
-#define PHY_VHT_CTRL_POS_4_ABOVE  (0x7)
+#define IWL_PHY_CTRL_POS_ABOVE		0x4
+#define IWL_PHY_CTRL_POS_OFFS_EXT	0x8
+#define IWL_PHY_CTRL_POS_OFFS_MSK	0x3
 
 /*
  * struct iwl_fw_channel_info_v1 - channel information
@@ -150,11 +149,12 @@ struct iwl_phy_context_cmd {
 	/* COMMON_INDEX_HDR_API_S_VER_1 */
 	__le32 id_and_color;
 	__le32 action;
-	/* PHY_CONTEXT_DATA_API_S_VER_3 */
+	/* PHY_CONTEXT_DATA_API_S_VER_3, PHY_CONTEXT_DATA_API_S_VER_4 */
 	struct iwl_fw_channel_info ci;
 	__le32 lmac_id;
-	__le32 rxchain_info;
+	__le32 rxchain_info; /* reserved in _VER_4 */
 	__le32 dsp_cfg_flags;
 	__le32 reserved;
-} __packed; /* PHY_CONTEXT_CMD_API_VER_3 */
+} __packed; /* PHY_CONTEXT_CMD_API_VER_3, PHY_CONTEXT_CMD_API_VER_4 */
+
 #endif /* __iwl_fw_api_phy_ctxt_h__ */

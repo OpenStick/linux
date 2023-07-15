@@ -30,8 +30,8 @@
 	headphones_switch: audio-switch {
 		compatible = "simple-audio-amplifier";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&headphones_switch_default>;
+		pinctrl-names = "default";
 
 		enable-gpios = <&msmgpio 120 GPIO_ACTIVE_HIGH>;
 		sound-name-prefix = "Headphones Switch";
@@ -67,12 +67,12 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&gpio_keys_default>;
+		pinctrl-names = "default";
 
 		label = "GPIO Buttons";
 
-		volume-up {
+		volume-up-button {
 			label = "Volume Up";
 			gpios = <&msmgpio 107 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEUP>;
@@ -87,8 +87,8 @@
 		compatible = "ti,tps65132";
 		reg = <0x3e>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&tps65132_en_default>;
+		pinctrl-names = "default";
 
 		reg_lcd_pos: outp {
 			regulator-name = "outp";
@@ -123,8 +123,8 @@
 		touchscreen-size-x = <720>;
 		touchscreen-size-y = <1280>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&touchscreen_default>;
+		pinctrl-names = "default";
 	};
 };
 
@@ -133,9 +133,9 @@
 };
 
 &dsi0 {
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&mdss_default>;
 	pinctrl-1 = <&mdss_sleep>;
+	pinctrl-names = "default", "sleep";
 
 	panel@0 {
 		compatible = "wingtech,wt865x8-panel";
@@ -169,45 +169,41 @@
 };
 
 &pm8916_bms {
-	status = "okay";
 	monitored-battery = <&battery>;
+	status = "okay";
 };
 
 &pm8916_pwm {
-	status = "okay";
-	pinctrl-names = "default";
 	pinctrl-0 = <&pwm_out>;
+	pinctrl-names = "default";
+	status = "okay";
 };
 
 &pm8916_resin {
-	status = "okay";
 	linux,code = <KEY_VOLUMEDOWN>;
+	status = "okay";
 };
 
 &pm8916_vib {
 	status = "okay";
 };
 
-&pronto {
-	status = "okay";
-};
-
 &sdhc_1 {
-	status = "okay";
-
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&sdc1_clk_on &sdc1_cmd_on &sdc1_data_on>;
 	pinctrl-1 = <&sdc1_clk_off &sdc1_cmd_off &sdc1_data_off>;
+	pinctrl-names = "default", "sleep";
+
+	status = "okay";
 };
 
 &sdhc_2 {
-	status = "okay";
-
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&sdc2_clk_on &sdc2_cmd_on &sdc2_data_on>;
 	pinctrl-1 = <&sdc2_clk_off &sdc2_cmd_off &sdc2_data_off>;
+	pinctrl-names = "default", "sleep";
 
 	non-removable;
+
+	status = "okay";
 };
 
 &usb {
@@ -219,6 +215,14 @@
 	qcom,mbhc-vthreshold-low = <75 150 237 450 500>;
 	qcom,mbhc-vthreshold-high = <75 150 237 450 500>;
 	qcom,hphl-jack-type-normally-open;
+};
+
+&wcnss {
+	status = "okay";
+};
+
+&wcnss_iris {
+	compatible = "qcom,wcn3620";
 };
 
 &smd_rpm_regulators {
@@ -284,8 +288,8 @@
 	l11 {
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <2950000>;
-		regulator-allow-set-load;
 		regulator-system-load = <200000>;
+		regulator-allow-set-load;
 	};
 
 	l12 {
@@ -325,71 +329,64 @@
 };
 
 &msmgpio {
-	gpio_keys_default: gpio-keys-default {
+	gpio_keys_default: gpio-keys-default-state {
 		pins = "gpio107";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-pull-up;
 	};
 
-	headphones_switch_default: headphones-switch-default {
+	headphones_switch_default: headphones-switch-default-state {
 		pins = "gpio120";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	mdss {
-		mdss_default: mdss-default {
-			pins = "gpio25";
-			function = "gpio";
-
-			drive-strength = <8>;
-			bias-disable;
-		};
-		mdss_sleep: mdss-sleep {
-			pins = "gpio25";
-			function = "gpio";
-
-			drive-strength = <2>;
-			bias-pull-down;
-		};
+	mdss_default: mdss-default-state {
+		pins = "gpio25";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
 	};
 
-	touchscreen_default: touchscreen-default {
-		pins = "gpio13";
+	mdss_sleep: mdss-sleep-state {
+		pins = "gpio25";
 		function = "gpio";
-
 		drive-strength = <2>;
-		bias-pull-up;
+		bias-pull-down;
+	};
 
-		reset {
+	touchscreen_default: touchscreen-default-state {
+		touchscreen-pins {
+			pins = "gpio13";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-up;
+		};
+
+		reset-pins {
 			pins = "gpio12";
 			function = "gpio";
-
 			drive-strength = <2>;
 			bias-disable;
 		};
 	};
 
-	tps65132_en_default: tps65132-en-default {
+	tps65132_en_default: tps65132-en-default-state {
 		pins = "gpio117", "gpio118";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 };
 
 &pm8916_mpps {
-	pwm_out: mpp4 {
+	pwm_out: mpp4-state {
 		pins = "mpp4";
 		function = "digital";
-
+		power-source = <PM8916_MPP_VPH>;
 		output-low;
 		qcom,dtest = <1>;
-		power-source = <PM8916_MPP_VPH>;
 	};
 };

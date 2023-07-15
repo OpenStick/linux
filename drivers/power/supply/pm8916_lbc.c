@@ -57,7 +57,7 @@ struct pm8916_lbc_charger {
 	struct extcon_dev *edev;
 	struct power_supply_desc desc;
 	struct power_supply *charger;
-	struct power_supply_battery_info info;
+	struct power_supply_battery_info *info;
 	struct regmap *regmap;
 	unsigned int reg[4];
 	unsigned int charge_voltage_max;
@@ -235,7 +235,7 @@ static int pm8916_lbc_charger_probe(struct platform_device *pdev)
 		return len;
 	} else if (len != 4) {
 		dev_err(dev, "Wrong amount of reg values: %d (4 expected)\n", len);
-		return ret;
+		return -EINVAL;
 	}
 
 	irq = platform_get_irq(pdev, 0);
@@ -326,7 +326,7 @@ static int pm8916_lbc_charger_probe(struct platform_device *pdev)
 
 	extcon_set_state_sync(chg->edev, EXTCON_USB, !!(tmp & PM8916_LBC_USB_USBIN_VALID));
 
-	chg->charge_voltage_max = chg->info.voltage_max_design_uv;
+	chg->charge_voltage_max = chg->info->voltage_max_design_uv;
 	ret = pm8916_lbc_charger_enable(chg);
 	if (ret)
 		return ret;

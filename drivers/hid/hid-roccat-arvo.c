@@ -344,6 +344,9 @@ static int arvo_probe(struct hid_device *hdev,
 {
 	int retval;
 
+	if (!hid_is_usb(hdev))
+		return -EINVAL;
+
 	retval = hid_parse(hdev);
 	if (retval) {
 		hid_err(hdev, "parse failed\n");
@@ -430,7 +433,7 @@ static int __init arvo_init(void)
 {
 	int retval;
 
-	arvo_class = class_create(THIS_MODULE, "arvo");
+	arvo_class = class_create("arvo");
 	if (IS_ERR(arvo_class))
 		return PTR_ERR(arvo_class);
 	arvo_class->dev_groups = arvo_groups;

@@ -6,7 +6,6 @@
 menuconfig MD
 	bool "Multiple devices driver support (RAID and LVM)"
 	depends on BLOCK
-	select SRCU
 	help
 	  Support multiple physical spindles through a single logical device.
 	  Required for RAID and logical volume management.
@@ -16,6 +15,10 @@ if MD
 config BLK_DEV_MD
 	tristate "RAID support"
 	select BLOCK_HOLDER_DEPRECATED if SYSFS
+	# BLOCK_LEGACY_AUTOLOAD requirement should be removed
+	# after relevant mdadm enhancements - to make "names=yes"
+	# the default - are widely available.
+	select BLOCK_LEGACY_AUTOLOAD
 	help
 	  This driver lets you combine several hard disk partitions into one
 	  logical block device. This can be used to simply append one
@@ -204,6 +207,7 @@ config BLK_DEV_DM
 	tristate "Device mapper support"
 	select BLOCK_HOLDER_DEPRECATED if SYSFS
 	select BLK_DEV_DM_BUILTIN
+	select BLK_MQ_STACKING
 	depends on DAX || DAX=n
 	help
 	  Device-mapper is a low level volume manager.  It works by allowing
@@ -610,6 +614,7 @@ config DM_INTEGRITY
 	select CRYPTO
 	select CRYPTO_SKCIPHER
 	select ASYNC_XOR
+	select DM_AUDIT if AUDIT
 	help
 	  This device-mapper target emulates a block device that has
 	  additional per-sector tags that can be used for storing
@@ -641,5 +646,14 @@ config DM_ZONED
 	  be called dm-zoned.
 
 	  If unsure, say N.
+
+config DM_AUDIT
+	bool "DM audit events"
+	depends on AUDIT
+	help
+	  Generate audit events for device-mapper.
+
+	  Enables audit logging of several security relevant events in the
+	  particular device-mapper targets, especially the integrity target.
 
 endif # MD

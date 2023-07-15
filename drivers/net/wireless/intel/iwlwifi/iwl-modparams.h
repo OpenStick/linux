@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
- * Copyright (C) 2005-2014, 2018-2020 Intel Corporation
+ * Copyright (C) 2005-2014, 2018-2022 Intel Corporation
  */
 #ifndef __iwl_modparams_h__
 #define __iwl_modparams_h__
@@ -62,6 +62,7 @@ enum iwl_uapsd_disable {
  * @disable_11ac: disable VHT capabilities, default = false.
  * @remove_when_gone: remove an inaccessible device from the PCIe bus.
  * @enable_ini: enable new FW debug infratructure (INI TLVs)
+ * @disable_11be: disable EHT capabilities, default = false.
  */
 struct iwl_mod_params {
 	int swcrypto;
@@ -83,7 +84,8 @@ struct iwl_mod_params {
 	 */
 	bool disable_11ax;
 	bool remove_when_gone;
-	bool enable_ini;
+	u32 enable_ini;
+	bool disable_11be;
 };
 
 static inline bool iwl_enable_rx_ampdu(void)

@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 /* Copyright (C) 2018 Netronome Systems, Inc. */
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <bpf/libbpf.h>
+#include <bpf/libbpf_internal.h>
 
 #include "disasm.h"
 #include "json_writer.h"
@@ -32,8 +35,8 @@ void kernel_syms_load(struct dump_data *dd)
 		return;
 
 	while (fgets(buff, sizeof(buff), fp)) {
-		tmp = reallocarray(dd->sym_mapping, dd->sym_count + 1,
-				   sizeof(*dd->sym_mapping));
+		tmp = libbpf_reallocarray(dd->sym_mapping, dd->sym_count + 1,
+					  sizeof(*dd->sym_mapping));
 		if (!tmp) {
 out:
 			free(dd->sym_mapping);
@@ -358,7 +361,8 @@ void dump_xlated_plain(struct dump_data *dd, void *buf, unsigned int len,
 }
 
 void dump_xlated_for_graph(struct dump_data *dd, void *buf_start, void *buf_end,
-			   unsigned int start_idx)
+			   unsigned int start_idx,
+			   bool opcodes, bool linum)
 {
 	const struct bpf_insn_cbs cbs = {
 		.cb_print	= print_insn_for_graph,
@@ -366,14 +370,61 @@ void dump_xlated_for_graph(struct dump_data *dd, void *buf_start, void *buf_end,
 		.cb_imm		= print_imm,
 		.private_data	= dd,
 	};
+	const struct bpf_prog_linfo *prog_linfo = dd->prog_linfo;
+	const struct bpf_line_info *last_linfo = NULL;
+	struct bpf_func_info *record = dd->func_info;
 	struct bpf_insn *insn_start = buf_start;
 	struct bpf_insn *insn_end = buf_end;
 	struct bpf_insn *cur = insn_start;
+	struct btf *btf = dd->btf;
+	bool double_insn = false;
+	char func_sig[1024];
 
 	for (; cur <= insn_end; cur++) {
-		printf("% 4d: ", (int)(cur - insn_start + start_idx));
+		unsigned int insn_off;
+
+		if (double_insn) {
+			double_insn = false;
+			continue;
+		}
+		double_insn = cur->code == (BPF_LD | BPF_IMM | BPF_DW);
+
+		insn_off = (unsigned int)(cur - insn_start + start_idx);
+		if (btf && record) {
+			if (record->insn_off == insn_off) {
+				btf_dumper_type_only(btf, record->type_id,
+						     func_sig,
+						     sizeof(func_sig));
+				if (func_sig[0] != '\0')
+					printf("; %s:\\l\\\n", func_sig);
+				record = (void *)record + dd->finfo_rec_size;
+			}
+		}
+
+		if (prog_linfo) {
+			const struct bpf_line_info *linfo;
+
+			linfo = bpf_prog_linfo__lfind(prog_linfo, insn_off, 0);
+			if (linfo && linfo != last_linfo) {
+				btf_dump_linfo_dotlabel(btf, linfo, linum);
+				last_linfo = linfo;
+			}
+		}
+
+		printf("%d: ", insn_off);
 		print_bpf_insn(&cbs, cur, true);
+
+		if (opcodes) {
+			printf("\\ \\ \\ \\ ");
+			fprint_hex(stdout, cur, 8, " ");
+			if (double_insn && cur <= insn_end - 1) {
+				printf(" ");
+				fprint_hex(stdout, cur + 1, 8, " ");
+			}
+			printf("\\l\\\n");
+		}
+
 		if (cur != insn_end)
-			printf(" | ");
+			printf("| ");
 	}
 }

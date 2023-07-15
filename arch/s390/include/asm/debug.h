@@ -4,8 +4,8 @@
  *
  *    Copyright IBM Corp. 1999, 2020
  */
-#ifndef DEBUG_H
-#define DEBUG_H
+#ifndef _ASM_S390_DEBUG_H
+#define _ASM_S390_DEBUG_H
 
 #include <linux/string.h>
 #include <linux/spinlock.h>
@@ -462,7 +462,7 @@ arch_initcall(VNAME(var, reg))
  *
  * @var: Name of debug_info_t variable
  * @name: Name of debug log (e.g. used for debugfs entry)
- * @pages_per_area: Number of pages per area
+ * @pages: Number of pages per area
  * @nr_areas: Number of debug areas
  * @buf_size: Size of data area in each debug entry
  * @view: Pointer to debug view struct
@@ -487,4 +487,4 @@ void debug_register_static(debug_info_t *id, int pages_per_area, int nr_areas);
 
 #endif /* MODULE */
 
-#endif /* DEBUG_H */
+#endif /* _ASM_S390_DEBUG_H */

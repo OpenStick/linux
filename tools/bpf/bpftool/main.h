@@ -8,12 +8,12 @@
 #undef GCC_VERSION
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <linux/bpf.h>
 #include <linux/compiler.h>
 #include <linux/kernel.h>
-#include <linux/hashtable.h>
-#include <tools/libc_compat.h>
 
+#include <bpf/hashmap.h>
 #include <bpf/libbpf.h>
 
 #include "json_writer.h"
@@ -63,14 +63,6 @@ static inline void *u64_to_ptr(__u64 ptr)
 #define HELP_SPEC_LINK							\
 	"LINK := { id LINK_ID | pinned FILE }"
 
-extern const char * const prog_type_name[];
-extern const size_t prog_type_name_size;
-
-extern const char * const attach_type_name[__MAX_BPF_ATTACH_TYPE];
-
-extern const char * const map_type_name[];
-extern const size_t map_type_name_size;
-
 /* keep in sync with the definition in skeleton/pid_iter.bpf.c */
 enum bpf_obj_type {
 	BPF_OBJ_UNKNOWN,
@@ -91,10 +83,7 @@ extern bool verifier_logs;
 extern bool relaxed_maps;
 extern bool use_loader;
 extern struct btf *base_btf;
-extern struct pinned_obj_table prog_table;
-extern struct pinned_obj_table map_table;
-extern struct pinned_obj_table link_table;
-extern struct obj_refs_table refs_table;
+extern struct hashmap *refs_table;
 
 void __printf(1, 2) p_err(const char *fmt, ...);
 void __printf(1, 2) p_info(const char *fmt, ...);
@@ -108,44 +97,30 @@ void set_max_rlimit(void);
 
 int mount_tracefs(const char *target);
 
-struct pinned_obj_table {
-	DECLARE_HASHTABLE(table, 16);
-};
-
-struct pinned_obj {
-	__u32 id;
-	char *path;
-	struct hlist_node hash;
-};
-
-struct obj_refs_table {
-	DECLARE_HASHTABLE(table, 16);
-};
-
 struct obj_ref {
 	int pid;
 	char comm[16];
 };
 
 struct obj_refs {
-	struct hlist_node node;
-	__u32 id;
 	int ref_cnt;
+	bool has_bpf_cookie;
 	struct obj_ref *refs;
+	__u64 bpf_cookie;
 };
 
 struct btf;
 struct bpf_line_info;
 
-int build_pinned_obj_table(struct pinned_obj_table *table,
+int build_pinned_obj_table(struct hashmap *table,
 			   enum bpf_obj_type type);
-void delete_pinned_obj_table(struct pinned_obj_table *tab);
-__weak int build_obj_refs_table(struct obj_refs_table *table,
+void delete_pinned_obj_table(struct hashmap *table);
+__weak int build_obj_refs_table(struct hashmap **table,
 				enum bpf_obj_type type);
-__weak void delete_obj_refs_table(struct obj_refs_table *table);
-__weak void emit_obj_refs_json(struct obj_refs_table *table, __u32 id,
+__weak void delete_obj_refs_table(struct hashmap *table);
+__weak void emit_obj_refs_json(struct hashmap *table, __u32 id,
 			       json_writer_t *json_wtr);
-__weak void emit_obj_refs_plain(struct obj_refs_table *table, __u32 id,
+__weak void emit_obj_refs_plain(struct hashmap *table, __u32 id,
 				const char *prefix);
 void print_dev_plain(__u32 ifindex, __u64 ns_dev, __u64 ns_inode);
 void print_dev_json(__u32 ifindex, __u64 ns_dev, __u64 ns_inode);
@@ -157,6 +132,10 @@ struct cmd {
 
 int cmd_select(const struct cmd *cmds, int argc, char **argv,
 	       int (*help)(int argc, char **argv));
+
+#define MAX_PROG_FULL_NAME 128
+void get_prog_full_name(const struct bpf_prog_info *prog_info, int prog_fd,
+			char *name_buff, size_t buff_len);
 
 int get_fd_type(int fd);
 const char *get_fd_type_name(enum bpf_obj_type type);
@@ -189,30 +168,32 @@ int prog_parse_fd(int *argc, char ***argv);
 int prog_parse_fds(int *argc, char ***argv, int **fds);
 int map_parse_fd(int *argc, char ***argv);
 int map_parse_fds(int *argc, char ***argv, int **fds);
-int map_parse_fd_and_info(int *argc, char ***argv, void *info, __u32 *info_len);
+int map_parse_fd_and_info(int *argc, char ***argv, struct bpf_map_info *info,
+			  __u32 *info_len);
 
 struct bpf_prog_linfo;
-#ifdef HAVE_LIBBFD_SUPPORT
-void disasm_print_insn(unsigned char *image, ssize_t len, int opcodes,
-		       const char *arch, const char *disassembler_options,
-		       const struct btf *btf,
-		       const struct bpf_prog_linfo *prog_linfo,
-		       __u64 func_ksym, unsigned int func_idx,
-		       bool linum);
+#if defined(HAVE_LLVM_SUPPORT) || defined(HAVE_LIBBFD_SUPPORT)
+int disasm_print_insn(unsigned char *image, ssize_t len, int opcodes,
+		      const char *arch, const char *disassembler_options,
+		      const struct btf *btf,
+		      const struct bpf_prog_linfo *prog_linfo,
+		      __u64 func_ksym, unsigned int func_idx,
+		      bool linum);
 int disasm_init(void);
 #else
 static inline
-void disasm_print_insn(unsigned char *image, ssize_t len, int opcodes,
-		       const char *arch, const char *disassembler_options,
-		       const struct btf *btf,
-		       const struct bpf_prog_linfo *prog_linfo,
-		       __u64 func_ksym, unsigned int func_idx,
-		       bool linum)
+int disasm_print_insn(unsigned char *image, ssize_t len, int opcodes,
+		      const char *arch, const char *disassembler_options,
+		      const struct btf *btf,
+		      const struct bpf_prog_linfo *prog_linfo,
+		      __u64 func_ksym, unsigned int func_idx,
+		      bool linum)
 {
+	return 0;
 }
 static inline int disasm_init(void)
 {
-	p_err("No libbfd support");
+	p_err("No JIT disassembly support");
 	return -1;
 }
 #endif
@@ -222,8 +203,7 @@ void print_hex_data_json(uint8_t *data, size_t len);
 unsigned int get_page_size(void);
 unsigned int get_possible_cpus(void);
 const char *
-ifindex_to_bfd_params(__u32 ifindex, __u64 ns_dev, __u64 ns_ino,
-		      const char **opt);
+ifindex_to_arch(__u32 ifindex, __u64 ns_dev, __u64 ns_ino, const char **opt);
 
 struct btf_dumper {
 	const struct btf *btf;
@@ -249,6 +229,8 @@ void btf_dump_linfo_plain(const struct btf *btf,
 			  const char *prefix, bool linum);
 void btf_dump_linfo_json(const struct btf *btf,
 			 const struct bpf_line_info *linfo, bool linum);
+void btf_dump_linfo_dotlabel(const struct btf *btf,
+			     const struct bpf_line_info *linfo, bool linum);
 
 struct nlattr;
 struct ifinfomsg;
@@ -259,4 +241,33 @@ int do_filter_dump(struct tcmsg *ifinfo, struct nlattr **tb, const char *kind,
 
 int print_all_levels(__maybe_unused enum libbpf_print_level level,
 		     const char *format, va_list args);
+
+size_t hash_fn_for_key_as_id(long key, void *ctx);
+bool equal_fn_for_key_as_id(long k1, long k2, void *ctx);
+
+/* bpf_attach_type_input_str - convert the provided attach type value into a
+ * textual representation that we accept for input purposes.
+ *
+ * This function is similar in nature to libbpf_bpf_attach_type_str, but
+ * recognizes some attach type names that have been used by the program in the
+ * past and which do not follow the string inference scheme that libbpf uses.
+ * These textual representations should only be used for user input.
+ *
+ * @t: The attach type
+ * Returns a pointer to a static string identifying the attach type. NULL is
+ * returned for unknown bpf_attach_type values.
+ */
+const char *bpf_attach_type_input_str(enum bpf_attach_type t);
+
+static inline bool hashmap__empty(struct hashmap *map)
+{
+	return map ? hashmap__size(map) == 0 : true;
+}
+
+int pathname_concat(char *buf, int buf_sz, const char *path,
+		    const char *name);
+
+/* print netfilter bpf_link info */
+void netfilter_dump_plain(const struct bpf_link_info *info);
+void netfilter_dump_json(const struct bpf_link_info *info, json_writer_t *wtr);
 #endif

@@ -205,9 +205,7 @@ static irqreturn_t fdp_nci_i2c_irq_thread_fn(int irq, void *phy_id)
 
 	r = fdp_nci_i2c_read(phy, &skb);
 
-	if (r == -EREMOTEIO)
-		return IRQ_HANDLED;
-	else if (r == -ENOMEM || r == -EBADMSG)
+	if (r == -EREMOTEIO || r == -ENOMEM || r == -EBADMSG)
 		return IRQ_HANDLED;
 
 	if (skb != NULL)
@@ -249,6 +247,9 @@ static void fdp_nci_i2c_read_device_properties(struct device *dev,
 					   len, sizeof(**fw_vsc_cfg),
 					   GFP_KERNEL);
 
+		if (!*fw_vsc_cfg)
+			goto alloc_err;
+
 		r = device_property_read_u8_array(dev, FDP_DP_FW_VSC_CFG_NAME,
 						  *fw_vsc_cfg, len);
 
@@ -262,6 +263,7 @@ vsc_read_err:
 		*fw_vsc_cfg = NULL;
 	}
 
+alloc_err:
 	dev_dbg(dev, "Clock type: %d, clock frequency: %d, VSC: %s",
 		*clock_type, *clock_freq, *fw_vsc_cfg != NULL ? "yes" : "no");
 }
@@ -335,18 +337,15 @@ static int fdp_nci_i2c_probe(struct i2c_client *client)
 		return r;
 	}
 
-	dev_dbg(dev, "I2C driver loaded\n");
 	return 0;
 }
 
-static int fdp_nci_i2c_remove(struct i2c_client *client)
+static void fdp_nci_i2c_remove(struct i2c_client *client)
 {
 	struct fdp_i2c_phy *phy = i2c_get_clientdata(client);
 
 	fdp_nci_remove(phy->ndev);
 	fdp_nci_i2c_disable(phy);
-
-	return 0;
 }
 
 static const struct acpi_device_id fdp_nci_i2c_acpi_match[] = {

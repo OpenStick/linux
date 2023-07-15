@@ -156,7 +156,7 @@ static struct pci_driver sil_pci_driver = {
 #endif
 };
 
-static struct scsi_host_template sil_sht = {
+static const struct scsi_host_template sil_sht = {
 	ATA_BASE_SHT(DRV_NAME),
 	/** These controllers support Large Block Transfer which allows
 	    transfer chunks up to 2GB and which cross 64KB boundaries,
@@ -307,7 +307,6 @@ static void sil_fill_sg(struct ata_queued_cmd *qc)
 
 		prd->addr = cpu_to_le32(addr);
 		prd->flags_len = cpu_to_le32(sg_len);
-		VPRINTK("PRD[%u] = (0x%X, 0x%X)\n", si, addr, sg_len);
 
 		last_prd = prd;
 		prd++;

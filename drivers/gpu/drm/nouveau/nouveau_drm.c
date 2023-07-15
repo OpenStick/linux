@@ -22,16 +22,17 @@
  * Authors: Ben Skeggs
  */
 
-#include <linux/console.h>
 #include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/pm_runtime.h>
 #include <linux/vga_switcheroo.h>
 #include <linux/mmu_notifier.h>
+#include <linux/dynamic_debug.h>
 
 #include <drm/drm_aperture.h>
-#include <drm/drm_crtc_helper.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_fbdev_generic.h>
 #include <drm/drm_gem_ttm_helper.h>
 #include <drm/drm_ioctl.h>
 #include <drm/drm_vblank.h>
@@ -48,7 +49,6 @@
 
 #include <nvif/class.h>
 #include <nvif/cl0002.h>
-#include <nvif/cla06f.h>
 
 #include "nouveau_drv.h"
 #include "nouveau_dma.h"
@@ -61,7 +61,6 @@
 #include "nouveau_bios.h"
 #include "nouveau_ioctl.h"
 #include "nouveau_abi16.h"
-#include "nouveau_fbcon.h"
 #include "nouveau_fence.h"
 #include "nouveau_debugfs.h"
 #include "nouveau_usif.h"
@@ -69,6 +68,18 @@
 #include "nouveau_platform.h"
 #include "nouveau_svm.h"
 #include "nouveau_dmem.h"
+
+DECLARE_DYNDBG_CLASSMAP(drm_debug_classes, DD_CLASS_TYPE_DISJOINT_BITS, 0,
+			"DRM_UT_CORE",
+			"DRM_UT_DRIVER",
+			"DRM_UT_KMS",
+			"DRM_UT_PRIME",
+			"DRM_UT_ATOMIC",
+			"DRM_UT_VBL",
+			"DRM_UT_STATE",
+			"DRM_UT_LEASE",
+			"DRM_UT_DP",
+			"DRM_UT_DRMRES");
 
 MODULE_PARM_DESC(config, "option string to pass to driver core");
 static char *nouveau_config;
@@ -303,28 +314,19 @@ static void
 nouveau_accel_ce_init(struct nouveau_drm *drm)
 {
 	struct nvif_device *device = &drm->client.device;
+	u64 runm;
 	int ret = 0;
 
 	/* Allocate channel that has access to a (preferably async) copy
 	 * engine, to use for TTM buffer moves.
 	 */
-	if (device->info.family >= NV_DEVICE_INFO_V0_KEPLER) {
-		ret = nouveau_channel_new(drm, device,
-					  nvif_fifo_runlist_ce(device), 0,
-					  true, &drm->cechan);
-	} else
-	if (device->info.chipset >= 0xa3 &&
-	    device->info.chipset != 0xaa &&
-	    device->info.chipset != 0xac) {
-		/* Prior to Kepler, there's only a single runlist, so all
-		 * engines can be accessed from any channel.
-		 *
-		 * We still want to use a separate channel though.
-		 */
-		ret = nouveau_channel_new(drm, device, NvDmaFB, NvDmaTT, false,
-					  &drm->cechan);
+	runm = nvif_fifo_runlist_ce(device);
+	if (!runm) {
+		NV_DEBUG(drm, "no ce runlist\n");
+		return;
 	}
 
+	ret = nouveau_channel_new(drm, device, false, runm, NvDmaFB, NvDmaTT, &drm->cechan);
 	if (ret)
 		NV_ERROR(drm, "failed to create ce channel, %d\n", ret);
 }
@@ -342,23 +344,17 @@ static void
 nouveau_accel_gr_init(struct nouveau_drm *drm)
 {
 	struct nvif_device *device = &drm->client.device;
-	u32 arg0, arg1;
+	u64 runm;
 	int ret;
 
-	if (device->info.family >= NV_DEVICE_INFO_V0_AMPERE)
-		return;
-
 	/* Allocate channel that has access to the graphics engine. */
-	if (device->info.family >= NV_DEVICE_INFO_V0_KEPLER) {
-		arg0 = nvif_fifo_runlist(device, NV_DEVICE_HOST_RUNLIST_ENGINES_GR);
-		arg1 = 1;
-	} else {
-		arg0 = NvDmaFB;
-		arg1 = NvDmaTT;
+	runm = nvif_fifo_runlist(device, NV_DEVICE_HOST_RUNLIST_ENGINES_GR);
+	if (!runm) {
+		NV_DEBUG(drm, "no gr runlist\n");
+		return;
 	}
 
-	ret = nouveau_channel_new(drm, device, arg0, arg1, false,
-				  &drm->channel);
+	ret = nouveau_channel_new(drm, device, false, runm, NvDmaFB, NvDmaTT, &drm->channel);
 	if (ret) {
 		NV_ERROR(drm, "failed to create kernel channel, %d\n", ret);
 		nouveau_accel_gr_fini(drm);
@@ -423,6 +419,7 @@ nouveau_accel_fini(struct nouveau_drm *drm)
 	nouveau_accel_gr_fini(drm);
 	if (drm->fence)
 		nouveau_fence(drm)->dtor(drm);
+	nouveau_channels_fini(drm);
 }
 
 static void
@@ -472,6 +469,7 @@ nouveau_accel_init(struct nouveau_drm *drm)
 		case PASCAL_CHANNEL_GPFIFO_A:
 		case VOLTA_CHANNEL_GPFIFO_A:
 		case TURING_CHANNEL_GPFIFO_A:
+		case AMPERE_CHANNEL_GPFIFO_A:
 		case AMPERE_CHANNEL_GPFIFO_B:
 			ret = nvc0_fence_create(drm);
 			break;
@@ -562,6 +560,7 @@ nouveau_drm_device_init(struct drm_device *dev)
 		nvkm_dbgopt(nouveau_debug, "DRM");
 
 	INIT_LIST_HEAD(&drm->clients);
+	mutex_init(&drm->clients_lock);
 	spin_lock_init(&drm->tile.lock);
 
 	/* workaround an odd issue on nvc1 by disabling the device's
@@ -597,7 +596,6 @@ nouveau_drm_device_init(struct drm_device *dev)
 	nouveau_hwmon_init(dev);
 	nouveau_svm_init(drm);
 	nouveau_dmem_init(drm);
-	nouveau_fbcon_init(dev);
 	nouveau_led_init(dev);
 
 	if (nouveau_pmops_runtime()) {
@@ -632,6 +630,7 @@ fail_alloc:
 static void
 nouveau_drm_device_fini(struct drm_device *dev)
 {
+	struct nouveau_cli *cli, *temp_cli;
 	struct nouveau_drm *drm = nouveau_drm(dev);
 
 	if (nouveau_pmops_runtime()) {
@@ -640,7 +639,6 @@ nouveau_drm_device_fini(struct drm_device *dev)
 	}
 
 	nouveau_led_fini(dev);
-	nouveau_fbcon_fini(dev);
 	nouveau_dmem_fini(drm);
 	nouveau_svm_fini(drm);
 	nouveau_hwmon_fini(dev);
@@ -656,9 +654,28 @@ nouveau_drm_device_fini(struct drm_device *dev)
 	nouveau_ttm_fini(drm);
 	nouveau_vga_fini(drm);
 
+	/*
+	 * There may be existing clients from as-yet unclosed files. For now,
+	 * clean them up here rather than deferring until the file is closed,
+	 * but this likely not correct if we want to support hot-unplugging
+	 * properly.
+	 */
+	mutex_lock(&drm->clients_lock);
+	list_for_each_entry_safe(cli, temp_cli, &drm->clients, head) {
+		list_del(&cli->head);
+		mutex_lock(&cli->mutex);
+		if (cli->abi16)
+			nouveau_abi16_fini(cli->abi16);
+		mutex_unlock(&cli->mutex);
+		nouveau_cli_fini(cli);
+		kfree(cli);
+	}
+	mutex_unlock(&drm->clients_lock);
+
 	nouveau_cli_fini(&drm->client);
 	nouveau_cli_fini(&drm->master);
 	nvif_parent_dtor(&drm->parent);
+	mutex_destroy(&drm->clients_lock);
 	kfree(drm);
 }
 
@@ -775,6 +792,11 @@ static int nouveau_drm_probe(struct pci_dev *pdev,
 	if (ret)
 		goto fail_drm_dev_init;
 
+	if (nouveau_drm(drm_dev)->client.device.info.ram_size <= 32 * 1024 * 1024)
+		drm_fbdev_generic_setup(drm_dev, 8);
+	else
+		drm_fbdev_generic_setup(drm_dev, 32);
+
 	quirk_broken_nv_runpm(pdev);
 	return 0;
 
@@ -796,7 +818,7 @@ nouveau_drm_device_remove(struct drm_device *dev)
 	struct nvkm_client *client;
 	struct nvkm_device *device;
 
-	drm_dev_unregister(dev);
+	drm_dev_unplug(dev);
 
 	client = nvxx_client(&drm->client.base);
 	device = nvkm_device_find(client->device);
@@ -831,8 +853,6 @@ nouveau_do_suspend(struct drm_device *dev, bool runtime)
 	nouveau_led_suspend(dev);
 
 	if (dev->mode_config.num_crtc) {
-		NV_DEBUG(drm, "suspending console...\n");
-		nouveau_fbcon_set_suspend(dev, 1);
 		NV_DEBUG(drm, "suspending display...\n");
 		ret = nouveau_display_suspend(dev, runtime);
 		if (ret)
@@ -906,8 +926,6 @@ nouveau_do_resume(struct drm_device *dev, bool runtime)
 	if (dev->mode_config.num_crtc) {
 		NV_DEBUG(drm, "resuming display...\n");
 		nouveau_display_resume(dev, runtime);
-		NV_DEBUG(drm, "resuming console...\n");
-		nouveau_fbcon_set_suspend(dev, 0);
 	}
 
 	nouveau_led_resume(dev);
@@ -1090,9 +1108,9 @@ nouveau_drm_open(struct drm_device *dev, struct drm_file *fpriv)
 
 	fpriv->driver_priv = cli;
 
-	mutex_lock(&drm->client.mutex);
+	mutex_lock(&drm->clients_lock);
 	list_add(&cli->head, &drm->clients);
-	mutex_unlock(&drm->client.mutex);
+	mutex_unlock(&drm->clients_lock);
 
 done:
 	if (ret && cli) {
@@ -1110,6 +1128,16 @@ nouveau_drm_postclose(struct drm_device *dev, struct drm_file *fpriv)
 {
 	struct nouveau_cli *cli = nouveau_cli(fpriv);
 	struct nouveau_drm *drm = nouveau_drm(dev);
+	int dev_index;
+
+	/*
+	 * The device is gone, and as it currently stands all clients are
+	 * cleaned up in the removal codepath. In the future this may change
+	 * so that we can support hot-unplugging, but for now we immediately
+	 * return to avoid a double-free situation.
+	 */
+	if (!drm_dev_enter(dev, &dev_index))
+		return;
 
 	pm_runtime_get_sync(dev->dev);
 
@@ -1118,14 +1146,15 @@ nouveau_drm_postclose(struct drm_device *dev, struct drm_file *fpriv)
 		nouveau_abi16_fini(cli->abi16);
 	mutex_unlock(&cli->mutex);
 
-	mutex_lock(&drm->client.mutex);
+	mutex_lock(&drm->clients_lock);
 	list_del(&cli->head);
-	mutex_unlock(&drm->client.mutex);
+	mutex_unlock(&drm->clients_lock);
 
 	nouveau_cli_fini(cli);
 	kfree(cli);
 	pm_runtime_mark_last_busy(dev->dev);
 	pm_runtime_put_autosuspend(dev->dev);
+	drm_dev_exit(dev_index);
 }
 
 static const struct drm_ioctl_desc
@@ -1190,13 +1219,9 @@ nouveau_driver_fops = {
 
 static struct drm_driver
 driver_stub = {
-	.driver_features =
-		DRIVER_GEM | DRIVER_MODESET | DRIVER_RENDER
-#if defined(CONFIG_NOUVEAU_LEGACY_CTX_SUPPORT)
-		| DRIVER_KMS_LEGACY_CONTEXT
-#endif
-		,
-
+	.driver_features = DRIVER_GEM |
+			   DRIVER_MODESET |
+			   DRIVER_RENDER,
 	.open = nouveau_drm_open,
 	.postclose = nouveau_drm_postclose,
 	.lastclose = nouveau_vga_lastclose,
@@ -1251,7 +1276,6 @@ static void nouveau_display_options(void)
 	DRM_DEBUG_DRIVER("... tv_disable   : %d\n", nouveau_tv_disable);
 	DRM_DEBUG_DRIVER("... ignorelid    : %d\n", nouveau_ignorelid);
 	DRM_DEBUG_DRIVER("... duallink     : %d\n", nouveau_duallink);
-	DRM_DEBUG_DRIVER("... nofbaccel    : %d\n", nouveau_nofbaccel);
 	DRM_DEBUG_DRIVER("... config       : %s\n", nouveau_config);
 	DRM_DEBUG_DRIVER("... debug        : %s\n", nouveau_debug);
 	DRM_DEBUG_DRIVER("... noaccel      : %d\n", nouveau_noaccel);
@@ -1326,7 +1350,7 @@ nouveau_drm_init(void)
 	nouveau_display_options();
 
 	if (nouveau_modeset == -1) {
-		if (vgacon_text_force())
+		if (drm_firmware_drivers_only())
 			nouveau_modeset = 0;
 	}
 

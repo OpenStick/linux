@@ -4,10 +4,12 @@
  */
 
 #include <linux/prime_numbers.h>
+#include <linux/string_helpers.h>
 
 #include "intel_context.h"
 #include "intel_engine_heartbeat.h"
 #include "intel_engine_pm.h"
+#include "intel_engine_regs.h"
 #include "intel_gpu_commands.h"
 #include "intel_gt.h"
 #include "intel_gt_requests.h"
@@ -159,7 +161,7 @@ static int mock_hwsp_freelist(void *arg)
 	INIT_RADIX_TREE(&state.cachelines, GFP_KERNEL);
 	state.prng = I915_RND_STATE_INITIALIZER(i915_selftest.random_seed);
 
-	state.gt = &i915->gt;
+	state.gt = to_gt(i915);
 
 	/*
 	 * Create a bunch of timelines and check that their HWSP do not overlap.
@@ -208,7 +210,7 @@ static int __igt_sync(struct intel_timeline *tl,
 
 	if (__intel_timeline_sync_is_later(tl, ctx, p->seqno) != p->expected) {
 		pr_err("%s: %s(ctx=%llu, seqno=%u) expected passed %s but failed\n",
-		       name, p->name, ctx, p->seqno, yesno(p->expected));
+		       name, p->name, ctx, p->seqno, str_yes_no(p->expected));
 		return -EINVAL;
 	}
 
@@ -823,7 +825,8 @@ static bool cmp_gte(u32 a, u32 b)
 	return a >= b;
 }
 
-static int setup_watcher(struct hwsp_watcher *w, struct intel_gt *gt)
+static int setup_watcher(struct hwsp_watcher *w, struct intel_gt *gt,
+			 struct intel_timeline *tl)
 {
 	struct drm_i915_gem_object *obj;
 	struct i915_vma *vma;
@@ -832,7 +835,10 @@ static int setup_watcher(struct hwsp_watcher *w, struct intel_gt *gt)
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
 
-	w->map = i915_gem_object_pin_map_unlocked(obj, I915_MAP_WB);
+	/* keep the same cache settings as timeline */
+	i915_gem_object_set_cache_coherency(obj, tl->hwsp_ggtt->obj->cache_level);
+	w->map = i915_gem_object_pin_map_unlocked(obj,
+						  page_unmask_bits(tl->hwsp_ggtt->obj->mm.mapping));
 	if (IS_ERR(w->map)) {
 		i915_gem_object_put(obj);
 		return PTR_ERR(w->map);
@@ -1002,8 +1008,10 @@ static int live_hwsp_read(void *arg)
 	if (!tl->has_initial_breadcrumb)
 		goto out_free;
 
+	selftest_tl_pin(tl);
+
 	for (i = 0; i < ARRAY_SIZE(watcher); i++) {
-		err = setup_watcher(&watcher[i], gt);
+		err = setup_watcher(&watcher[i], gt, tl);
 		if (err)
 			goto out;
 	}
@@ -1157,6 +1165,8 @@ static int live_hwsp_read(void *arg)
 out:
 	for (i = 0; i < ARRAY_SIZE(watcher); i++)
 		cleanup_watcher(&watcher[i]);
+
+	intel_timeline_unpin(tl);
 
 	if (igt_flush_test(gt->i915))
 		err = -EIO;
@@ -1416,8 +1426,8 @@ int intel_timeline_live_selftests(struct drm_i915_private *i915)
 		SUBTEST(live_hwsp_rollover_user),
 	};
 
-	if (intel_gt_is_wedged(&i915->gt))
+	if (intel_gt_is_wedged(to_gt(i915)))
 		return 0;
 
-	return intel_gt_live_subtests(tests, &i915->gt);
+	return intel_gt_live_subtests(tests, to_gt(i915));
 }

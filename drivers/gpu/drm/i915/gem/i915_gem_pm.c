@@ -5,10 +5,12 @@
  */
 
 #include "gem/i915_gem_pm.h"
+#include "gem/i915_gem_ttm_pm.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_gt_requests.h"
 
+#include "i915_driver.h"
 #include "i915_drv.h"
 
 #if defined(CONFIG_X86)
@@ -20,9 +22,12 @@
 
 void i915_gem_suspend(struct drm_i915_private *i915)
 {
+	struct intel_gt *gt;
+	unsigned int i;
+
 	GEM_TRACE("%s\n", dev_name(i915->drm.dev));
 
-	intel_wakeref_auto(&i915->ggtt.userfault_wakeref, 0);
+	intel_wakeref_auto(&i915->runtime_pm.userfault_wakeref, 0);
 	flush_workqueue(i915->wq);
 
 	/*
@@ -34,9 +39,92 @@ void i915_gem_suspend(struct drm_i915_private *i915)
 	 * state. Fortunately, the kernel_context is disposable and we do
 	 * not rely on its state.
 	 */
-	intel_gt_suspend_prepare(&i915->gt);
+	for_each_gt(gt, i915, i)
+		intel_gt_suspend_prepare(gt);
 
 	i915_gem_drain_freed_objects(i915);
+}
+
+static int lmem_restore(struct drm_i915_private *i915, u32 flags)
+{
+	struct intel_memory_region *mr;
+	int ret = 0, id;
+
+	for_each_memory_region(mr, i915, id) {
+		if (mr->type == INTEL_MEMORY_LOCAL) {
+			ret = i915_ttm_restore_region(mr, flags);
+			if (ret)
+				break;
+		}
+	}
+
+	return ret;
+}
+
+static int lmem_suspend(struct drm_i915_private *i915, u32 flags)
+{
+	struct intel_memory_region *mr;
+	int ret = 0, id;
+
+	for_each_memory_region(mr, i915, id) {
+		if (mr->type == INTEL_MEMORY_LOCAL) {
+			ret = i915_ttm_backup_region(mr, flags);
+			if (ret)
+				break;
+		}
+	}
+
+	return ret;
+}
+
+static void lmem_recover(struct drm_i915_private *i915)
+{
+	struct intel_memory_region *mr;
+	int id;
+
+	for_each_memory_region(mr, i915, id)
+		if (mr->type == INTEL_MEMORY_LOCAL)
+			i915_ttm_recover_region(mr);
+}
+
+int i915_gem_backup_suspend(struct drm_i915_private *i915)
+{
+	int ret;
+
+	/* Opportunistically try to evict unpinned objects */
+	ret = lmem_suspend(i915, I915_TTM_BACKUP_ALLOW_GPU);
+	if (ret)
+		goto out_recover;
+
+	i915_gem_suspend(i915);
+
+	/*
+	 * More objects may have become unpinned as requests were
+	 * retired. Now try to evict again. The gt may be wedged here
+	 * in which case we automatically fall back to memcpy.
+	 * We allow also backing up pinned objects that have not been
+	 * marked for early recover, and that may contain, for example,
+	 * page-tables for the migrate context.
+	 */
+	ret = lmem_suspend(i915, I915_TTM_BACKUP_ALLOW_GPU |
+			   I915_TTM_BACKUP_PINNED);
+	if (ret)
+		goto out_recover;
+
+	/*
+	 * Remaining objects are backed up using memcpy once we've stopped
+	 * using the migrate context.
+	 */
+	ret = lmem_suspend(i915, I915_TTM_BACKUP_PINNED);
+	if (ret)
+		goto out_recover;
+
+	return 0;
+
+out_recover:
+	lmem_recover(i915);
+
+	return ret;
 }
 
 void i915_gem_suspend_late(struct drm_i915_private *i915)
@@ -47,7 +135,9 @@ void i915_gem_suspend_late(struct drm_i915_private *i915)
 		&i915->mm.purge_list,
 		NULL
 	}, **phase;
+	struct intel_gt *gt;
 	unsigned long flags;
+	unsigned int i;
 	bool flush = false;
 
 	/*
@@ -70,7 +160,8 @@ void i915_gem_suspend_late(struct drm_i915_private *i915)
 	 * machine in an unusable condition.
 	 */
 
-	intel_gt_suspend_late(&i915->gt);
+	for_each_gt(gt, i915, i)
+		intel_gt_suspend_late(gt);
 
 	spin_lock_irqsave(&i915->mm.obj_lock, flags);
 	for (phase = phases; *phase; phase++) {
@@ -128,12 +219,38 @@ int i915_gem_freeze_late(struct drm_i915_private *i915)
 
 void i915_gem_resume(struct drm_i915_private *i915)
 {
+	struct intel_gt *gt;
+	int ret, i, j;
+
 	GEM_TRACE("%s\n", dev_name(i915->drm.dev));
+
+	ret = lmem_restore(i915, 0);
+	GEM_WARN_ON(ret);
 
 	/*
 	 * As we didn't flush the kernel context before suspend, we cannot
 	 * guarantee that the context image is complete. So let's just reset
 	 * it and start again.
 	 */
-	intel_gt_resume(&i915->gt);
+	for_each_gt(gt, i915, i)
+		if (intel_gt_resume(gt))
+			goto err_wedged;
+
+	ret = lmem_restore(i915, I915_TTM_BACKUP_ALLOW_GPU);
+	GEM_WARN_ON(ret);
+
+	return;
+
+err_wedged:
+	for_each_gt(gt, i915, j) {
+		if (!intel_gt_is_wedged(gt)) {
+			dev_err(i915->drm.dev,
+				"Failed to re-initialize GPU[%u], declaring it wedged!\n",
+				j);
+			intel_gt_set_wedged(gt);
+		}
+
+		if (j == i)
+			break;
+	}
 }

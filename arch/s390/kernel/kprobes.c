@@ -7,6 +7,8 @@
  * s390 port, used ppc64 as template. Mike Grundy <grundym@us.ibm.com>
  */
 
+#define pr_fmt(fmt) "kprobes: " fmt
+
 #include <linux/moduleloader.h>
 #include <linux/kprobes.h>
 #include <linux/ptrace.h>
@@ -22,14 +24,13 @@
 #include <asm/set_memory.h>
 #include <asm/sections.h>
 #include <asm/dis.h>
+#include "kprobes.h"
 #include "entry.h"
 
 DEFINE_PER_CPU(struct kprobe *, current_kprobe);
 DEFINE_PER_CPU(struct kprobe_ctlblk, kprobe_ctlblk);
 
 struct kretprobe_blackpoint kretprobe_blacklist[] = { };
-
-DEFINE_INSN_CACHE_OPS(s390_insn);
 
 static int insn_page_in_use;
 
@@ -40,7 +41,7 @@ void *alloc_insn_page(void)
 	page = module_alloc(PAGE_SIZE);
 	if (!page)
 		return NULL;
-	__set_memory((unsigned long) page, 1, SET_MEMORY_RO | SET_MEMORY_X);
+	set_memory_rox((unsigned long)page, 1);
 	return page;
 }
 
@@ -120,9 +121,55 @@ static void s390_free_insn_slot(struct kprobe *p)
 }
 NOKPROBE_SYMBOL(s390_free_insn_slot);
 
+/* Check if paddr is at an instruction boundary */
+static bool can_probe(unsigned long paddr)
+{
+	unsigned long addr, offset = 0;
+	kprobe_opcode_t insn;
+	struct kprobe *kp;
+
+	if (paddr & 0x01)
+		return false;
+
+	if (!kallsyms_lookup_size_offset(paddr, NULL, &offset))
+		return false;
+
+	/* Decode instructions */
+	addr = paddr - offset;
+	while (addr < paddr) {
+		if (copy_from_kernel_nofault(&insn, (void *)addr, sizeof(insn)))
+			return false;
+
+		if (insn >> 8 == 0) {
+			if (insn != BREAKPOINT_INSTRUCTION) {
+				/*
+				 * Note that QEMU inserts opcode 0x0000 to implement
+				 * software breakpoints for guests. Since the size of
+				 * the original instruction is unknown, stop following
+				 * instructions and prevent setting a kprobe.
+				 */
+				return false;
+			}
+			/*
+			 * Check if the instruction has been modified by another
+			 * kprobe, in which case the original instruction is
+			 * decoded.
+			 */
+			kp = get_kprobe((void *)addr);
+			if (!kp) {
+				/* not a kprobe */
+				return false;
+			}
+			insn = kp->opcode;
+		}
+		addr += insn_length(insn >> 8);
+	}
+	return addr == paddr;
+}
+
 int arch_prepare_kprobe(struct kprobe *p)
 {
-	if ((unsigned long) p->addr & 0x01)
+	if (!can_probe((unsigned long)p->addr))
 		return -EINVAL;
 	/* Make sure the probe isn't going on a difficult instruction */
 	if (probe_is_prohibited_opcode(p->addr))
@@ -231,18 +278,9 @@ static void pop_kprobe(struct kprobe_ctlblk *kcb)
 {
 	__this_cpu_write(current_kprobe, kcb->prev_kprobe.kp);
 	kcb->kprobe_status = kcb->prev_kprobe.status;
+	kcb->prev_kprobe.kp = NULL;
 }
 NOKPROBE_SYMBOL(pop_kprobe);
-
-void arch_prepare_kretprobe(struct kretprobe_instance *ri, struct pt_regs *regs)
-{
-	ri->ret_addr = (kprobe_opcode_t *) regs->gprs[14];
-	ri->fp = NULL;
-
-	/* Replace the return addr with trampoline addr */
-	regs->gprs[14] = (unsigned long) &kretprobe_trampoline;
-}
-NOKPROBE_SYMBOL(arch_prepare_kretprobe);
 
 static void kprobe_reenter_check(struct kprobe_ctlblk *kcb, struct kprobe *p)
 {
@@ -259,7 +297,7 @@ static void kprobe_reenter_check(struct kprobe_ctlblk *kcb, struct kprobe *p)
 		 * is a BUG. The code path resides in the .kprobes.text
 		 * section and is executed with interrupts disabled.
 		 */
-		pr_err("Invalid kprobe detected.\n");
+		pr_err("Failed to recover from reentered kprobes.\n");
 		dump_kprobe(p);
 		BUG();
 	}
@@ -325,33 +363,6 @@ static int kprobe_handler(struct pt_regs *regs)
 NOKPROBE_SYMBOL(kprobe_handler);
 
 /*
- * Function return probe trampoline:
- *	- init_kprobes() establishes a probepoint here
- *	- When the probed function returns, this probe
- *		causes the handlers to fire
- */
-static void __used kretprobe_trampoline_holder(void)
-{
-	asm volatile(".global kretprobe_trampoline\n"
-		     "kretprobe_trampoline: bcr 0,0\n");
-}
-
-/*
- * Called when the probe at kretprobe trampoline is hit
- */
-static int trampoline_probe_handler(struct kprobe *p, struct pt_regs *regs)
-{
-	regs->psw.addr = __kretprobe_trampoline_handler(regs, &kretprobe_trampoline, NULL);
-	/*
-	 * By returning a non-zero value, we are telling
-	 * kprobe_handler() that we don't want the post_handler
-	 * to run (and have re-enabled preemption)
-	 */
-	return 1;
-}
-NOKPROBE_SYMBOL(trampoline_probe_handler);
-
-/*
  * Called after single-stepping.  p->addr is the address of the
  * instruction whose first byte has been replaced by the "breakpoint"
  * instruction.  To avoid the SMP problems that can occur when we
@@ -392,12 +403,11 @@ static int post_kprobe_handler(struct pt_regs *regs)
 	if (!p)
 		return 0;
 
+	resume_execution(p, regs);
 	if (kcb->kprobe_status != KPROBE_REENTER && p->post_handler) {
 		kcb->kprobe_status = KPROBE_HIT_SSDONE;
 		p->post_handler(p, regs, 0);
 	}
-
-	resume_execution(p, regs);
 	pop_kprobe(kcb);
 	preempt_enable_no_resched();
 
@@ -417,7 +427,6 @@ static int kprobe_trap_handler(struct pt_regs *regs, int trapnr)
 {
 	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
 	struct kprobe *p = kprobe_running();
-	const struct exception_table_entry *entry;
 
 	switch(kcb->kprobe_status) {
 	case KPROBE_HIT_SS:
@@ -439,10 +448,8 @@ static int kprobe_trap_handler(struct pt_regs *regs, int trapnr)
 		 * In case the user-specified fault handler returned
 		 * zero, try to fix up.
 		 */
-		entry = s390_search_extables(regs->psw.addr);
-		if (entry && ex_handle(entry, regs))
+		if (fixup_exception(regs))
 			return 1;
-
 		/*
 		 * fixup_exception() could not handle it,
 		 * Let do_page_fault() fix it.
@@ -506,18 +513,13 @@ int kprobe_exceptions_notify(struct notifier_block *self,
 }
 NOKPROBE_SYMBOL(kprobe_exceptions_notify);
 
-static struct kprobe trampoline = {
-	.addr = (kprobe_opcode_t *) &kretprobe_trampoline,
-	.pre_handler = trampoline_probe_handler
-};
-
 int __init arch_init_kprobes(void)
 {
-	return register_kprobe(&trampoline);
+	return 0;
 }
 
 int arch_trampoline_kprobe(struct kprobe *p)
 {
-	return p->addr == (kprobe_opcode_t *) &kretprobe_trampoline;
+	return 0;
 }
 NOKPROBE_SYMBOL(arch_trampoline_kprobe);

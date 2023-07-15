@@ -15,8 +15,8 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&spk_ext_pa_default>;
 
-		enable-gpios = <&msmgpio 119 GPIO_ACTIVE_HIGH>;
-		aw8738,mode = <1>;
+		mode-gpios = <&msmgpio 119 GPIO_ACTIVE_HIGH>;
+		awinic,mode = <1>;
 		sound-name-prefix = "Speaker Amp";
 	};
 };
@@ -48,12 +48,12 @@
 };
 
 &pm8916_charger {
-	status = "okay";
-
 	qcom,vdd-safe = <4300000>;
 	qcom,ibat-safe = <900000>;
 
 	monitored-battery = <&battery>;
+
+	status = "okay";
 };
 
 &pm8916_bms {
@@ -74,8 +74,15 @@
 	status = "okay";
 
 	model = "wt88047";
+	widgets =
+		"Speaker", "Speaker",
+		"Headphone", "Headphones";
+	pin-switches = "Speaker", "Headphones";
 	audio-routing =
-		"Speaker Amp IN", "HPH_R_EXT",
+		"Speaker", "Speaker Amp OUT",
+		"Speaker Amp IN", "HPH_R",
+		"Headphones", "Headphones Switch OUTL",
+		"Headphones", "Headphones Switch OUTR",
 		"Headphones Switch INL", "HPH_L",
 		"Headphones Switch INR", "HPH_R",
 		"AMIC1", "MIC BIAS Internal1",
@@ -93,7 +100,7 @@
 };
 
 &msmgpio {
-	spk_ext_pa_default: spk-ext-pa-default {
+	spk_ext_pa_default: spk-ext-pa-default-state {
 		pins = "gpio119";
 		function = "gpio";
 

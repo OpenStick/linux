@@ -57,14 +57,13 @@
 #include <linux/console.h>
 #include <linux/of_graph.h>
 #include <linux/regulator/consumer.h>
+#include <linux/soc/pxa/cpu.h>
 #include <video/of_display_timing.h>
 #include <video/videomode.h>
 
-#include <mach/hardware.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/div64.h>
-#include <mach/bitfield.h>
 #include <linux/platform_data/video-pxafb.h>
 
 /*
@@ -73,6 +72,7 @@
 #define DEBUG_VAR 1
 
 #include "pxafb.h"
+#include "pxa3xx-regs.h"
 
 /* Bits which should not be set in machine configuration structures */
 #define LCCR0_INVALID_CONFIG_MASK	(LCCR0_OUM | LCCR0_BM | LCCR0_QDM |\
@@ -2042,7 +2042,7 @@ static int __init pxafb_setup_options(void)
 		return -ENODEV;
 
 	if (options)
-		strlcpy(g_options, options, sizeof(g_options));
+		strscpy(g_options, options, sizeof(g_options));
 
 	return 0;
 }
@@ -2256,10 +2256,10 @@ static int pxafb_probe(struct platform_device *dev)
 			goto failed;
 		for (i = 0; i < inf->num_modes; i++)
 			inf->modes[i] = pdata->modes[i];
+	} else {
+		inf = of_pxafb_of_mach_info(&dev->dev);
 	}
 
-	if (!pdata)
-		inf = of_pxafb_of_mach_info(&dev->dev);
 	if (IS_ERR_OR_NULL(inf))
 		goto failed;
 
@@ -2327,7 +2327,6 @@ static int pxafb_probe(struct platform_device *dev)
 
 	irq = platform_get_irq(dev, 0);
 	if (irq < 0) {
-		dev_err(&dev->dev, "no IRQ defined\n");
 		ret = -ENODEV;
 		goto failed_free_mem;
 	}
@@ -2397,13 +2396,13 @@ failed:
 	return ret;
 }
 
-static int pxafb_remove(struct platform_device *dev)
+static void pxafb_remove(struct platform_device *dev)
 {
 	struct pxafb_info *fbi = platform_get_drvdata(dev);
 	struct fb_info *info;
 
 	if (!fbi)
-		return 0;
+		return;
 
 	info = &fbi->fb;
 
@@ -2419,8 +2418,6 @@ static int pxafb_remove(struct platform_device *dev)
 
 	dma_free_coherent(&dev->dev, fbi->dma_buff_size, fbi->dma_buff,
 			  fbi->dma_buff_phys);
-
-	return 0;
 }
 
 static const struct of_device_id pxafb_of_dev_id[] = {
@@ -2433,7 +2430,7 @@ MODULE_DEVICE_TABLE(of, pxafb_of_dev_id);
 
 static struct platform_driver pxafb_driver = {
 	.probe		= pxafb_probe,
-	.remove 	= pxafb_remove,
+	.remove_new 	= pxafb_remove,
 	.driver		= {
 		.name	= "pxa2xx-fb",
 		.of_match_table = pxafb_of_dev_id,

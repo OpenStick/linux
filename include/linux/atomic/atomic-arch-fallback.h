@@ -147,11 +147,112 @@
 
 #endif /* arch_try_cmpxchg_relaxed */
 
+#ifndef arch_try_cmpxchg64_relaxed
+#ifdef arch_try_cmpxchg64
+#define arch_try_cmpxchg64_acquire arch_try_cmpxchg64
+#define arch_try_cmpxchg64_release arch_try_cmpxchg64
+#define arch_try_cmpxchg64_relaxed arch_try_cmpxchg64
+#endif /* arch_try_cmpxchg64 */
+
+#ifndef arch_try_cmpxchg64
+#define arch_try_cmpxchg64(_ptr, _oldp, _new) \
+({ \
+	typeof(*(_ptr)) *___op = (_oldp), ___o = *___op, ___r; \
+	___r = arch_cmpxchg64((_ptr), ___o, (_new)); \
+	if (unlikely(___r != ___o)) \
+		*___op = ___r; \
+	likely(___r == ___o); \
+})
+#endif /* arch_try_cmpxchg64 */
+
+#ifndef arch_try_cmpxchg64_acquire
+#define arch_try_cmpxchg64_acquire(_ptr, _oldp, _new) \
+({ \
+	typeof(*(_ptr)) *___op = (_oldp), ___o = *___op, ___r; \
+	___r = arch_cmpxchg64_acquire((_ptr), ___o, (_new)); \
+	if (unlikely(___r != ___o)) \
+		*___op = ___r; \
+	likely(___r == ___o); \
+})
+#endif /* arch_try_cmpxchg64_acquire */
+
+#ifndef arch_try_cmpxchg64_release
+#define arch_try_cmpxchg64_release(_ptr, _oldp, _new) \
+({ \
+	typeof(*(_ptr)) *___op = (_oldp), ___o = *___op, ___r; \
+	___r = arch_cmpxchg64_release((_ptr), ___o, (_new)); \
+	if (unlikely(___r != ___o)) \
+		*___op = ___r; \
+	likely(___r == ___o); \
+})
+#endif /* arch_try_cmpxchg64_release */
+
+#ifndef arch_try_cmpxchg64_relaxed
+#define arch_try_cmpxchg64_relaxed(_ptr, _oldp, _new) \
+({ \
+	typeof(*(_ptr)) *___op = (_oldp), ___o = *___op, ___r; \
+	___r = arch_cmpxchg64_relaxed((_ptr), ___o, (_new)); \
+	if (unlikely(___r != ___o)) \
+		*___op = ___r; \
+	likely(___r == ___o); \
+})
+#endif /* arch_try_cmpxchg64_relaxed */
+
+#else /* arch_try_cmpxchg64_relaxed */
+
+#ifndef arch_try_cmpxchg64_acquire
+#define arch_try_cmpxchg64_acquire(...) \
+	__atomic_op_acquire(arch_try_cmpxchg64, __VA_ARGS__)
+#endif
+
+#ifndef arch_try_cmpxchg64_release
+#define arch_try_cmpxchg64_release(...) \
+	__atomic_op_release(arch_try_cmpxchg64, __VA_ARGS__)
+#endif
+
+#ifndef arch_try_cmpxchg64
+#define arch_try_cmpxchg64(...) \
+	__atomic_op_fence(arch_try_cmpxchg64, __VA_ARGS__)
+#endif
+
+#endif /* arch_try_cmpxchg64_relaxed */
+
+#ifndef arch_try_cmpxchg_local
+#define arch_try_cmpxchg_local(_ptr, _oldp, _new) \
+({ \
+	typeof(*(_ptr)) *___op = (_oldp), ___o = *___op, ___r; \
+	___r = arch_cmpxchg_local((_ptr), ___o, (_new)); \
+	if (unlikely(___r != ___o)) \
+		*___op = ___r; \
+	likely(___r == ___o); \
+})
+#endif /* arch_try_cmpxchg_local */
+
+#ifndef arch_try_cmpxchg64_local
+#define arch_try_cmpxchg64_local(_ptr, _oldp, _new) \
+({ \
+	typeof(*(_ptr)) *___op = (_oldp), ___o = *___op, ___r; \
+	___r = arch_cmpxchg64_local((_ptr), ___o, (_new)); \
+	if (unlikely(___r != ___o)) \
+		*___op = ___r; \
+	likely(___r == ___o); \
+})
+#endif /* arch_try_cmpxchg64_local */
+
 #ifndef arch_atomic_read_acquire
 static __always_inline int
 arch_atomic_read_acquire(const atomic_t *v)
 {
-	return smp_load_acquire(&(v)->counter);
+	int ret;
+
+	if (__native_word(atomic_t)) {
+		ret = smp_load_acquire(&(v)->counter);
+	} else {
+		ret = arch_atomic_read(v);
+		__atomic_acquire_fence();
+	}
+
+	return ret;
 }
 #define arch_atomic_read_acquire arch_atomic_read_acquire
 #endif
@@ -160,7 +261,12 @@ arch_atomic_read_acquire(const atomic_t *v)
 static __always_inline void
 arch_atomic_set_release(atomic_t *v, int i)
 {
-	smp_store_release(&(v)->counter, i);
+	if (__native_word(atomic_t)) {
+		smp_store_release(&(v)->counter, i);
+	} else {
+		__atomic_release_fence();
+		arch_atomic_set(v, i);
+	}
 }
 #define arch_atomic_set_release arch_atomic_set_release
 #endif
@@ -1124,15 +1230,21 @@ arch_atomic_inc_and_test(atomic_t *v)
 #define arch_atomic_inc_and_test arch_atomic_inc_and_test
 #endif
 
+#ifndef arch_atomic_add_negative_relaxed
+#ifdef arch_atomic_add_negative
+#define arch_atomic_add_negative_acquire arch_atomic_add_negative
+#define arch_atomic_add_negative_release arch_atomic_add_negative
+#define arch_atomic_add_negative_relaxed arch_atomic_add_negative
+#endif /* arch_atomic_add_negative */
+
 #ifndef arch_atomic_add_negative
 /**
- * arch_atomic_add_negative - add and test if negative
+ * arch_atomic_add_negative - Add and test if negative
  * @i: integer value to add
  * @v: pointer of type atomic_t
  *
- * Atomically adds @i to @v and returns true
- * if the result is negative, or false when
- * result is greater than or equal to zero.
+ * Atomically adds @i to @v and returns true if the result is negative,
+ * or false when the result is greater than or equal to zero.
  */
 static __always_inline bool
 arch_atomic_add_negative(int i, atomic_t *v)
@@ -1141,6 +1253,95 @@ arch_atomic_add_negative(int i, atomic_t *v)
 }
 #define arch_atomic_add_negative arch_atomic_add_negative
 #endif
+
+#ifndef arch_atomic_add_negative_acquire
+/**
+ * arch_atomic_add_negative_acquire - Add and test if negative
+ * @i: integer value to add
+ * @v: pointer of type atomic_t
+ *
+ * Atomically adds @i to @v and returns true if the result is negative,
+ * or false when the result is greater than or equal to zero.
+ */
+static __always_inline bool
+arch_atomic_add_negative_acquire(int i, atomic_t *v)
+{
+	return arch_atomic_add_return_acquire(i, v) < 0;
+}
+#define arch_atomic_add_negative_acquire arch_atomic_add_negative_acquire
+#endif
+
+#ifndef arch_atomic_add_negative_release
+/**
+ * arch_atomic_add_negative_release - Add and test if negative
+ * @i: integer value to add
+ * @v: pointer of type atomic_t
+ *
+ * Atomically adds @i to @v and returns true if the result is negative,
+ * or false when the result is greater than or equal to zero.
+ */
+static __always_inline bool
+arch_atomic_add_negative_release(int i, atomic_t *v)
+{
+	return arch_atomic_add_return_release(i, v) < 0;
+}
+#define arch_atomic_add_negative_release arch_atomic_add_negative_release
+#endif
+
+#ifndef arch_atomic_add_negative_relaxed
+/**
+ * arch_atomic_add_negative_relaxed - Add and test if negative
+ * @i: integer value to add
+ * @v: pointer of type atomic_t
+ *
+ * Atomically adds @i to @v and returns true if the result is negative,
+ * or false when the result is greater than or equal to zero.
+ */
+static __always_inline bool
+arch_atomic_add_negative_relaxed(int i, atomic_t *v)
+{
+	return arch_atomic_add_return_relaxed(i, v) < 0;
+}
+#define arch_atomic_add_negative_relaxed arch_atomic_add_negative_relaxed
+#endif
+
+#else /* arch_atomic_add_negative_relaxed */
+
+#ifndef arch_atomic_add_negative_acquire
+static __always_inline bool
+arch_atomic_add_negative_acquire(int i, atomic_t *v)
+{
+	bool ret = arch_atomic_add_negative_relaxed(i, v);
+	__atomic_acquire_fence();
+	return ret;
+}
+#define arch_atomic_add_negative_acquire arch_atomic_add_negative_acquire
+#endif
+
+#ifndef arch_atomic_add_negative_release
+static __always_inline bool
+arch_atomic_add_negative_release(int i, atomic_t *v)
+{
+	__atomic_release_fence();
+	return arch_atomic_add_negative_relaxed(i, v);
+}
+#define arch_atomic_add_negative_release arch_atomic_add_negative_release
+#endif
+
+#ifndef arch_atomic_add_negative
+static __always_inline bool
+arch_atomic_add_negative(int i, atomic_t *v)
+{
+	bool ret;
+	__atomic_pre_full_fence();
+	ret = arch_atomic_add_negative_relaxed(i, v);
+	__atomic_post_full_fence();
+	return ret;
+}
+#define arch_atomic_add_negative arch_atomic_add_negative
+#endif
+
+#endif /* arch_atomic_add_negative_relaxed */
 
 #ifndef arch_atomic_fetch_add_unless
 /**
@@ -1258,7 +1459,16 @@ arch_atomic_dec_if_positive(atomic_t *v)
 static __always_inline s64
 arch_atomic64_read_acquire(const atomic64_t *v)
 {
-	return smp_load_acquire(&(v)->counter);
+	s64 ret;
+
+	if (__native_word(atomic64_t)) {
+		ret = smp_load_acquire(&(v)->counter);
+	} else {
+		ret = arch_atomic64_read(v);
+		__atomic_acquire_fence();
+	}
+
+	return ret;
 }
 #define arch_atomic64_read_acquire arch_atomic64_read_acquire
 #endif
@@ -1267,7 +1477,12 @@ arch_atomic64_read_acquire(const atomic64_t *v)
 static __always_inline void
 arch_atomic64_set_release(atomic64_t *v, s64 i)
 {
-	smp_store_release(&(v)->counter, i);
+	if (__native_word(atomic64_t)) {
+		smp_store_release(&(v)->counter, i);
+	} else {
+		__atomic_release_fence();
+		arch_atomic64_set(v, i);
+	}
 }
 #define arch_atomic64_set_release arch_atomic64_set_release
 #endif
@@ -2231,15 +2446,21 @@ arch_atomic64_inc_and_test(atomic64_t *v)
 #define arch_atomic64_inc_and_test arch_atomic64_inc_and_test
 #endif
 
+#ifndef arch_atomic64_add_negative_relaxed
+#ifdef arch_atomic64_add_negative
+#define arch_atomic64_add_negative_acquire arch_atomic64_add_negative
+#define arch_atomic64_add_negative_release arch_atomic64_add_negative
+#define arch_atomic64_add_negative_relaxed arch_atomic64_add_negative
+#endif /* arch_atomic64_add_negative */
+
 #ifndef arch_atomic64_add_negative
 /**
- * arch_atomic64_add_negative - add and test if negative
+ * arch_atomic64_add_negative - Add and test if negative
  * @i: integer value to add
  * @v: pointer of type atomic64_t
  *
- * Atomically adds @i to @v and returns true
- * if the result is negative, or false when
- * result is greater than or equal to zero.
+ * Atomically adds @i to @v and returns true if the result is negative,
+ * or false when the result is greater than or equal to zero.
  */
 static __always_inline bool
 arch_atomic64_add_negative(s64 i, atomic64_t *v)
@@ -2248,6 +2469,95 @@ arch_atomic64_add_negative(s64 i, atomic64_t *v)
 }
 #define arch_atomic64_add_negative arch_atomic64_add_negative
 #endif
+
+#ifndef arch_atomic64_add_negative_acquire
+/**
+ * arch_atomic64_add_negative_acquire - Add and test if negative
+ * @i: integer value to add
+ * @v: pointer of type atomic64_t
+ *
+ * Atomically adds @i to @v and returns true if the result is negative,
+ * or false when the result is greater than or equal to zero.
+ */
+static __always_inline bool
+arch_atomic64_add_negative_acquire(s64 i, atomic64_t *v)
+{
+	return arch_atomic64_add_return_acquire(i, v) < 0;
+}
+#define arch_atomic64_add_negative_acquire arch_atomic64_add_negative_acquire
+#endif
+
+#ifndef arch_atomic64_add_negative_release
+/**
+ * arch_atomic64_add_negative_release - Add and test if negative
+ * @i: integer value to add
+ * @v: pointer of type atomic64_t
+ *
+ * Atomically adds @i to @v and returns true if the result is negative,
+ * or false when the result is greater than or equal to zero.
+ */
+static __always_inline bool
+arch_atomic64_add_negative_release(s64 i, atomic64_t *v)
+{
+	return arch_atomic64_add_return_release(i, v) < 0;
+}
+#define arch_atomic64_add_negative_release arch_atomic64_add_negative_release
+#endif
+
+#ifndef arch_atomic64_add_negative_relaxed
+/**
+ * arch_atomic64_add_negative_relaxed - Add and test if negative
+ * @i: integer value to add
+ * @v: pointer of type atomic64_t
+ *
+ * Atomically adds @i to @v and returns true if the result is negative,
+ * or false when the result is greater than or equal to zero.
+ */
+static __always_inline bool
+arch_atomic64_add_negative_relaxed(s64 i, atomic64_t *v)
+{
+	return arch_atomic64_add_return_relaxed(i, v) < 0;
+}
+#define arch_atomic64_add_negative_relaxed arch_atomic64_add_negative_relaxed
+#endif
+
+#else /* arch_atomic64_add_negative_relaxed */
+
+#ifndef arch_atomic64_add_negative_acquire
+static __always_inline bool
+arch_atomic64_add_negative_acquire(s64 i, atomic64_t *v)
+{
+	bool ret = arch_atomic64_add_negative_relaxed(i, v);
+	__atomic_acquire_fence();
+	return ret;
+}
+#define arch_atomic64_add_negative_acquire arch_atomic64_add_negative_acquire
+#endif
+
+#ifndef arch_atomic64_add_negative_release
+static __always_inline bool
+arch_atomic64_add_negative_release(s64 i, atomic64_t *v)
+{
+	__atomic_release_fence();
+	return arch_atomic64_add_negative_relaxed(i, v);
+}
+#define arch_atomic64_add_negative_release arch_atomic64_add_negative_release
+#endif
+
+#ifndef arch_atomic64_add_negative
+static __always_inline bool
+arch_atomic64_add_negative(s64 i, atomic64_t *v)
+{
+	bool ret;
+	__atomic_pre_full_fence();
+	ret = arch_atomic64_add_negative_relaxed(i, v);
+	__atomic_post_full_fence();
+	return ret;
+}
+#define arch_atomic64_add_negative arch_atomic64_add_negative
+#endif
+
+#endif /* arch_atomic64_add_negative_relaxed */
 
 #ifndef arch_atomic64_fetch_add_unless
 /**
@@ -2358,4 +2668,4 @@ arch_atomic64_dec_if_positive(atomic64_t *v)
 #endif
 
 #endif /* _LINUX_ATOMIC_FALLBACK_H */
-// cca554917d7ea73d5e3e7397dd70c484cad9b2c4
+// ad2e2b4d168dbc60a73922616047a9bfa446af36

@@ -14,6 +14,7 @@
 #include <linux/memblock.h>
 #include <linux/gfp.h>
 #include <linux/init.h>
+#include <asm/asm-extable.h>
 #include <asm/facility.h>
 #include <asm/page-states.h>
 
@@ -55,17 +56,6 @@ void __init cmma_init(void)
 	}
 	if (test_facility(147))
 		cmma_flag = 2;
-}
-
-static inline unsigned char get_page_state(struct page *page)
-{
-	unsigned char state;
-
-	asm volatile("	.insn	rrf,0xb9ab0000,%0,%1,%2,0"
-		     : "=&d" (state)
-		     : "a" (page_to_phys(page)),
-		       "i" (ESSA_GET_STATE));
-	return state & 0x3f;
 }
 
 static inline void set_page_unused(struct page *page, int order)

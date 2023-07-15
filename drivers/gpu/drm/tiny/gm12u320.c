@@ -4,6 +4,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/pm.h>
 #include <linux/usb.h>
 
 #include <drm/drm_atomic_helper.h>
@@ -11,10 +12,12 @@
 #include <drm/drm_connector.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fb_helper.h>
+#include <drm/drm_edid.h>
+#include <drm/drm_fbdev_generic.h>
 #include <drm/drm_file.h>
 #include <drm/drm_format_helper.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_gem_shmem_helper.h>
@@ -95,7 +98,7 @@ struct gm12u320_device {
 		struct drm_rect          rect;
 		int frame;
 		int draw_status_timeout;
-		struct dma_buf_map src_map;
+		struct iosys_map src_map;
 	} fb_update;
 };
 
@@ -395,7 +398,8 @@ err:
 		GM12U320_ERR("Frame update error: %d\n", ret);
 }
 
-static void gm12u320_fb_mark_dirty(struct drm_framebuffer *fb, const struct dma_buf_map *map,
+static void gm12u320_fb_mark_dirty(struct drm_framebuffer *fb,
+				   const struct iosys_map *map,
 				   struct drm_rect *dirty)
 {
 	struct gm12u320_device *gm12u320 = to_gm12u320(fb->dev);
@@ -438,7 +442,7 @@ static void gm12u320_stop_fb_update(struct gm12u320_device *gm12u320)
 	mutex_lock(&gm12u320->fb_update.lock);
 	old_fb = gm12u320->fb_update.fb;
 	gm12u320->fb_update.fb = NULL;
-	dma_buf_map_clear(&gm12u320->fb_update.src_map);
+	iosys_map_clear(&gm12u320->fb_update.src_map);
 	mutex_unlock(&gm12u320->fb_update.lock);
 
 	drm_framebuffer_put(old_fb);
@@ -715,15 +719,15 @@ static void gm12u320_usb_disconnect(struct usb_interface *interface)
 	drm_atomic_helper_shutdown(dev);
 }
 
-static __maybe_unused int gm12u320_suspend(struct usb_interface *interface,
-					   pm_message_t message)
+static int gm12u320_suspend(struct usb_interface *interface,
+			    pm_message_t message)
 {
 	struct drm_device *dev = usb_get_intfdata(interface);
 
 	return drm_mode_config_helper_suspend(dev);
 }
 
-static __maybe_unused int gm12u320_resume(struct usb_interface *interface)
+static int gm12u320_resume(struct usb_interface *interface)
 {
 	struct drm_device *dev = usb_get_intfdata(interface);
 	struct gm12u320_device *gm12u320 = to_gm12u320(dev);
@@ -744,11 +748,9 @@ static struct usb_driver gm12u320_usb_driver = {
 	.probe = gm12u320_usb_probe,
 	.disconnect = gm12u320_usb_disconnect,
 	.id_table = id_table,
-#ifdef CONFIG_PM
-	.suspend = gm12u320_suspend,
-	.resume = gm12u320_resume,
-	.reset_resume = gm12u320_resume,
-#endif
+	.suspend = pm_ptr(gm12u320_suspend),
+	.resume = pm_ptr(gm12u320_resume),
+	.reset_resume = pm_ptr(gm12u320_resume),
 };
 
 module_usb_driver(gm12u320_usb_driver);

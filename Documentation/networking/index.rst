@@ -1,12 +1,13 @@
-Linux Networking Documentation
-==============================
+Networking
+==========
+
+Refer to :ref:`netdev-FAQ` for a guide on netdev development process specifics.
 
 Contents:
 
 .. toctree::
    :maxdepth: 2
 
-   netdev-FAQ
    af_xdp
    bareudp
    batman-adv
@@ -35,6 +36,7 @@ Contents:
    scaling
    tls
    tls-offload
+   tls-handshake
    nfc
    6lowpan
    6pack
@@ -46,7 +48,6 @@ Contents:
    cdc_mbim
    dccp
    dctcp
-   decnet
    dns_resolver
    driver
    eql
@@ -73,6 +74,7 @@ Contents:
    mpls-sysctl
    mptcp-sysctl
    multiqueue
+   napi
    netconsole
    netdev-features
    netdevices
@@ -92,15 +94,19 @@ Contents:
    radiotap-headers
    rds
    regulatory
+   representors
    rxrpc
    sctp
    secid
    seg6-sysctl
+   skbuff
+   smc-sysctl
    statistics
    strparser
    switchdev
    sysfs-tagging
    tc-actions-env-rules
+   tc-queue-filters
    tcp-thin
    team
    timestamping
@@ -110,12 +116,13 @@ Contents:
    udplite
    vrf
    vxlan
-   x25-iface
    x25
+   x25-iface
    xfrm_device
    xfrm_proc
    xfrm_sync
    xfrm_sysctl
+   xdp-rx-metadata
 
 .. only::  subproject and html
 

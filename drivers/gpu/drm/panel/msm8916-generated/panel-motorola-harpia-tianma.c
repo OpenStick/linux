@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2021 FIXME
+// Copyright (c) 2023 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -30,14 +30,6 @@ static inline struct tianma_499_v2 *to_tianma_499_v2(struct drm_panel *panel)
 	return container_of(panel, struct tianma_499_v2, panel);
 }
 
-#define dsi_dcs_write_seq(dsi, seq...) do {				\
-		static const u8 d[] = { seq };				\
-		int ret;						\
-		ret = mipi_dsi_dcs_write_buffer(dsi, d, ARRAY_SIZE(d));	\
-		if (ret < 0)						\
-			return ret;					\
-	} while (0)
-
 static void tianma_499_v2_reset(struct tianma_499_v2 *ctx)
 {
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
@@ -54,7 +46,7 @@ static int tianma_499_v2_on(struct tianma_499_v2 *ctx)
 	struct device *dev = &dsi->dev;
 	int ret;
 
-	dsi_dcs_write_seq(dsi, 0xff, 0x98, 0x81, 0x00);
+	mipi_dsi_dcs_write_seq(dsi, 0xff, 0x98, 0x81, 0x00);
 
 	ret = mipi_dsi_dcs_set_display_brightness(dsi, 0x0000);
 	if (ret < 0) {
@@ -62,9 +54,9 @@ static int tianma_499_v2_on(struct tianma_499_v2 *ctx)
 		return ret;
 	}
 
-	dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x2c);
-	dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_POWER_SAVE, 0x01);
-	dsi_dcs_write_seq(dsi, 0x68, 0x06);
+	mipi_dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x2c);
+	mipi_dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_POWER_SAVE, 0x01);
+	mipi_dsi_dcs_write_seq(dsi, 0x68, 0x06);
 
 	ret = mipi_dsi_dcs_exit_sleep_mode(dsi);
 	if (ret < 0) {
@@ -205,8 +197,7 @@ static int tianma_499_v2_bl_update_status(struct backlight_device *bl)
 
 	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
 
-	// This panel needs the high and low bytes swapped for the brightness value
-	ret = mipi_dsi_dcs_set_display_brightness(dsi, swab16(brightness));
+	ret = mipi_dsi_dcs_set_display_brightness_large(dsi, brightness);
 	if (ret < 0)
 		return ret;
 
@@ -289,7 +280,7 @@ static int tianma_499_v2_probe(struct mipi_dsi_device *dsi)
 	return 0;
 }
 
-static int tianma_499_v2_remove(struct mipi_dsi_device *dsi)
+static void tianma_499_v2_remove(struct mipi_dsi_device *dsi)
 {
 	struct tianma_499_v2 *ctx = mipi_dsi_get_drvdata(dsi);
 	int ret;
@@ -299,8 +290,6 @@ static int tianma_499_v2_remove(struct mipi_dsi_device *dsi)
 		dev_err(&dsi->dev, "Failed to detach from DSI host: %d\n", ret);
 
 	drm_panel_remove(&ctx->panel);
-
-	return 0;
 }
 
 static const struct of_device_id tianma_499_v2_of_match[] = {
@@ -321,4 +310,4 @@ module_mipi_dsi_driver(tianma_499_v2_driver);
 
 MODULE_AUTHOR("linux-mdss-dsi-panel-driver-generator <fix@me>"); // FIXME
 MODULE_DESCRIPTION("DRM driver for mipi_mot_video_tianma_720p_499");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

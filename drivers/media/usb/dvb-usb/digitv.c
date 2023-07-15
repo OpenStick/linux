@@ -63,6 +63,10 @@ static int digitv_i2c_xfer(struct i2c_adapter *adap,struct i2c_msg msg[],int num
 		warn("more than 2 i2c messages at a time is not handled yet. TODO.");
 
 	for (i = 0; i < num; i++) {
+		if (msg[i].len < 1) {
+			i = -EOPNOTSUPP;
+			break;
+		}
 		/* write/read request */
 		if (i+1 < num && (msg[i+1].flags & I2C_M_RD)) {
 			if (digitv_ctrl_msg(d, USB_READ_COFDM, msg[i].buf[0], NULL, 0,
@@ -291,10 +295,15 @@ static int digitv_probe(struct usb_interface *intf,
 	return ret;
 }
 
-static struct usb_device_id digitv_table [] = {
-		{ USB_DEVICE(USB_VID_ANCHOR, USB_PID_NEBULA_DIGITV) },
-		{ }		/* Terminating entry */
+enum {
+	ANCHOR_NEBULA_DIGITV,
 };
+
+static struct usb_device_id digitv_table[] = {
+	DVB_USB_DEV(ANCHOR, ANCHOR_NEBULA_DIGITV),
+	{ }
+};
+
 MODULE_DEVICE_TABLE (usb, digitv_table);
 
 static struct dvb_usb_device_properties digitv_properties = {
@@ -343,7 +352,7 @@ static struct dvb_usb_device_properties digitv_properties = {
 	.num_device_descs = 1,
 	.devices = {
 		{   "Nebula Electronics uDigiTV DVB-T USB2.0)",
-			{ &digitv_table[0], NULL },
+			{ &digitv_table[ANCHOR_NEBULA_DIGITV], NULL },
 			{ NULL },
 		},
 		{ NULL },

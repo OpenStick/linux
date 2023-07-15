@@ -10,6 +10,7 @@
 #include <linux/iommu.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 
 #include <drm/drm_aperture.h>
 #include <drm/drm_atomic.h>
@@ -17,9 +18,14 @@
 #include <drm/drm_debugfs.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_framebuffer.h>
 #include <drm/drm_ioctl.h>
 #include <drm/drm_prime.h>
 #include <drm/drm_vblank.h>
+
+#if IS_ENABLED(CONFIG_ARM_DMA_USE_IOMMU)
+#include <asm/dma-iommu.h>
+#endif
 
 #include "dc.h"
 #include "drm.h"
@@ -50,9 +56,6 @@ static int tegra_atomic_check(struct drm_device *drm,
 
 static const struct drm_mode_config_funcs tegra_drm_mode_config_funcs = {
 	.fb_create = tegra_fb_create,
-#ifdef CONFIG_DRM_FBDEV_EMULATION
-	.output_poll_changed = drm_fb_helper_output_poll_changed,
-#endif
 	.atomic_check = tegra_atomic_check,
 	.atomic_commit = drm_atomic_helper_commit,
 };
@@ -116,6 +119,7 @@ static int tegra_drm_open(struct drm_device *drm, struct drm_file *filp)
 static void tegra_drm_context_free(struct tegra_drm_context *context)
 {
 	context->client->ops->close_channel(context);
+	pm_runtime_put(context->client->base.dev);
 	kfree(context);
 }
 
@@ -427,13 +431,20 @@ static int tegra_client_open(struct tegra_drm_file *fpriv,
 {
 	int err;
 
-	err = client->ops->open_channel(client, context);
-	if (err < 0)
+	err = pm_runtime_resume_and_get(client->base.dev);
+	if (err)
 		return err;
+
+	err = client->ops->open_channel(client, context);
+	if (err < 0) {
+		pm_runtime_put(client->base.dev);
+		return err;
+	}
 
 	err = idr_alloc(&fpriv->legacy_contexts, context, 1, 0, GFP_KERNEL);
 	if (err < 0) {
 		client->ops->close_channel(context);
+		pm_runtime_put(client->base.dev);
 		return err;
 	}
 
@@ -871,7 +882,6 @@ static const struct drm_driver tegra_drm_driver = {
 			   DRIVER_ATOMIC | DRIVER_RENDER | DRIVER_SYNCOBJ,
 	.open = tegra_drm_open,
 	.postclose = tegra_drm_postclose,
-	.lastclose = drm_fb_helper_lastclose,
 
 #if defined(CONFIG_DEBUG_FS)
 	.debugfs_init = tegra_debugfs_init,
@@ -935,6 +945,17 @@ int host1x_client_iommu_attach(struct host1x_client *client)
 	struct tegra_drm *tegra = drm->dev_private;
 	struct iommu_group *group = NULL;
 	int err;
+
+#if IS_ENABLED(CONFIG_ARM_DMA_USE_IOMMU)
+	if (client->dev->archdata.mapping) {
+		struct dma_iommu_mapping *mapping =
+				to_dma_iommu_mapping(client->dev);
+		arm_iommu_detach_device(client->dev);
+		arm_iommu_release_mapping(mapping);
+
+		domain = iommu_get_domain_for_dev(client->dev);
+	}
+#endif
 
 	/*
 	 * If the host1x client is already attached to an IOMMU domain that is
@@ -1032,7 +1053,7 @@ void *tegra_drm_alloc(struct tegra_drm *tegra, size_t size, dma_addr_t *dma)
 
 	*dma = iova_dma_addr(&tegra->carveout.domain, alloc);
 	err = iommu_map(tegra->domain, *dma, virt_to_phys(virt),
-			size, IOMMU_READ | IOMMU_WRITE);
+			size, IOMMU_READ | IOMMU_WRITE, GFP_KERNEL);
 	if (err < 0)
 		goto free_iova;
 
@@ -1067,6 +1088,10 @@ static bool host1x_drm_wants_iommu(struct host1x_device *dev)
 {
 	struct host1x *host1x = dev_get_drvdata(dev->dev.parent);
 	struct iommu_domain *domain;
+
+	/* Our IOMMU usage policy doesn't currently play well with GART */
+	if (of_machine_is_compatible("nvidia,tegra20"))
+		return false;
 
 	/*
 	 * If the Tegra DRM clients are backed by an IOMMU, push buffers are
@@ -1156,15 +1181,11 @@ static int host1x_drm_probe(struct host1x_device *dev)
 	drm->mode_config.funcs = &tegra_drm_mode_config_funcs;
 	drm->mode_config.helper_private = &tegra_drm_mode_config_helpers;
 
-	err = tegra_drm_fb_prepare(drm);
-	if (err < 0)
-		goto config;
-
 	drm_kms_helper_poll_init(drm);
 
 	err = host1x_device_init(dev);
 	if (err < 0)
-		goto fbdev;
+		goto poll;
 
 	/*
 	 * Now that all display controller have been initialized, the maximum
@@ -1227,18 +1248,14 @@ static int host1x_drm_probe(struct host1x_device *dev)
 	if (err < 0)
 		goto hub;
 
-	err = tegra_drm_fb_init(drm);
+	err = drm_dev_register(drm, 0);
 	if (err < 0)
 		goto hub;
 
-	err = drm_dev_register(drm, 0);
-	if (err < 0)
-		goto fb;
+	tegra_fbdev_setup(drm);
 
 	return 0;
 
-fb:
-	tegra_drm_fb_exit(drm);
 hub:
 	if (tegra->hub)
 		tegra_display_hub_cleanup(tegra->hub);
@@ -1251,10 +1268,8 @@ device:
 	}
 
 	host1x_device_exit(dev);
-fbdev:
+poll:
 	drm_kms_helper_poll_fini(drm);
-	tegra_drm_fb_free(drm);
-config:
 	drm_mode_config_cleanup(drm);
 domain:
 	if (tegra->domain)
@@ -1275,7 +1290,6 @@ static int host1x_drm_remove(struct host1x_device *dev)
 	drm_dev_unregister(drm);
 
 	drm_kms_helper_poll_fini(drm);
-	tegra_drm_fb_exit(drm);
 	drm_atomic_helper_shutdown(drm);
 	drm_mode_config_cleanup(drm);
 
@@ -1344,15 +1358,20 @@ static const struct of_device_id host1x_drm_subdevs[] = {
 	{ .compatible = "nvidia,tegra210-sor", },
 	{ .compatible = "nvidia,tegra210-sor1", },
 	{ .compatible = "nvidia,tegra210-vic", },
+	{ .compatible = "nvidia,tegra210-nvdec", },
 	{ .compatible = "nvidia,tegra186-display", },
 	{ .compatible = "nvidia,tegra186-dc", },
 	{ .compatible = "nvidia,tegra186-sor", },
 	{ .compatible = "nvidia,tegra186-sor1", },
 	{ .compatible = "nvidia,tegra186-vic", },
+	{ .compatible = "nvidia,tegra186-nvdec", },
 	{ .compatible = "nvidia,tegra194-display", },
 	{ .compatible = "nvidia,tegra194-dc", },
 	{ .compatible = "nvidia,tegra194-sor", },
 	{ .compatible = "nvidia,tegra194-vic", },
+	{ .compatible = "nvidia,tegra194-nvdec", },
+	{ .compatible = "nvidia,tegra234-vic", },
+	{ .compatible = "nvidia,tegra234-nvdec", },
 	{ /* sentinel */ }
 };
 
@@ -1376,11 +1395,15 @@ static struct platform_driver * const drivers[] = {
 	&tegra_gr2d_driver,
 	&tegra_gr3d_driver,
 	&tegra_vic_driver,
+	&tegra_nvdec_driver,
 };
 
 static int __init host1x_drm_init(void)
 {
 	int err;
+
+	if (drm_firmware_drivers_only())
+		return -ENODEV;
 
 	err = host1x_driver_register(&host1x_drm_driver);
 	if (err < 0)

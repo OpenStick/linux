@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2021 FIXME
+// Copyright (c) 2023 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -26,14 +26,6 @@ static inline struct nt35521 *to_nt35521(struct drm_panel *panel)
 	return container_of(panel, struct nt35521, panel);
 }
 
-#define dsi_dcs_write_seq(dsi, seq...) do {				\
-		static const u8 d[] = { seq };				\
-		int ret;						\
-		ret = mipi_dsi_dcs_write_buffer(dsi, d, ARRAY_SIZE(d));	\
-		if (ret < 0)						\
-			return ret;					\
-	} while (0)
-
 static void nt35521_reset(struct nt35521 *ctx)
 {
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
@@ -52,14 +44,14 @@ static int nt35521_on(struct nt35521 *ctx)
 
 	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
-	dsi_dcs_write_seq(dsi, 0xf0, 0x55, 0xaa, 0x52, 0x08, 0x00);
-	dsi_dcs_write_seq(dsi, 0xc8, 0x00);
-	dsi_dcs_write_seq(dsi, 0xf0, 0x55, 0xaa, 0x52, 0x08, 0x02);
-	dsi_dcs_write_seq(dsi, 0xef, 0x11, 0x08, 0x16, 0x19);
-	dsi_dcs_write_seq(dsi, 0xf0, 0x55, 0xaa, 0x52, 0x08, 0x01);
-	dsi_dcs_write_seq(dsi, 0xb5, 0x04, 0x04);
-	dsi_dcs_write_seq(dsi, 0xb9, 0x35, 0x35);
-	dsi_dcs_write_seq(dsi, 0xba, 0x25, 0x25);
+	mipi_dsi_dcs_write_seq(dsi, 0xf0, 0x55, 0xaa, 0x52, 0x08, 0x00);
+	mipi_dsi_dcs_write_seq(dsi, 0xc8, 0x00);
+	mipi_dsi_dcs_write_seq(dsi, 0xf0, 0x55, 0xaa, 0x52, 0x08, 0x02);
+	mipi_dsi_dcs_write_seq(dsi, 0xef, 0x11, 0x08, 0x16, 0x19);
+	mipi_dsi_dcs_write_seq(dsi, 0xf0, 0x55, 0xaa, 0x52, 0x08, 0x01);
+	mipi_dsi_dcs_write_seq(dsi, 0xb5, 0x04, 0x04);
+	mipi_dsi_dcs_write_seq(dsi, 0xb9, 0x35, 0x35);
+	mipi_dsi_dcs_write_seq(dsi, 0xba, 0x25, 0x25);
 
 	ret = mipi_dsi_dcs_exit_sleep_mode(dsi);
 	if (ret < 0) {
@@ -215,7 +207,10 @@ static int nt35521_probe(struct mipi_dsi_device *dsi)
 	dsi->format = MIPI_DSI_FMT_RGB888;
 	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST |
 			  MIPI_DSI_MODE_VIDEO_HSE | MIPI_DSI_MODE_NO_EOT_PACKET |
-			  MIPI_DSI_CLOCK_NON_CONTINUOUS;
+			  MIPI_DSI_CLOCK_NON_CONTINUOUS |
+			  MIPI_DSI_MODE_VIDEO_NO_HFP |
+			  MIPI_DSI_MODE_VIDEO_NO_HBP |
+			  MIPI_DSI_MODE_VIDEO_NO_HSA;
 
 	drm_panel_init(&ctx->panel, dev, &nt35521_panel_funcs,
 		       DRM_MODE_CONNECTOR_DSI);
@@ -236,7 +231,7 @@ static int nt35521_probe(struct mipi_dsi_device *dsi)
 	return 0;
 }
 
-static int nt35521_remove(struct mipi_dsi_device *dsi)
+static void nt35521_remove(struct mipi_dsi_device *dsi)
 {
 	struct nt35521 *ctx = mipi_dsi_get_drvdata(dsi);
 	int ret;
@@ -246,8 +241,6 @@ static int nt35521_remove(struct mipi_dsi_device *dsi)
 		dev_err(&dsi->dev, "Failed to detach from DSI host: %d\n", ret);
 
 	drm_panel_remove(&ctx->panel);
-
-	return 0;
 }
 
 static const struct of_device_id nt35521_of_match[] = {
@@ -268,4 +261,4 @@ module_mipi_dsi_driver(nt35521_driver);
 
 MODULE_AUTHOR("linux-mdss-dsi-panel-driver-generator <fix@me>"); // FIXME
 MODULE_DESCRIPTION("DRM driver for nt35521_HD720p_video_AUO5");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

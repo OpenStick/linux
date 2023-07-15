@@ -31,6 +31,8 @@
 #elif defined(CONFIG_PPC64)
 #include <asm/switch_to.h>
 #include <asm/cputable.h>
+#elif defined(CONFIG_ARM64)
+#include <asm/neon.h>
 #endif
 
 /**
@@ -52,7 +54,7 @@ static DEFINE_PER_CPU(int, fpu_recursion_depth);
  * This function tells if the code is already under FPU protection or not. A
  * function that works as an API for a set of FPU operations can use this
  * function for checking if the caller invoked it after DC_FP_START(). For
- * example, take a look at dcn2x.c file.
+ * example, take a look at dcn20_fpu.c file.
  */
 inline void dc_assert_fp_enabled(void)
 {
@@ -87,6 +89,7 @@ void dc_fpu_begin(const char *function_name, const int line)
 
 	if (*pcpu == 1) {
 #if defined(CONFIG_X86)
+		migrate_disable();
 		kernel_fpu_begin();
 #elif defined(CONFIG_PPC64)
 		if (cpu_has_feature(CPU_FTR_VSX_COMP)) {
@@ -99,6 +102,8 @@ void dc_fpu_begin(const char *function_name, const int line)
 			preempt_disable();
 			enable_kernel_fp();
 		}
+#elif defined(CONFIG_ARM64)
+		kernel_neon_begin();
 #endif
 	}
 
@@ -125,6 +130,7 @@ void dc_fpu_end(const char *function_name, const int line)
 	if (*pcpu <= 0) {
 #if defined(CONFIG_X86)
 		kernel_fpu_end();
+		migrate_enable();
 #elif defined(CONFIG_PPC64)
 		if (cpu_has_feature(CPU_FTR_VSX_COMP)) {
 			disable_kernel_vsx();
@@ -136,6 +142,8 @@ void dc_fpu_end(const char *function_name, const int line)
 			disable_kernel_fp();
 			preempt_enable();
 		}
+#elif defined(CONFIG_ARM64)
+		kernel_neon_end();
 #endif
 	}
 

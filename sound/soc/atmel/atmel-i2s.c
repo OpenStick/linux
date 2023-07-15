@@ -342,8 +342,8 @@ static int atmel_i2s_hw_params(struct snd_pcm_substream *substream,
 		return -EINVAL;
 	}
 
-	switch (dev->fmt & SND_SOC_DAIFMT_MASTER_MASK) {
-	case SND_SOC_DAIFMT_CBS_CFS:
+	switch (dev->fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
+	case SND_SOC_DAIFMT_BP_FP:
 		/* codec is slave, so cpu is master */
 		mr |= ATMEL_I2SC_MR_MODE_MASTER;
 		ret = atmel_i2s_get_gck_param(dev, params_rate(params));
@@ -351,7 +351,7 @@ static int atmel_i2s_hw_params(struct snd_pcm_substream *substream,
 			return ret;
 		break;
 
-	case SND_SOC_DAIFMT_CBM_CFM:
+	case SND_SOC_DAIFMT_BC_FC:
 		/* codec is master, so cpu is slave */
 		mr |= ATMEL_I2SC_MR_MODE_SLAVE;
 		dev->gck_param = NULL;
@@ -564,7 +564,8 @@ static struct snd_soc_dai_driver atmel_i2s_dai = {
 };
 
 static const struct snd_soc_component_driver atmel_i2s_component = {
-	.name	= "atmel-i2s",
+	.name			= "atmel-i2s",
+	.legacy_dai_naming	= 1,
 };
 
 static int atmel_i2s_sama5d2_mck_init(struct atmel_i2s_dev *dev,
@@ -716,13 +717,11 @@ static int atmel_i2s_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int atmel_i2s_remove(struct platform_device *pdev)
+static void atmel_i2s_remove(struct platform_device *pdev)
 {
 	struct atmel_i2s_dev *dev = platform_get_drvdata(pdev);
 
 	clk_disable_unprepare(dev->pclk);
-
-	return 0;
 }
 
 static struct platform_driver atmel_i2s_driver = {
@@ -731,7 +730,7 @@ static struct platform_driver atmel_i2s_driver = {
 		.of_match_table	= of_match_ptr(atmel_i2s_dt_ids),
 	},
 	.probe		= atmel_i2s_probe,
-	.remove		= atmel_i2s_remove,
+	.remove_new	= atmel_i2s_remove,
 };
 module_platform_driver(atmel_i2s_driver);
 

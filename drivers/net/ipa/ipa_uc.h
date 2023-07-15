@@ -1,12 +1,20 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 
 /* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
- * Copyright (C) 2019-2020 Linaro Ltd.
+ * Copyright (C) 2019-2022 Linaro Ltd.
  */
 #ifndef _IPA_UC_H_
 #define _IPA_UC_H_
 
 struct ipa;
+enum ipa_irq_id;
+
+/**
+ * ipa_uc_interrupt_handler() - Handler for microcontroller IPA interrupts
+ * @ipa:	IPA pointer
+ * @irq_id:	IPA interrupt ID
+ */
+void ipa_uc_interrupt_handler(struct ipa *ipa, enum ipa_irq_id irq_id);
 
 /**
  * ipa_uc_config() - Configure the IPA microcontroller subsystem

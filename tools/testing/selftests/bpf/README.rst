@@ -6,18 +6,59 @@ General instructions on running selftests can be found in
 
 __ /Documentation/bpf/bpf_devel_QA.rst#q-how-to-run-bpf-selftests
 
+=============
+BPF CI System
+=============
+
+BPF employs a continuous integration (CI) system to check patch submission in an
+automated fashion. The system runs selftests for each patch in a series. Results
+are propagated to patchwork, where failures are highlighted similar to
+violations of other checks (such as additional warnings being emitted or a
+``scripts/checkpatch.pl`` reported deficiency):
+
+  https://patchwork.kernel.org/project/netdevbpf/list/?delegate=121173
+
+The CI system executes tests on multiple architectures. It uses a kernel
+configuration derived from both the generic and architecture specific config
+file fragments below ``tools/testing/selftests/bpf/`` (e.g., ``config`` and
+``config.x86_64``).
+
+Denylisting Tests
+=================
+
+It is possible for some architectures to not have support for all BPF features.
+In such a case tests in CI may fail. An example of such a shortcoming is BPF
+trampoline support on IBM's s390x architecture. For cases like this, an in-tree
+deny list file, located at ``tools/testing/selftests/bpf/DENYLIST.<arch>``, can
+be used to prevent the test from running on such an architecture.
+
+In addition to that, the generic ``tools/testing/selftests/bpf/DENYLIST`` is
+honored on every architecture running tests.
+
+These files are organized in three columns. The first column lists the test in
+question. This can be the name of a test suite or of an individual test. The
+remaining two columns provide additional meta data that helps identify and
+classify the entry: column two is a copy and paste of the error being reported
+when running the test in the setting in question. The third column, if
+available, summarizes the underlying problem. A value of ``trampoline``, for
+example, indicates that lack of trampoline support is causing the test to fail.
+This last entry helps identify tests that can be re-enabled once such support is
+added.
+
 =========================
 Running Selftests in a VM
 =========================
 
 It's now possible to run the selftests using ``tools/testing/selftests/bpf/vmtest.sh``.
 The script tries to ensure that the tests are run with the same environment as they
-would be run post-submit in the CI used by the Maintainers.
+would be run post-submit in the CI used by the Maintainers, with the exception
+that deny lists are not automatically honored.
 
-This script downloads a suitable Kconfig and VM userspace image from the system used by
-the CI. It builds the kernel (without overwriting your existing Kconfig), recompiles the
-bpf selftests, runs them (by default ``tools/testing/selftests/bpf/test_progs``) and
-saves the resulting output (by default in ``~/.bpf_selftests``).
+This script uses the in-tree kernel configuration and downloads a VM userspace
+image from the system used by the CI. It builds the kernel (without overwriting
+your existing Kconfig), recompiles the bpf selftests, runs them (by default
+``tools/testing/selftests/bpf/test_progs``) and saves the resulting output (by
+default in ``~/.bpf_selftests``).
 
 Script dependencies:
 - clang (preferably built from sources, https://github.com/llvm/llvm-project);
@@ -26,17 +67,25 @@ Script dependencies:
 - docutils (for ``rst2man``);
 - libcap-devel.
 
-For more information on about using the script, run:
+For more information about using the script, run:
 
 .. code-block:: console
 
   $ tools/testing/selftests/bpf/vmtest.sh -h
 
+In case of linker errors when running selftests, try using static linking:
+
+.. code-block:: console
+
+  $ LDLIBS=-static vmtest.sh
+
+.. note:: Some distros may not support static linking.
+
 .. note:: The script uses pahole and clang based on host environment setting.
           If you want to change pahole and llvm, you can change `PATH` environment
           variable in the beginning of script.
 
-.. note:: The script currently only supports x86_64.
+.. note:: The script currently only supports x86_64 and s390x architectures.
 
 Additional information about selftest failures are
 documented here.
@@ -118,11 +167,11 @@ available in 10.0.1. The patch is available in llvm 11.0.0 trunk.
 
 __  https://reviews.llvm.org/D78466
 
-bpf_verif_scale/loop6.o test failure with Clang 12
-==================================================
+bpf_verif_scale/loop6.bpf.o test failure with Clang 12
+======================================================
 
 With Clang 12, the following bpf_verif_scale test failed:
-  * ``bpf_verif_scale/loop6.o``
+  * ``bpf_verif_scale/loop6.bpf.o``
 
 The verifier output looks like
 
@@ -201,6 +250,23 @@ Without it, the error from compiling bpf selftests looks like:
 
 __ https://reviews.llvm.org/D93563
 
+btf_tag test and Clang version
+==============================
+
+The btf_tag selftest requires LLVM support to recognize the btf_decl_tag and
+btf_type_tag attributes. They are introduced in `Clang 14` [0_, 1_].
+The subtests ``btf_type_tag_user_{mod1, mod2, vmlinux}`` also requires
+pahole version ``1.23``.
+
+Without them, the btf_tag selftest will be skipped and you will observe:
+
+.. code-block:: console
+
+  #<test_num> btf_tag:SKIP
+
+.. _0: https://reviews.llvm.org/D111588
+.. _1: https://reviews.llvm.org/D111199
+
 Clang dependencies for static linking tests
 ===========================================
 
@@ -220,7 +286,7 @@ See `kernel llvm reloc`_ for more explanation and some examples.
 Using clang 13 to compile old libbpf which has static linker support,
 there will be a compilation failure::
 
-  libbpf: ELF relo #0 in section #6 has unexpected type 2 in .../bpf_tcp_nogpl.o
+  libbpf: ELF relo #0 in section #6 has unexpected type 2 in .../bpf_tcp_nogpl.bpf.o
 
 Here, ``type 2`` refers to new relocation type ``R_BPF_64_ABS64``.
 To fix this issue, user newer libbpf.
@@ -228,3 +294,16 @@ To fix this issue, user newer libbpf.
 .. Links
 .. _clang reloc patch: https://reviews.llvm.org/D102712
 .. _kernel llvm reloc: /Documentation/bpf/llvm_reloc.rst
+
+Clang dependencies for the u32 spill test (xdpwall)
+===================================================
+The xdpwall selftest requires a change in `Clang 14`__.
+
+Without it, the xdpwall selftest will fail and the error message
+from running test_progs will look like:
+
+.. code-block:: console
+
+  test_xdpwall:FAIL:Does LLVM have https://reviews.llvm.org/D109073? unexpected error: -4007
+
+__ https://reviews.llvm.org/D109073

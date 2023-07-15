@@ -37,12 +37,12 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&gpio_keys_default>;
+		pinctrl-names = "default";
 
 		label = "GPIO Buttons";
 
-		volume-up {
+		volume-up-button {
 			label = "Volume Up";
 			gpios = <&msmgpio 107 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEUP>;
@@ -53,9 +53,9 @@
 	usb_id: usb-id {
 		compatible = "linux,extcon-usb-gpio";
 		id-gpio = <&msmgpio 91 GPIO_ACTIVE_HIGH>;
-		pinctrl-names = "default", "sleep";
 		pinctrl-0 = <&usb_id_default>;
 		pinctrl-1 = <&usb_id_sleep>;
+		pinctrl-names = "default", "sleep";
 	};
 
 	/*
@@ -76,8 +76,8 @@
 		regulator-max-microvolt = <5000000>;
 		gpio = <&msmgpio 97 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
-		pinctrl-names = "default";
 		pinctrl-0 = <&lcd_p_en_default>;
+		pinctrl-names = "default";
 	};
 
 	nt50358_neg: nt50358-neg {
@@ -87,8 +87,8 @@
 		regulator-max-microvolt = <5000000>;
 		gpio = <&msmgpio 98 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
-		pinctrl-names = "default";
 		pinctrl-0 = <&lcd_n_en_default>;
+		pinctrl-names = "default";
 	};
 };
 
@@ -108,8 +108,8 @@
 		interrupt-parent = <&msmgpio>;
 		interrupts = <62 IRQ_TYPE_EDGE_FALLING>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&battery_alert_default>;
+		pinctrl-names = "default";
 	};
 };
 
@@ -128,8 +128,8 @@
 		vdd-supply = <&pm8916_l16>;
 		vio-supply = <&pm8916_l6>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&ts_int_default>;
+		pinctrl-names = "default";
 
 		syna,startup-delay-ms = <100>;
 
@@ -163,8 +163,8 @@
 			       "0", "-1", "0",
 			       "0",  "0", "1";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&accel_int_default>;
+		pinctrl-names = "default";
 	};
 };
 
@@ -173,9 +173,9 @@
 };
 
 &dsi0 {
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&mdss_default>;
 	pinctrl-1 = <&mdss_sleep>;
+	pinctrl-names = "default", "sleep";
 
 	panel@0 {
 		compatible = "motorola,harpia-panel";
@@ -186,8 +186,8 @@
 		reset-gpios = <&msmgpio 25 GPIO_ACTIVE_LOW>;
 		backlight-gpios = <&msmgpio 37 GPIO_ACTIVE_HIGH>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&lcd_bl_en_default>;
+		pinctrl-names = "default";
 
 		port {
 			panel_in: endpoint {
@@ -211,53 +211,50 @@
 };
 
 &pm8916_resin {
-	status = "okay";
 	linux,code = <KEY_VOLUMEDOWN>;
+	status = "okay";
 };
 
 &pm8916_vib {
 	status = "okay";
 };
 
-&pronto {
-	status = "okay";
-};
-
 &sdhc_1 {
-	status = "okay";
-
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&sdc1_clk_on &sdc1_cmd_on &sdc1_data_on>;
 	pinctrl-1 = <&sdc1_clk_off &sdc1_cmd_off &sdc1_data_off>;
+	pinctrl-names = "default", "sleep";
+
+	status = "okay";
 };
 
 &sdhc_2 {
-	status = "okay";
-
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&sdc2_clk_on &sdc2_cmd_on &sdc2_data_on &sdc2_cd>;
 	pinctrl-1 = <&sdc2_clk_off &sdc2_cmd_off &sdc2_data_off &sdc2_cd>;
+	pinctrl-names = "default", "sleep";
 
 	cd-gpios = <&msmgpio 118 GPIO_ACTIVE_LOW>;
+
+	status = "okay";
 };
 
 &sound {
-	status = "okay";
 	audio-routing =
 		"AMIC1", "MIC BIAS External1",
 		"AMIC2", "MIC BIAS Internal2",
 		"AMIC3", "MIC BIAS External1";
 
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&cdc_pdm_lines_act &headset_switch_supply_en
 		     &headset_switch_in>;
 	pinctrl-1 = <&cdc_pdm_lines_sus &headset_switch_supply_en
 		     &headset_switch_in>;
+	pinctrl-names = "default", "sleep";
+
+	status = "okay";
 };
 
 &usb {
-	status = "okay";
 	extcon = <&usb_id>, <&usb_id>;
+	status = "okay";
 };
 
 &usb_hs_phy {
@@ -269,6 +266,14 @@
 	qcom,mbhc-vthreshold-low = <75 150 237 450 500>;
 	qcom,mbhc-vthreshold-high = <75 150 237 450 500>;
 	qcom,micbias1-ext-cap;
+};
+
+&wcnss {
+	status = "okay";
+};
+
+&wcnss_iris {
+	compatible = "qcom,wcn3620";
 };
 
 &smd_rpm_regulators {
@@ -334,8 +339,8 @@
 	l11 {
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <2950000>;
-		regulator-allow-set-load;
 		regulator-system-load = <200000>;
+		regulator-allow-set-load;
 	};
 
 	l12 {
@@ -383,119 +388,103 @@
 };
 
 &msmgpio {
-	accel_int_default: accel-int-default {
+	accel_int_default: accel-int-default-state {
 		pins = "gpio115", "gpio119";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	battery_alert_default: battery-alert-default {
+	battery_alert_default: battery-alert-default-state {
 		pins = "gpio62";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-pull-up;
 	};
 
-	gpio_keys_default: gpio-keys-default {
+	gpio_keys_default: gpio-keys-default-state {
 		pins = "gpio107";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-pull-up;
 	};
 
-	headset_switch_in: headset-switch-in {
+	headset_switch_in: headset-switch-in-state {
 		pins = "gpio112";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 		output-low;
 	};
 
-	headset_switch_supply_en: headset-switch-supply-en {
+	headset_switch_supply_en: headset-switch-supply-en-state {
 		pins = "gpio111";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 		output-high;
 	};
 
-	lcd_bl_en_default: lcd-bl-en-default {
+	lcd_bl_en_default: lcd-bl-en-default-state {
 		pins = "gpio37";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	lcd_p_en_default: lcd-p-en-default {
+	lcd_p_en_default: lcd-p-en-default-state {
 		pins = "gpio97";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	lcd_n_en_default: lcd-n-en-default {
+	lcd_n_en_default: lcd-n-en-default-state {
 		pins = "gpio98";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	mdss {
-		mdss_default: mdss-default {
-			pins = "gpio25";
-			function = "gpio";
-
-			drive-strength = <8>;
-			bias-disable;
-		};
-		mdss_sleep: mdss-sleep {
-			pins = "gpio25";
-			function = "gpio";
-
-			drive-strength = <2>;
-			bias-pull-down;
-		};
+	mdss_default: mdss-default-state {
+		pins = "gpio25";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
 	};
 
-	sdc2_cd: sdc2-cd-default {
+	mdss_sleep: mdss-sleep-state {
+		pins = "gpio25";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	sdc2_cd: sdc2-cd-default-state {
 		pins = "gpio118";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	ts_int_default: ts-int-default {
+	ts_int_default: ts-int-default-state {
 		pins = "gpio13";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	usb-id {
-		usb_id_default: id-default {
-			pins = "gpio91";
-			function = "gpio";
+	usb_id_default: usb-id-default-state {
+		pins = "gpio91";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-pull-up;
+	};
 
-			drive-strength = <8>;
-			bias-pull-up;
-		};
-		usb_id_sleep: id-sleep {
-			pins = "gpio91";
-			function = "gpio";
-
-			drive-strength = <8>;
-			bias-disable;
-		};
+	usb_id_sleep: usb-id-sleep-state {
+		pins = "gpio91";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
 	};
 };

@@ -122,29 +122,39 @@ struct mesh_path {
 	u8 rann_snd_addr[ETH_ALEN];
 	u32 rann_metric;
 	unsigned long last_preq_to_root;
+	unsigned long fast_tx_check;
 	bool is_root;
 	bool is_gate;
 	u32 path_change_count;
 };
 
+#define MESH_FAST_TX_CACHE_MAX_SIZE		512
+#define MESH_FAST_TX_CACHE_THRESHOLD_SIZE	384
+#define MESH_FAST_TX_CACHE_TIMEOUT		8000 /* msecs */
+
 /**
- * struct mesh_table
- *
- * @known_gates: list of known mesh gates and their mpaths by the station. The
- * gate's mpath may or may not be resolved and active.
- * @gates_lock: protects updates to known_gates
- * @rhead: the rhashtable containing struct mesh_paths, keyed by dest addr
- * @walk_head: linked list containing all mesh_path objects
- * @walk_lock: lock protecting walk_head
- * @entries: number of entries in the table
+ * struct ieee80211_mesh_fast_tx - cached mesh fast tx entry
+ * @rhash: rhashtable pointer
+ * @addr_key: The Ethernet DA which is the key for this entry
+ * @fast_tx: base fast_tx data
+ * @hdr: cached mesh and rfc1042 headers
+ * @hdrlen: length of mesh + rfc1042
+ * @walk_list: list containing all the fast tx entries
+ * @mpath: mesh path corresponding to the Mesh DA
+ * @mppath: MPP entry corresponding to this DA
+ * @timestamp: Last used time of this entry
  */
-struct mesh_table {
-	struct hlist_head known_gates;
-	spinlock_t gates_lock;
-	struct rhashtable rhead;
-	struct hlist_head walk_head;
-	spinlock_t walk_lock;
-	atomic_t entries;		/* Up to MAX_MESH_NEIGHBOURS */
+struct ieee80211_mesh_fast_tx {
+	struct rhash_head rhash;
+	u8 addr_key[ETH_ALEN] __aligned(2);
+
+	struct ieee80211_fast_tx fast_tx;
+	u8 hdr[sizeof(struct ieee80211s_hdr) + sizeof(rfc1042_header)];
+	u16 hdrlen;
+
+	struct mesh_path *mpath, *mppath;
+	struct hlist_node walk_list;
+	unsigned long timestamp;
 };
 
 /* Recent multicast cache */
@@ -224,6 +234,10 @@ int mesh_add_he_oper_ie(struct ieee80211_sub_if_data *sdata,
 			struct sk_buff *skb);
 int mesh_add_he_6ghz_cap_ie(struct ieee80211_sub_if_data *sdata,
 			    struct sk_buff *skb);
+int mesh_add_eht_cap_ie(struct ieee80211_sub_if_data *sdata,
+			struct sk_buff *skb, u8 ie_len);
+int mesh_add_eht_oper_ie(struct ieee80211_sub_if_data *sdata,
+			 struct sk_buff *skb);
 void mesh_rmc_free(struct ieee80211_sub_if_data *sdata);
 int mesh_rmc_init(struct ieee80211_sub_if_data *sdata);
 void ieee80211s_init(void);
@@ -308,7 +322,7 @@ int mesh_path_error_tx(struct ieee80211_sub_if_data *sdata,
 void mesh_path_assign_nexthop(struct mesh_path *mpath, struct sta_info *sta);
 void mesh_path_flush_pending(struct mesh_path *mpath);
 void mesh_path_tx_pending(struct mesh_path *mpath);
-int mesh_pathtbl_init(struct ieee80211_sub_if_data *sdata);
+void mesh_pathtbl_init(struct ieee80211_sub_if_data *sdata);
 void mesh_pathtbl_unregister(struct ieee80211_sub_if_data *sdata);
 int mesh_path_del(struct ieee80211_sub_if_data *sdata, const u8 *addr);
 void mesh_path_timer(struct timer_list *t);
@@ -318,6 +332,20 @@ void mesh_path_discard_frame(struct ieee80211_sub_if_data *sdata,
 void mesh_path_tx_root_frame(struct ieee80211_sub_if_data *sdata);
 
 bool mesh_action_is_path_sel(struct ieee80211_mgmt *mgmt);
+struct ieee80211_mesh_fast_tx *
+mesh_fast_tx_get(struct ieee80211_sub_if_data *sdata, const u8 *addr);
+bool ieee80211_mesh_xmit_fast(struct ieee80211_sub_if_data *sdata,
+			      struct sk_buff *skb, u32 ctrl_flags);
+void mesh_fast_tx_cache(struct ieee80211_sub_if_data *sdata,
+			struct sk_buff *skb, struct mesh_path *mpath);
+void mesh_fast_tx_gc(struct ieee80211_sub_if_data *sdata);
+void mesh_fast_tx_flush_addr(struct ieee80211_sub_if_data *sdata,
+			     const u8 *addr);
+void mesh_fast_tx_flush_mpath(struct mesh_path *mpath);
+void mesh_fast_tx_flush_sta(struct ieee80211_sub_if_data *sdata,
+			    struct sta_info *sta);
+void mesh_path_refresh(struct ieee80211_sub_if_data *sdata,
+		       struct mesh_path *mpath, const u8 *addr);
 
 #ifdef CONFIG_MAC80211_MESH
 static inline

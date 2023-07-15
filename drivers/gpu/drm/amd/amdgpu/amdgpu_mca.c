@@ -31,7 +31,7 @@ void amdgpu_mca_query_correctable_error_count(struct amdgpu_device *adev,
 					      uint64_t mc_status_addr,
 					      unsigned long *error_count)
 {
-	uint64_t mc_status = RREG64_PCIE(mc_status_addr * 4);
+	uint64_t mc_status = RREG64_PCIE(mc_status_addr);
 
 	if (REG_GET_FIELD(mc_status, MCA_UMC_UMC0_MCUMC_STATUST0, Val) == 1 &&
 	    REG_GET_FIELD(mc_status, MCA_UMC_UMC0_MCUMC_STATUST0, CECC) == 1)
@@ -42,7 +42,7 @@ void amdgpu_mca_query_uncorrectable_error_count(struct amdgpu_device *adev,
 						uint64_t mc_status_addr,
 						unsigned long *error_count)
 {
-	uint64_t mc_status = RREG64_PCIE(mc_status_addr * 4);
+	uint64_t mc_status = RREG64_PCIE(mc_status_addr);
 
 	if ((REG_GET_FIELD(mc_status, MCA_UMC_UMC0_MCUMC_STATUST0, Val) == 1) &&
 	    (REG_GET_FIELD(mc_status, MCA_UMC_UMC0_MCUMC_STATUST0, Deferred) == 1 ||
@@ -56,7 +56,7 @@ void amdgpu_mca_query_uncorrectable_error_count(struct amdgpu_device *adev,
 void amdgpu_mca_reset_error_count(struct amdgpu_device *adev,
 				  uint64_t mc_status_addr)
 {
-	WREG64_PCIE(mc_status_addr * 4, 0x0ULL);
+	WREG64_PCIE(mc_status_addr, 0x0ULL);
 }
 
 void amdgpu_mca_query_ras_error_count(struct amdgpu_device *adev,
@@ -71,47 +71,74 @@ void amdgpu_mca_query_ras_error_count(struct amdgpu_device *adev,
 	amdgpu_mca_reset_error_count(adev, mc_status_addr);
 }
 
-int amdgpu_mca_ras_late_init(struct amdgpu_device *adev,
-			     struct amdgpu_mca_ras *mca_dev)
+int amdgpu_mca_mp0_ras_sw_init(struct amdgpu_device *adev)
 {
-	int r;
-	struct ras_ih_if ih_info = {
-		.cb = NULL,
-	};
-	struct ras_fs_if fs_info = {
-		.sysfs_name = mca_dev->ras_funcs->sysfs_name,
-	};
+	int err;
+	struct amdgpu_mca_ras_block *ras;
 
-	if (!mca_dev->ras_if) {
-		mca_dev->ras_if = kmalloc(sizeof(struct ras_common_if), GFP_KERNEL);
-		if (!mca_dev->ras_if)
-			return -ENOMEM;
-		mca_dev->ras_if->block = mca_dev->ras_funcs->ras_block;
-		mca_dev->ras_if->type = AMDGPU_RAS_ERROR__MULTI_UNCORRECTABLE;
-		mca_dev->ras_if->sub_block_index = 0;
-	}
-	ih_info.head = fs_info.head = *mca_dev->ras_if;
-	r = amdgpu_ras_late_init(adev, mca_dev->ras_if,
-				 &fs_info, &ih_info);
-	if (r || !amdgpu_ras_is_supported(adev, mca_dev->ras_if->block)) {
-		kfree(mca_dev->ras_if);
-		mca_dev->ras_if = NULL;
+	if (!adev->mca.mp0.ras)
+		return 0;
+
+	ras = adev->mca.mp0.ras;
+
+	err = amdgpu_ras_register_ras_block(adev, &ras->ras_block);
+	if (err) {
+		dev_err(adev->dev, "Failed to register mca.mp0 ras block!\n");
+		return err;
 	}
 
-	return r;
+	strcpy(ras->ras_block.ras_comm.name, "mca.mp0");
+	ras->ras_block.ras_comm.block = AMDGPU_RAS_BLOCK__MCA;
+	ras->ras_block.ras_comm.type = AMDGPU_RAS_ERROR__MULTI_UNCORRECTABLE;
+	adev->mca.mp0.ras_if = &ras->ras_block.ras_comm;
+
+	return 0;
 }
 
-void amdgpu_mca_ras_fini(struct amdgpu_device *adev,
-			 struct amdgpu_mca_ras *mca_dev)
+int amdgpu_mca_mp1_ras_sw_init(struct amdgpu_device *adev)
 {
-	struct ras_ih_if ih_info = {
-		.cb = NULL,
-	};
+	int err;
+	struct amdgpu_mca_ras_block *ras;
 
-	if (!mca_dev->ras_if)
-		return;
+	if (!adev->mca.mp1.ras)
+		return 0;
 
-	amdgpu_ras_late_fini(adev, mca_dev->ras_if, &ih_info);
-	kfree(mca_dev->ras_if);
-	mca_dev->ras_if = NULL;
+	ras = adev->mca.mp1.ras;
+
+	err = amdgpu_ras_register_ras_block(adev, &ras->ras_block);
+	if (err) {
+		dev_err(adev->dev, "Failed to register mca.mp1 ras block!\n");
+		return err;
+	}
+
+	strcpy(ras->ras_block.ras_comm.name, "mca.mp1");
+	ras->ras_block.ras_comm.block = AMDGPU_RAS_BLOCK__MCA;
+	ras->ras_block.ras_comm.type = AMDGPU_RAS_ERROR__MULTI_UNCORRECTABLE;
+	adev->mca.mp1.ras_if = &ras->ras_block.ras_comm;
+
+	return 0;
+}
+
+int amdgpu_mca_mpio_ras_sw_init(struct amdgpu_device *adev)
+{
+	int err;
+	struct amdgpu_mca_ras_block *ras;
+
+	if (!adev->mca.mpio.ras)
+		return 0;
+
+	ras = adev->mca.mpio.ras;
+
+	err = amdgpu_ras_register_ras_block(adev, &ras->ras_block);
+	if (err) {
+		dev_err(adev->dev, "Failed to register mca.mpio ras block!\n");
+		return err;
+	}
+
+	strcpy(ras->ras_block.ras_comm.name, "mca.mpio");
+	ras->ras_block.ras_comm.block = AMDGPU_RAS_BLOCK__MCA;
+	ras->ras_block.ras_comm.type = AMDGPU_RAS_ERROR__MULTI_UNCORRECTABLE;
+	adev->mca.mpio.ras_if = &ras->ras_block.ras_comm;
+
+	return 0;
 }

@@ -50,6 +50,9 @@ static int asd_map_scatterlist(struct sas_task *task,
 		dma_addr_t dma = dma_map_single(&asd_ha->pcidev->dev, p,
 						task->total_xfer_len,
 						task->data_dir);
+		if (dma_mapping_error(&asd_ha->pcidev->dev, dma))
+			return -ENOMEM;
+
 		sg_arr[0].bus_addr = cpu_to_le64((u64)dma);
 		sg_arr[0].size = cpu_to_le32(task->total_xfer_len);
 		sg_arr[0].flags |= ASD_SG_EL_LIST_EOL;
@@ -322,7 +325,6 @@ Again:
 
 	spin_lock_irqsave(&task->task_state_lock, flags);
 	task->task_state_flags &= ~SAS_TASK_STATE_PENDING;
-	task->task_state_flags &= ~SAS_TASK_AT_INITIATOR;
 	task->task_state_flags |= SAS_TASK_STATE_DONE;
 	if (unlikely((task->task_state_flags & SAS_TASK_STATE_ABORTED))) {
 		struct completion *completion = ascb->completion;
@@ -532,7 +534,6 @@ int asd_execute_task(struct sas_task *task, gfp_t gfp_flags)
 	struct sas_task *t = task;
 	struct asd_ascb *ascb = NULL, *a;
 	struct asd_ha_struct *asd_ha = task->dev->port->ha->lldd_ha;
-	unsigned long flags;
 
 	res = asd_can_queue(asd_ha, 1);
 	if (res)
@@ -575,10 +576,6 @@ int asd_execute_task(struct sas_task *task, gfp_t gfp_flags)
 		}
 		if (res)
 			goto out_err_unmap;
-
-		spin_lock_irqsave(&t->task_state_lock, flags);
-		t->task_state_flags |= SAS_TASK_AT_INITIATOR;
-		spin_unlock_irqrestore(&t->task_state_lock, flags);
 	}
 	list_del_init(&alist);
 
@@ -597,9 +594,6 @@ out_err_unmap:
 			if (a == b)
 				break;
 			t = a->uldd_task;
-			spin_lock_irqsave(&t->task_state_lock, flags);
-			t->task_state_flags &= ~SAS_TASK_AT_INITIATOR;
-			spin_unlock_irqrestore(&t->task_state_lock, flags);
 			switch (t->task_proto) {
 			case SAS_PROTOCOL_SATA:
 			case SAS_PROTOCOL_STP:

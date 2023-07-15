@@ -11,26 +11,32 @@
 #include <asm/paravirt.h>
 #include <asm/mshyperv.h>
 
+/*
+ * Hyper-V always provides a single IO-APIC at this MMIO address.
+ * Ideally, the value should be looked up in ACPI tables, but it
+ * is needed for mapping the IO-APIC early in boot on Confidential
+ * VMs, before ACPI functions can be used.
+ */
+#define HV_IOAPIC_BASE_ADDRESS 0xfec00000
+
+#define HV_VTL_NORMAL 0x0
+#define HV_VTL_SECURE 0x1
+#define HV_VTL_MGMT   0x2
+
+union hv_ghcb;
+
+DECLARE_STATIC_KEY_FALSE(isolation_type_snp);
+
 typedef int (*hyperv_fill_flush_list_func)(
 		struct hv_guest_mapping_flush_list *flush,
 		void *data);
 
-static inline void hv_set_register(unsigned int reg, u64 value)
-{
-	wrmsrl(reg, value);
-}
-
-static inline u64 hv_get_register(unsigned int reg)
-{
-	u64 value;
-
-	rdmsrl(reg, value);
-	return value;
-}
-
-#define hv_get_raw_timer() rdtsc_ordered()
-
 void hyperv_vector_handler(struct pt_regs *regs);
+
+static inline unsigned char hv_get_nmi_reason(void)
+{
+	return 0;
+}
 
 #if IS_ENABLED(CONFIG_HYPERV)
 extern int hyperv_init_cpuhp;
@@ -38,6 +44,8 @@ extern int hyperv_init_cpuhp;
 extern void *hv_hypercall_pg;
 
 extern u64 hv_current_partition_id;
+
+extern union hv_ghcb * __percpu *hv_ghcb_pg;
 
 int hv_call_deposit_pages(int node, u64 partition_id, u32 num_pages);
 int hv_call_add_logical_proc(int node, u32 lp_index, u32 acpi_id);
@@ -81,10 +89,16 @@ static inline u64 hv_do_hypercall(u64 control, void *input, void *output)
 	return hv_status;
 }
 
-/* Fast hypercall with 8 bytes of input and no output */
-static inline u64 hv_do_fast_hypercall8(u16 code, u64 input1)
+/* Hypercall to the L0 hypervisor */
+static inline u64 hv_do_nested_hypercall(u64 control, void *input, void *output)
 {
-	u64 hv_status, control = (u64)code | HV_HYPERCALL_FAST_BIT;
+	return hv_do_hypercall(control | HV_HYPERCALL_NESTED, input, output);
+}
+
+/* Fast hypercall with 8 bytes of input and no output */
+static inline u64 _hv_do_fast_hypercall8(u64 control, u64 input1)
+{
+	u64 hv_status;
 
 #ifdef CONFIG_X86_64
 	{
@@ -112,10 +126,24 @@ static inline u64 hv_do_fast_hypercall8(u16 code, u64 input1)
 		return hv_status;
 }
 
-/* Fast hypercall with 16 bytes of input */
-static inline u64 hv_do_fast_hypercall16(u16 code, u64 input1, u64 input2)
+static inline u64 hv_do_fast_hypercall8(u16 code, u64 input1)
 {
-	u64 hv_status, control = (u64)code | HV_HYPERCALL_FAST_BIT;
+	u64 control = (u64)code | HV_HYPERCALL_FAST_BIT;
+
+	return _hv_do_fast_hypercall8(control, input1);
+}
+
+static inline u64 hv_do_fast_nested_hypercall8(u16 code, u64 input1)
+{
+	u64 control = (u64)code | HV_HYPERCALL_FAST_BIT | HV_HYPERCALL_NESTED;
+
+	return _hv_do_fast_hypercall8(control, input1);
+}
+
+/* Fast hypercall with 16 bytes of input */
+static inline u64 _hv_do_fast_hypercall16(u64 control, u64 input1, u64 input2)
+{
+	u64 hv_status;
 
 #ifdef CONFIG_X86_64
 	{
@@ -144,6 +172,20 @@ static inline u64 hv_do_fast_hypercall16(u16 code, u64 input1, u64 input2)
 	}
 #endif
 	return hv_status;
+}
+
+static inline u64 hv_do_fast_hypercall16(u16 code, u64 input1, u64 input2)
+{
+	u64 control = (u64)code | HV_HYPERCALL_FAST_BIT;
+
+	return _hv_do_fast_hypercall16(control, input1, input2);
+}
+
+static inline u64 hv_do_fast_nested_hypercall16(u16 code, u64 input1, u64 input2)
+{
+	u64 control = (u64)code | HV_HYPERCALL_FAST_BIT | HV_HYPERCALL_NESTED;
+
+	return _hv_do_fast_hypercall16(control, input1, input2);
 }
 
 extern struct hv_vp_assist_page **hv_vp_assist_page;
@@ -176,18 +218,44 @@ bool hv_vcpu_is_preempted(int vcpu);
 static inline void hv_apic_init(void) {}
 #endif
 
-static inline void hv_set_msi_entry_from_desc(union hv_msi_entry *msi_entry,
-					      struct msi_desc *msi_desc)
-{
-	msi_entry->address.as_uint32 = msi_desc->msg.address_lo;
-	msi_entry->data.as_uint32 = msi_desc->msg.data;
-}
-
 struct irq_domain *hv_create_pci_msi_domain(void);
 
 int hv_map_ioapic_interrupt(int ioapic_id, bool level, int vcpu, int vector,
 		struct hv_interrupt_entry *entry);
 int hv_unmap_ioapic_interrupt(int ioapic_id, struct hv_interrupt_entry *entry);
+
+#ifdef CONFIG_AMD_MEM_ENCRYPT
+void hv_ghcb_msr_write(u64 msr, u64 value);
+void hv_ghcb_msr_read(u64 msr, u64 *value);
+bool hv_ghcb_negotiate_protocol(void);
+void __noreturn hv_ghcb_terminate(unsigned int set, unsigned int reason);
+void hv_vtom_init(void);
+#else
+static inline void hv_ghcb_msr_write(u64 msr, u64 value) {}
+static inline void hv_ghcb_msr_read(u64 msr, u64 *value) {}
+static inline bool hv_ghcb_negotiate_protocol(void) { return false; }
+static inline void hv_ghcb_terminate(unsigned int set, unsigned int reason) {}
+static inline void hv_vtom_init(void) {}
+#endif
+
+extern bool hv_isolation_type_snp(void);
+
+static inline bool hv_is_synic_reg(unsigned int reg)
+{
+	return (reg >= HV_REGISTER_SCONTROL) &&
+	       (reg <= HV_REGISTER_SINT15);
+}
+
+static inline bool hv_is_sint_reg(unsigned int reg)
+{
+	return (reg >= HV_REGISTER_SINT0) &&
+	       (reg <= HV_REGISTER_SINT15);
+}
+
+u64 hv_get_register(unsigned int reg);
+void hv_set_register(unsigned int reg, u64 value);
+u64 hv_get_non_nested_register(unsigned int reg);
+void hv_set_non_nested_register(unsigned int reg, u64 value);
 
 #else /* CONFIG_HYPERV */
 static inline void hyperv_init(void) {}
@@ -205,8 +273,18 @@ static inline int hyperv_flush_guest_mapping_range(u64 as,
 {
 	return -1;
 }
+static inline void hv_set_register(unsigned int reg, u64 value) { }
+static inline u64 hv_get_register(unsigned int reg) { return 0; }
+static inline void hv_set_non_nested_register(unsigned int reg, u64 value) { }
+static inline u64 hv_get_non_nested_register(unsigned int reg) { return 0; }
 #endif /* CONFIG_HYPERV */
 
+
+#ifdef CONFIG_HYPERV_VTL_MODE
+void __init hv_vtl_init_platform(void);
+#else
+static inline void __init hv_vtl_init_platform(void) {}
+#endif
 
 #include <asm-generic/mshyperv.h>
 

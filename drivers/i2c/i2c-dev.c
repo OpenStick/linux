@@ -535,6 +535,9 @@ static long compat_i2cdev_ioctl(struct file *file, unsigned int cmd, unsigned lo
 				   sizeof(rdwr_arg)))
 			return -EFAULT;
 
+		if (!rdwr_arg.msgs || rdwr_arg.nmsgs == 0)
+			return -EINVAL;
+
 		if (rdwr_arg.nmsgs > I2C_RDWR_IOCTL_MAX_MSGS)
 			return -EINVAL;
 
@@ -554,7 +557,7 @@ static long compat_i2cdev_ioctl(struct file *file, unsigned int cmd, unsigned lo
 				.addr = umsg.addr,
 				.flags = umsg.flags,
 				.len = umsg.len,
-				.buf = compat_ptr(umsg.buf)
+				.buf = (__force __u8 *)compat_ptr(umsg.buf),
 			};
 		}
 
@@ -643,19 +646,19 @@ static void i2cdev_dev_release(struct device *dev)
 	kfree(i2c_dev);
 }
 
-static int i2cdev_attach_adapter(struct device *dev, void *dummy)
+static int i2cdev_attach_adapter(struct device *dev)
 {
 	struct i2c_adapter *adap;
 	struct i2c_dev *i2c_dev;
 	int res;
 
 	if (dev->type != &i2c_adapter_type)
-		return 0;
+		return NOTIFY_DONE;
 	adap = to_i2c_adapter(dev);
 
 	i2c_dev = get_free_i2c_dev(adap);
 	if (IS_ERR(i2c_dev))
-		return PTR_ERR(i2c_dev);
+		return NOTIFY_DONE;
 
 	cdev_init(&i2c_dev->cdev, &i2cdev_fops);
 	i2c_dev->cdev.owner = THIS_MODULE;
@@ -665,35 +668,40 @@ static int i2cdev_attach_adapter(struct device *dev, void *dummy)
 	i2c_dev->dev.class = i2c_dev_class;
 	i2c_dev->dev.parent = &adap->dev;
 	i2c_dev->dev.release = i2cdev_dev_release;
-	dev_set_name(&i2c_dev->dev, "i2c-%d", adap->nr);
+
+	res = dev_set_name(&i2c_dev->dev, "i2c-%d", adap->nr);
+	if (res)
+		goto err_put_i2c_dev;
 
 	res = cdev_device_add(&i2c_dev->cdev, &i2c_dev->dev);
-	if (res) {
-		put_i2c_dev(i2c_dev, false);
-		return res;
-	}
+	if (res)
+		goto err_put_i2c_dev;
 
 	pr_debug("adapter [%s] registered as minor %d\n", adap->name, adap->nr);
-	return 0;
+	return NOTIFY_OK;
+
+err_put_i2c_dev:
+	put_i2c_dev(i2c_dev, false);
+	return NOTIFY_DONE;
 }
 
-static int i2cdev_detach_adapter(struct device *dev, void *dummy)
+static int i2cdev_detach_adapter(struct device *dev)
 {
 	struct i2c_adapter *adap;
 	struct i2c_dev *i2c_dev;
 
 	if (dev->type != &i2c_adapter_type)
-		return 0;
+		return NOTIFY_DONE;
 	adap = to_i2c_adapter(dev);
 
 	i2c_dev = i2c_dev_get_by_minor(adap->nr);
 	if (!i2c_dev) /* attach_adapter must have failed */
-		return 0;
+		return NOTIFY_DONE;
 
 	put_i2c_dev(i2c_dev, true);
 
 	pr_debug("adapter [%s] unregistered\n", adap->name);
-	return 0;
+	return NOTIFY_OK;
 }
 
 static int i2cdev_notifier_call(struct notifier_block *nb, unsigned long action,
@@ -703,12 +711,12 @@ static int i2cdev_notifier_call(struct notifier_block *nb, unsigned long action,
 
 	switch (action) {
 	case BUS_NOTIFY_ADD_DEVICE:
-		return i2cdev_attach_adapter(dev, NULL);
+		return i2cdev_attach_adapter(dev);
 	case BUS_NOTIFY_DEL_DEVICE:
-		return i2cdev_detach_adapter(dev, NULL);
+		return i2cdev_detach_adapter(dev);
 	}
 
-	return 0;
+	return NOTIFY_DONE;
 }
 
 static struct notifier_block i2cdev_notifier = {
@@ -716,6 +724,18 @@ static struct notifier_block i2cdev_notifier = {
 };
 
 /* ------------------------------------------------------------------------- */
+
+static int __init i2c_dev_attach_adapter(struct device *dev, void *dummy)
+{
+	i2cdev_attach_adapter(dev);
+	return 0;
+}
+
+static int __exit i2c_dev_detach_adapter(struct device *dev, void *dummy)
+{
+	i2cdev_detach_adapter(dev);
+	return 0;
+}
 
 /*
  * module load/unload record keeping
@@ -731,7 +751,7 @@ static int __init i2c_dev_init(void)
 	if (res)
 		goto out;
 
-	i2c_dev_class = class_create(THIS_MODULE, "i2c-dev");
+	i2c_dev_class = class_create("i2c-dev");
 	if (IS_ERR(i2c_dev_class)) {
 		res = PTR_ERR(i2c_dev_class);
 		goto out_unreg_chrdev;
@@ -744,7 +764,7 @@ static int __init i2c_dev_init(void)
 		goto out_unreg_class;
 
 	/* Bind to already existing adapters right away */
-	i2c_for_each_dev(NULL, i2cdev_attach_adapter);
+	i2c_for_each_dev(NULL, i2c_dev_attach_adapter);
 
 	return 0;
 
@@ -760,7 +780,7 @@ out:
 static void __exit i2c_dev_exit(void)
 {
 	bus_unregister_notifier(&i2c_bus_type, &i2cdev_notifier);
-	i2c_for_each_dev(NULL, i2cdev_detach_adapter);
+	i2c_for_each_dev(NULL, i2c_dev_detach_adapter);
 	class_destroy(i2c_dev_class);
 	unregister_chrdev_region(MKDEV(I2C_MAJOR, 0), I2C_MINORS);
 }

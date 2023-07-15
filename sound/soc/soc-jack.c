@@ -126,7 +126,7 @@ EXPORT_SYMBOL_GPL(snd_soc_jack_get_type);
 /**
  * snd_soc_jack_add_pins - Associate DAPM pins with an ASoC jack
  *
- * @jack:  ASoC jack
+ * @jack:  ASoC jack created with snd_soc_card_jack_new_pins()
  * @count: Number of pins
  * @pins:  Array of pins
  *
@@ -367,6 +367,7 @@ got_gpio:
 
 		ret = request_any_context_irq(gpiod_to_irq(gpios[i].desc),
 					      gpio_handler,
+					      IRQF_SHARED |
 					      IRQF_TRIGGER_RISING |
 					      IRQF_TRIGGER_FALLING,
 					      gpios[i].name,

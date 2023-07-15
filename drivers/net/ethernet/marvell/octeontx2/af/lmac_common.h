@@ -17,6 +17,8 @@
  * @resp:		command response
  * @link_info:		link related information
  * @mac_to_index_bmap:	Mac address to CGX table index mapping
+ * @rx_fc_pfvf_bmap:    Receive flow control enabled netdev mapping
+ * @tx_fc_pfvf_bmap:    Transmit flow control enabled netdev mapping
  * @event_cb:		callback for linkchange events
  * @event_cb_lock:	lock for serializing callback with unregister
  * @cgx:		parent cgx port
@@ -33,6 +35,8 @@ struct lmac {
 	u64 resp;
 	struct cgx_link_user_info link_info;
 	struct rsrc_bmap mac_to_index_bmap;
+	struct rsrc_bmap rx_fc_pfvf_bmap;
+	struct rsrc_bmap tx_fc_pfvf_bmap;
 	struct cgx_event_cb event_cb;
 	/* lock for serializing callback with unregister */
 	spinlock_t event_cb_lock;
@@ -71,11 +75,17 @@ struct mac_ops {
 	/* RPM & CGX differs in number of Receive/transmit stats */
 	u8			rx_stats_cnt;
 	u8			tx_stats_cnt;
+	/* Unlike CN10K which shares same CSR offset with CGX
+	 * CNF10KB has different csr offset
+	 */
+	u64			rxid_map_offset;
+	u8			dmac_filter_count;
 	/* Incase of RPM get number of lmacs from RPMX_CMR_RX_LMACS[LMAC_EXIST]
 	 * number of setbits in lmac_exist tells number of lmacs
 	 */
 	int			(*get_nr_lmacs)(void *cgx);
 	u8                      (*get_lmac_type)(void *cgx, int lmac_id);
+	u32                     (*lmac_fifo_len)(void *cgx, int lmac_id);
 	int                     (*mac_lmac_intl_lbk)(void *cgx, int lmac_id,
 						     bool enable);
 	/* Register Stats related functions */
@@ -102,6 +112,23 @@ struct mac_ops {
 	void			(*mac_pause_frm_config)(void  *cgxd,
 							int lmac_id,
 							bool enable);
+
+	/* Enable/Disable Inbound PTP */
+	void			(*mac_enadis_ptp_config)(void  *cgxd,
+							 int lmac_id,
+							 bool enable);
+
+	int			(*mac_rx_tx_enable)(void *cgxd, int lmac_id, bool enable);
+	int			(*mac_tx_enable)(void *cgxd, int lmac_id, bool enable);
+	int                     (*pfc_config)(void *cgxd, int lmac_id,
+					      u8 tx_pause, u8 rx_pause, u16 pfc_en);
+
+	int                     (*mac_get_pfc_frm_cfg)(void *cgxd, int lmac_id,
+						       u8 *tx_pause, u8 *rx_pause);
+
+	/* FEC stats */
+	int			(*get_fec_stats)(void *cgxd, int lmac_id,
+						 struct cgx_fec_stats_rsp *rsp);
 };
 
 struct cgx {
@@ -109,7 +136,10 @@ struct cgx {
 	struct pci_dev		*pdev;
 	u8			cgx_id;
 	u8			lmac_count;
-	struct lmac		*lmac_idmap[MAX_LMAC_PER_CGX];
+	/* number of LMACs per MAC could be 4 or 8 */
+	u8			max_lmac_per_mac;
+#define MAX_LMAC_COUNT		8
+	struct lmac             *lmac_idmap[MAX_LMAC_COUNT];
 	struct			work_struct cgx_cmd_work;
 	struct			workqueue_struct *cgx_cmd_workq;
 	struct list_head	cgx_list;
@@ -131,6 +161,6 @@ struct lmac *lmac_pdata(u8 lmac_id, struct cgx *cgx);
 int cgx_fwi_cmd_send(u64 req, u64 *resp, struct lmac *lmac);
 int cgx_fwi_cmd_generic(u64 req, u64 *resp, struct cgx *cgx, int lmac_id);
 bool is_lmac_valid(struct cgx *cgx, int lmac_id);
-struct mac_ops *rpm_get_mac_ops(void);
+struct mac_ops *rpm_get_mac_ops(struct cgx *cgx);
 
 #endif /* LMAC_COMMON_H */

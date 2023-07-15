@@ -55,12 +55,13 @@ enum tsx_ctrl_states {
 extern __ro_after_init enum tsx_ctrl_states tsx_ctrl_state;
 
 extern void __init tsx_init(void);
-extern void tsx_enable(void);
-extern void tsx_disable(void);
-extern void tsx_clear_cpuid(void);
+void tsx_ap_init(void);
 #else
 static inline void tsx_init(void) { }
+static inline void tsx_ap_init(void) { }
 #endif /* CONFIG_CPU_SUP_INTEL */
+
+extern void init_spectral_chicken(struct cpuinfo_x86 *c);
 
 extern void get_cpu_cap(struct cpuinfo_x86 *c);
 extern void get_cpu_address_sizes(struct cpuinfo_x86 *c);
@@ -75,12 +76,19 @@ extern int detect_extended_topology_early(struct cpuinfo_x86 *c);
 extern int detect_extended_topology(struct cpuinfo_x86 *c);
 extern int detect_ht_early(struct cpuinfo_x86 *c);
 extern void detect_ht(struct cpuinfo_x86 *c);
+extern void check_null_seg_clears_base(struct cpuinfo_x86 *c);
 
 unsigned int aperfmperf_get_khz(int cpu);
 
 extern void x86_spec_ctrl_setup_ap(void);
 extern void update_srbds_msr(void);
 
-extern u64 x86_read_arch_cap_msr(void);
+extern enum spectre_v2_mitigation spectre_v2_enabled;
 
+static inline bool spectre_v2_in_eibrs_mode(enum spectre_v2_mitigation mode)
+{
+	return mode == SPECTRE_V2_EIBRS ||
+	       mode == SPECTRE_V2_EIBRS_RETPOLINE ||
+	       mode == SPECTRE_V2_EIBRS_LFENCE;
+}
 #endif /* ARCH_X86_CPU_H */

@@ -43,6 +43,7 @@ struct gud_device {
 	struct drm_framebuffer *fb;
 	struct drm_rect damage;
 	bool prev_flush_failed;
+	void *shadow_buf;
 };
 
 static inline struct gud_device *to_gud_device(struct drm_device *drm)
@@ -80,10 +81,16 @@ static inline u8 gud_from_fourcc(u32 fourcc)
 	switch (fourcc) {
 	case GUD_DRM_FORMAT_R1:
 		return GUD_PIXEL_FORMAT_R1;
+	case DRM_FORMAT_R8:
+		return GUD_PIXEL_FORMAT_R8;
 	case GUD_DRM_FORMAT_XRGB1111:
 		return GUD_PIXEL_FORMAT_XRGB1111;
+	case DRM_FORMAT_RGB332:
+		return GUD_PIXEL_FORMAT_RGB332;
 	case DRM_FORMAT_RGB565:
 		return GUD_PIXEL_FORMAT_RGB565;
+	case DRM_FORMAT_RGB888:
+		return GUD_PIXEL_FORMAT_RGB888;
 	case DRM_FORMAT_XRGB8888:
 		return GUD_PIXEL_FORMAT_XRGB8888;
 	case DRM_FORMAT_ARGB8888:
@@ -98,10 +105,16 @@ static inline u32 gud_to_fourcc(u8 format)
 	switch (format) {
 	case GUD_PIXEL_FORMAT_R1:
 		return GUD_DRM_FORMAT_R1;
+	case GUD_PIXEL_FORMAT_R8:
+		return DRM_FORMAT_R8;
 	case GUD_PIXEL_FORMAT_XRGB1111:
 		return GUD_DRM_FORMAT_XRGB1111;
+	case GUD_PIXEL_FORMAT_RGB332:
+		return DRM_FORMAT_RGB332;
 	case GUD_PIXEL_FORMAT_RGB565:
 		return DRM_FORMAT_RGB565;
+	case GUD_PIXEL_FORMAT_RGB888:
+		return DRM_FORMAT_RGB888;
 	case GUD_PIXEL_FORMAT_XRGB8888:
 		return DRM_FORMAT_XRGB8888;
 	case GUD_PIXEL_FORMAT_ARGB8888:

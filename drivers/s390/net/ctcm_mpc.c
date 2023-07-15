@@ -481,7 +481,7 @@ void ctc_mpc_establish_connectivity(int port_num,
 				grp->estconnfunc = NULL;
 			}
 			fsm_deltimer(&grp->timer);
-				goto done;
+			goto done;
 		}
 		if ((wch->in_mpcgroup) &&
 				(fsm_getstate(wch->fsm) == CH_XID0_PENDING))
@@ -495,7 +495,7 @@ void ctc_mpc_establish_connectivity(int port_num,
 				grp->estconnfunc = NULL;
 			}
 			fsm_deltimer(&grp->timer);
-				goto done;
+			goto done;
 			}
 		break;
 	case MPCG_STATE_XID0IOWAIT:
@@ -625,8 +625,6 @@ static void mpc_rcvd_sweep_resp(struct mpcg_info *mpcginfo)
 		ch->th_seq_num = 0x00;
 		ctcm_clear_busy_do(dev);
 	}
-
-	kfree(mpcginfo);
 
 	return;
 
@@ -898,8 +896,9 @@ void mpc_group_ready(unsigned long adev)
 		grp->estconnfunc(grp->port_num, 0,
 				    grp->group_max_buflen);
 		grp->estconnfunc = NULL;
-	} else 	if (grp->allochanfunc)
+	} else if (grp->allochanfunc) {
 		grp->allochanfunc(grp->port_num, grp->group_max_buflen);
+	}
 
 	grp->send_qllc_disc = 1;
 	grp->changed_side = 0;
@@ -1016,7 +1015,7 @@ done:
 	CTCM_PR_DEBUG("exit %s: ch=0x%p id=%s\n", __func__, ch, ch->id);
 }
 
-/**
+/*
  * Unpack a just received skb and hand it over to
  * upper layers.
  * special MPC version of unpack_skb.
@@ -1111,7 +1110,7 @@ static void ctcmpc_unpack_skb(struct channel *ch, struct sk_buff *pskb)
 
 				priv->stats.rx_dropped++;
 				priv->stats.rx_length_errors++;
-					goto done;
+				goto done;
 			}
 			skb_reset_mac_header(pskb);
 			new_len = curr_pdu->pdu_offset;
@@ -1134,7 +1133,7 @@ static void ctcmpc_unpack_skb(struct channel *ch, struct sk_buff *pskb)
 						CTCM_FUNTAIL, dev->name);
 				priv->stats.rx_dropped++;
 				fsm_event(grp->fsm, MPCG_EVENT_INOP, dev);
-						goto done;
+				goto done;
 			}
 			skb_put_data(skb, pskb->data, new_len);
 
@@ -1192,10 +1191,10 @@ static void ctcmpc_unpack_skb(struct channel *ch, struct sk_buff *pskb)
 						CTCM_FUNTAIL, dev->name);
 			priv->stats.rx_dropped++;
 			/* mpcginfo only used for non-data transfers */
-			kfree(mpcginfo);
 			if (do_debug_data)
 				ctcmpc_dump_skb(pskb, -8);
 		}
+		kfree(mpcginfo);
 	}
 done:
 
@@ -1211,7 +1210,7 @@ done:
 			__func__, dev->name, ch, ch->id);
 }
 
-/**
+/*
  * tasklet helper for mpc's skb unpacking.
  *
  * ch		The channel to work on.
@@ -1320,7 +1319,7 @@ struct mpc_group *ctcmpc_init_mpc_group(struct ctcm_priv *priv)
  * CTCM_PROTO_MPC only
  */
 
-/**
+/*
  * NOP action for statemachines
  */
 static void mpc_action_nop(fsm_instance *fi, int event, void *arg)
@@ -1426,7 +1425,7 @@ static void mpc_action_go_inop(fsm_instance *fi, int event, void *arg)
 	}
 }
 
-/**
+/*
  * Handle mpc group  action timeout.
  * MPC Group Station FSM action
  * CTCM_PROTO_MPC only
@@ -1545,7 +1544,7 @@ static int mpc_validate_xid(struct mpcg_info *mpcginfo)
 		CTCM_DBF_TEXT_(MPC_ERROR, CTC_DBF_ERROR,
 			"%s(%s): xid = NULL",
 				CTCM_FUNTAIL, ch->id);
-			goto done;
+		goto done;
 	}
 
 	CTCM_D3_DUMP((char *)xid, XID2_LENGTH);
@@ -1558,7 +1557,7 @@ static int mpc_validate_xid(struct mpcg_info *mpcginfo)
 		CTCM_DBF_TEXT_(MPC_ERROR, CTC_DBF_ERROR,
 			"%s(%s): r/w channel pairing mismatch",
 				CTCM_FUNTAIL, ch->id);
-			goto done;
+		goto done;
 	}
 
 	if (xid->xid2_dlc_type == XID2_READ_SIDE) {
@@ -1977,7 +1976,6 @@ static void mpc_action_rcvd_xid0(fsm_instance *fsm, int event, void *arg)
 		}
 		break;
 	}
-	kfree(mpcginfo);
 
 	CTCM_PR_DEBUG("ctcmpc:%s() %s xid2:%i xid7:%i xidt_p2:%i \n",
 		__func__, ch->id, grp->outstanding_xid2,
@@ -2038,7 +2036,6 @@ static void mpc_action_rcvd_xid7(fsm_instance *fsm, int event, void *arg)
 		mpc_validate_xid(mpcginfo);
 		break;
 	}
-	kfree(mpcginfo);
 	return;
 }
 

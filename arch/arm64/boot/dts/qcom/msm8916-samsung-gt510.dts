@@ -9,13 +9,36 @@
 	compatible = "samsung,gt510", "qcom,msm8916";
 	chassis-type = "tablet";
 
+	clk_pwm: pwm {
+		compatible = "clk-pwm";
+		#pwm-cells = <2>;
+
+		clocks = <&gcc GCC_GP2_CLK>;
+
+		pinctrl-0 = <&motor_pwm_default>;
+		pinctrl-names = "default";
+	};
+
+	reg_motor_vdd: regulator-motor-vdd {
+		compatible = "regulator-fixed";
+		regulator-name = "motor_vdd";
+		regulator-min-microvolt = <3000000>;
+		regulator-max-microvolt = <3000000>;
+
+		gpio = <&msmgpio 76 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+
+		pinctrl-0 = <&motor_en_default>;
+		pinctrl-names = "default";
+	};
+
 	speaker_codec: audio-codec {
 		compatible = "maxim,max98357a";
 		sdmode-gpios = <&msmgpio 55 GPIO_ACTIVE_HIGH>;
 		#sound-dai-cells = <0>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&audio_sdmode_default>;
+		pinctrl-names = "default";
 	};
 
 	reg_lcd_vmipi: regulator-lcd-vmipi {
@@ -27,8 +50,8 @@
 		gpio = <&msmgpio 8 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&lcd_en_default>;
+		pinctrl-names = "default";
 	};
 
 	reg_vlcd_5p4v: regulator-vlcd-5p4v {
@@ -40,8 +63,8 @@
 		gpio = <&msmgpio 51 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&buckbooster_en_default>;
+		pinctrl-names = "default";
 	};
 
 	reg_tsp_1p8v: regulator-tsp-1p8v {
@@ -53,8 +76,8 @@
 		gpio = <&msmgpio 73 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&tsp_en_default>;
+		pinctrl-names = "default";
 	};
 
 	reg_tsp_3p3v: regulator-tsp-3p3v {
@@ -66,6 +89,15 @@
 		gpio = <&msmgpio 73 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 	};
+
+	vibrator {
+		compatible = "pwm-vibrator";
+
+		pwms = <&clk_pwm 0 100000>;
+		pwm-names = "enable";
+
+		vcc-supply = <&reg_motor_vdd>;
+	};
 };
 
 &blsp_i2c5 {
@@ -75,22 +107,24 @@
 		compatible = "atmel,maxtouch";
 		reg = <0x4a>;
 		interrupt-parent = <&msmgpio>;
-		interrupts = <13 IRQ_TYPE_EDGE_FALLING>;
+		interrupts = <13 IRQ_TYPE_LEVEL_LOW>;
 
 		vdd-supply = <&reg_tsp_1p8v>;
 		vdda-supply = <&reg_tsp_3p3v>;
 
 		reset-gpios = <&msmgpio 114 GPIO_ACTIVE_LOW>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&tsp_int_rst_default>;
+		pinctrl-names = "default";
+
+		linux,keycodes = <KEY_APPSELECT KEY_BACK>;
 	};
 };
 
 &dsi0 {
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&mdss_default>;
 	pinctrl-1 = <&mdss_sleep>;
+	pinctrl-names = "default", "sleep";
 
 	panel@0 {
 		compatible = "samsung,s6d7aa0-ltl101at01";
@@ -118,59 +152,63 @@
 };
 
 &msmgpio {
-	audio_sdmode_default: audio-sdmode-default {
+	audio_sdmode_default: audio-sdmode-default-state {
 		pins = "gpio55";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	buckbooster_en_default: buckbooster-en-default {
+	buckbooster_en_default: buckbooster-en-default-state {
 		pins = "gpio51";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	lcd_en_default: lcd-en-default {
+	motor_en_default: motor-en-default-state {
+		pins = "gpio76";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	motor_pwm_default: motor-pwm-default-state {
+		pins = "gpio50";
+		function = "gcc_gp2_clk_a";
+	};
+
+	lcd_en_default: lcd-en-default-state {
 		pins = "gpio8";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	mdss {
-		mdss_default: mdss-default {
-			pins = "gpio97";
-			function = "gpio";
-
-			drive-strength = <8>;
-			bias-disable;
-		};
-		mdss_sleep: mdss-sleep {
-			pins = "gpio97";
-			function = "gpio";
-
-			drive-strength = <2>;
-			bias-pull-down;
-		};
+	mdss_default: mdss-default-state {
+		pins = "gpio97";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
 	};
 
-	tsp_en_default: tsp-en-default {
+	mdss_sleep: mdss-sleep-state {
+		pins = "gpio97";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	tsp_en_default: tsp-en-default-state {
 		pins = "gpio73";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	tsp_int_rst_default: tsp-int-rst-default {
+	tsp_int_rst_default: tsp-int-rst-default-state {
 		pins = "gpio13", "gpio114";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};

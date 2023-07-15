@@ -133,10 +133,10 @@ static int q6mvm_probe(struct apr_device *adev)
 	return of_platform_populate(adev->dev.of_node, NULL, NULL, &adev->dev);
 }
 
-static int q6mvm_remove(struct apr_device *adev)
+static void q6mvm_remove(struct apr_device *adev)
 {
 	of_platform_depopulate(&adev->dev);
-	return q6voice_common_remove(adev);
+	q6voice_common_remove(adev);
 }
 
 static const struct of_device_id q6mvm_device_id[]  = {

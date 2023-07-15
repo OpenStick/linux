@@ -4,7 +4,7 @@
  *
  * Implementation of FSF commands.
  *
- * Copyright IBM Corp. 2002, 2020
+ * Copyright IBM Corp. 2002, 2023
  */
 
 #define KMSG_COMPONENT "zfcp"
@@ -884,7 +884,7 @@ static int zfcp_fsf_req_send(struct zfcp_fsf_req *req)
 	const bool is_srb = zfcp_fsf_req_is_status_read_buffer(req);
 	struct zfcp_adapter *adapter = req->adapter;
 	struct zfcp_qdio *qdio = adapter->qdio;
-	int req_id = req->req_id;
+	u64 req_id = req->req_id;
 
 	zfcp_reqlist_add(adapter->req_list, req);
 
@@ -892,8 +892,11 @@ static int zfcp_fsf_req_send(struct zfcp_fsf_req *req)
 	req->issued = get_tod_clock();
 	if (zfcp_qdio_send(qdio, &req->qdio_req)) {
 		del_timer_sync(&req->timer);
+
 		/* lookup request again, list might have changed */
-		zfcp_reqlist_find_rm(adapter->req_list, req_id);
+		if (zfcp_reqlist_find_rm(adapter->req_list, req_id) == NULL)
+			zfcp_dbf_hba_fsf_reqid("fsrsrmf", 1, adapter, req_id);
+
 		zfcp_erp_adapter_reopen(adapter, 0, "fsrs__1");
 		return -EIO;
 	}
@@ -1042,7 +1045,7 @@ struct zfcp_fsf_req *zfcp_fsf_abort_fcp_cmnd(struct scsi_cmnd *scmnd)
 	struct scsi_device *sdev = scmnd->device;
 	struct zfcp_scsi_dev *zfcp_sdev = sdev_to_zfcp(sdev);
 	struct zfcp_qdio *qdio = zfcp_sdev->port->adapter->qdio;
-	unsigned long old_req_id = (unsigned long) scmnd->host_scribble;
+	u64 old_req_id = (u64) scmnd->host_scribble;
 
 	spin_lock_irq(&qdio->req_q_lock);
 	if (zfcp_qdio_sbal_get(qdio))
@@ -1065,7 +1068,7 @@ struct zfcp_fsf_req *zfcp_fsf_abort_fcp_cmnd(struct scsi_cmnd *scmnd)
 	req->handler = zfcp_fsf_abort_fcp_command_handler;
 	req->qtcb->header.lun_handle = zfcp_sdev->lun_handle;
 	req->qtcb->header.port_handle = zfcp_sdev->port->handle;
-	req->qtcb->bottom.support.req_handle = (u64) old_req_id;
+	req->qtcb->bottom.support.req_handle = old_req_id;
 
 	zfcp_fsf_start_timer(req, ZFCP_FSF_SCSI_ER_TIMEOUT);
 	if (!zfcp_fsf_req_send(req)) {
@@ -1907,7 +1910,7 @@ static void zfcp_fsf_open_wka_port_handler(struct zfcp_fsf_req *req)
 		wka_port->status = ZFCP_FC_WKA_PORT_ONLINE;
 	}
 out:
-	wake_up(&wka_port->completion_wq);
+	wake_up(&wka_port->opened);
 }
 
 /**
@@ -1919,7 +1922,7 @@ int zfcp_fsf_open_wka_port(struct zfcp_fc_wka_port *wka_port)
 {
 	struct zfcp_qdio *qdio = wka_port->adapter->qdio;
 	struct zfcp_fsf_req *req;
-	unsigned long req_id = 0;
+	u64 req_id = 0;
 	int retval = -EIO;
 
 	spin_lock_irq(&qdio->req_q_lock);
@@ -1966,7 +1969,7 @@ static void zfcp_fsf_close_wka_port_handler(struct zfcp_fsf_req *req)
 	}
 
 	wka_port->status = ZFCP_FC_WKA_PORT_OFFLINE;
-	wake_up(&wka_port->completion_wq);
+	wake_up(&wka_port->closed);
 }
 
 /**
@@ -1978,7 +1981,7 @@ int zfcp_fsf_close_wka_port(struct zfcp_fc_wka_port *wka_port)
 {
 	struct zfcp_qdio *qdio = wka_port->adapter->qdio;
 	struct zfcp_fsf_req *req;
-	unsigned long req_id = 0;
+	u64 req_id = 0;
 	int retval = -EIO;
 
 	spin_lock_irq(&qdio->req_q_lock);
@@ -2501,7 +2504,7 @@ skip_fsfstatus:
 	zfcp_dbf_scsi_result(scpnt, req);
 
 	scpnt->host_scribble = NULL;
-	(scpnt->scsi_done) (scpnt);
+	scsi_done(scpnt);
 	/*
 	 * We must hold this lock until scsi_done has been called.
 	 * Otherwise we may call scsi_done after abort regarding this
@@ -2587,6 +2590,7 @@ int zfcp_fsf_fcp_cmnd(struct scsi_cmnd *scsi_cmnd)
 		goto out;
 	}
 
+	BUILD_BUG_ON(sizeof(scsi_cmnd->host_scribble) < sizeof(req->req_id));
 	scsi_cmnd->host_scribble = (unsigned char *) req->req_id;
 
 	io = &req->qtcb->bottom.io;
@@ -2732,7 +2736,7 @@ void zfcp_fsf_reqid_check(struct zfcp_qdio *qdio, int sbal_idx)
 	struct qdio_buffer *sbal = qdio->res_q[sbal_idx];
 	struct qdio_buffer_element *sbale;
 	struct zfcp_fsf_req *fsf_req;
-	unsigned long req_id;
+	u64 req_id;
 	int idx;
 
 	for (idx = 0; idx < QDIO_MAX_ELEMENTS_PER_BUFFER; idx++) {
@@ -2747,7 +2751,7 @@ void zfcp_fsf_reqid_check(struct zfcp_qdio *qdio, int sbal_idx)
 			 * corruption and must stop the machine immediately.
 			 */
 			zfcp_qdio_siosl(adapter);
-			panic("error: unknown req_id (%lx) on adapter %s.\n",
+			panic("error: unknown req_id (%llx) on adapter %s.\n",
 			      req_id, dev_name(&adapter->ccw_device->dev));
 		}
 

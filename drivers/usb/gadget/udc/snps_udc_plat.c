@@ -158,7 +158,7 @@ static int udc_plat_probe(struct platform_device *pdev)
 	}
 
 	/* Register for extcon if supported */
-	if (of_get_property(dev->of_node, "extcon", NULL)) {
+	if (of_property_present(dev->of_node, "extcon")) {
 		udc->edev = extcon_get_edev_by_phandle(dev, 0);
 		if (IS_ERR(udc->edev)) {
 			if (PTR_ERR(udc->edev) == -EPROBE_DEFER)
@@ -242,11 +242,6 @@ static int udc_plat_remove(struct platform_device *pdev)
 	udc_remove(dev);
 
 	platform_set_drvdata(pdev, NULL);
-
-	if (dev->drd_wq) {
-		flush_workqueue(dev->drd_wq);
-		destroy_workqueue(dev->drd_wq);
-	}
 
 	phy_power_off(dev->udc_phy);
 	phy_exit(dev->udc_phy);

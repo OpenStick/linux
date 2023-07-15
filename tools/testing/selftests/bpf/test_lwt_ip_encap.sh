@@ -38,6 +38,7 @@
 #       ping: SRC->[encap at veth2:ingress]->GRE:decap->DST
 #       ping replies go DST->SRC directly
 
+BPF_FILE="test_lwt_ip_encap.bpf.o"
 if [[ $EUID -ne 0 ]]; then
 	echo "This script must be run as root"
 	echo "FAIL"
@@ -119,6 +120,14 @@ setup()
 	ip netns exec ${NS1} sysctl -wq net.ipv4.conf.default.rp_filter=0
 	ip netns exec ${NS2} sysctl -wq net.ipv4.conf.default.rp_filter=0
 	ip netns exec ${NS3} sysctl -wq net.ipv4.conf.default.rp_filter=0
+
+	# disable IPv6 DAD because it sometimes takes too long and fails tests
+	ip netns exec ${NS1} sysctl -wq net.ipv6.conf.all.accept_dad=0
+	ip netns exec ${NS2} sysctl -wq net.ipv6.conf.all.accept_dad=0
+	ip netns exec ${NS3} sysctl -wq net.ipv6.conf.all.accept_dad=0
+	ip netns exec ${NS1} sysctl -wq net.ipv6.conf.default.accept_dad=0
+	ip netns exec ${NS2} sysctl -wq net.ipv6.conf.default.accept_dad=0
+	ip netns exec ${NS3} sysctl -wq net.ipv6.conf.default.accept_dad=0
 
 	ip link add veth1 type veth peer name veth2
 	ip link add veth3 type veth peer name veth4
@@ -289,7 +298,7 @@ test_ping()
 		ip netns exec ${NS1} ping  -c 1 -W 1 -I veth1 ${IPv4_DST} 2>&1 > /dev/null
 		RET=$?
 	elif [ "${PROTO}" == "IPv6" ] ; then
-		ip netns exec ${NS1} ping6 -c 1 -W 6 -I veth1 ${IPv6_DST} 2>&1 > /dev/null
+		ip netns exec ${NS1} ping6 -c 1 -W 1 -I veth1 ${IPv6_DST} 2>&1 > /dev/null
 		RET=$?
 	else
 		echo "    test_ping: unknown PROTO: ${PROTO}"
@@ -365,14 +374,14 @@ test_egress()
 	# install replacement routes (LWT/eBPF), pings succeed
 	if [ "${ENCAP}" == "IPv4" ] ; then
 		ip -netns ${NS1} route add ${IPv4_DST} encap bpf xmit obj \
-			test_lwt_ip_encap.o sec encap_gre dev veth1 ${VRF}
+			${BPF_FILE} sec encap_gre dev veth1 ${VRF}
 		ip -netns ${NS1} -6 route add ${IPv6_DST} encap bpf xmit obj \
-			test_lwt_ip_encap.o sec encap_gre dev veth1 ${VRF}
+			${BPF_FILE} sec encap_gre dev veth1 ${VRF}
 	elif [ "${ENCAP}" == "IPv6" ] ; then
 		ip -netns ${NS1} route add ${IPv4_DST} encap bpf xmit obj \
-			test_lwt_ip_encap.o sec encap_gre6 dev veth1 ${VRF}
+			${BPF_FILE} sec encap_gre6 dev veth1 ${VRF}
 		ip -netns ${NS1} -6 route add ${IPv6_DST} encap bpf xmit obj \
-			test_lwt_ip_encap.o sec encap_gre6 dev veth1 ${VRF}
+			${BPF_FILE} sec encap_gre6 dev veth1 ${VRF}
 	else
 		echo "    unknown encap ${ENCAP}"
 		TEST_STATUS=1
@@ -423,14 +432,14 @@ test_ingress()
 	# install replacement routes (LWT/eBPF), pings succeed
 	if [ "${ENCAP}" == "IPv4" ] ; then
 		ip -netns ${NS2} route add ${IPv4_DST} encap bpf in obj \
-			test_lwt_ip_encap.o sec encap_gre dev veth2 ${VRF}
+			${BPF_FILE} sec encap_gre dev veth2 ${VRF}
 		ip -netns ${NS2} -6 route add ${IPv6_DST} encap bpf in obj \
-			test_lwt_ip_encap.o sec encap_gre dev veth2 ${VRF}
+			${BPF_FILE} sec encap_gre dev veth2 ${VRF}
 	elif [ "${ENCAP}" == "IPv6" ] ; then
 		ip -netns ${NS2} route add ${IPv4_DST} encap bpf in obj \
-			test_lwt_ip_encap.o sec encap_gre6 dev veth2 ${VRF}
+			${BPF_FILE} sec encap_gre6 dev veth2 ${VRF}
 		ip -netns ${NS2} -6 route add ${IPv6_DST} encap bpf in obj \
-			test_lwt_ip_encap.o sec encap_gre6 dev veth2 ${VRF}
+			${BPF_FILE} sec encap_gre6 dev veth2 ${VRF}
 	else
 		echo "FAIL: unknown encap ${ENCAP}"
 		TEST_STATUS=1

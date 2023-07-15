@@ -37,23 +37,30 @@ static void mca_v3_0_mp0_query_ras_error_count(struct amdgpu_device *adev,
 				         ras_error_status);
 }
 
-static int mca_v3_0_mp0_ras_late_init(struct amdgpu_device *adev)
+static int mca_v3_0_ras_block_match(struct amdgpu_ras_block_object *block_obj,
+				enum amdgpu_ras_block block, uint32_t sub_block_index)
 {
-	return amdgpu_mca_ras_late_init(adev, &adev->mca.mp0);
+	if (!block_obj)
+		return -EINVAL;
+
+	if ((block_obj->ras_comm.block == block) &&
+		(block_obj->ras_comm.sub_block_index == sub_block_index)) {
+		return 0;
+	}
+
+	return -EINVAL;
 }
 
-static void mca_v3_0_mp0_ras_fini(struct amdgpu_device *adev)
-{
-	amdgpu_mca_ras_fini(adev, &adev->mca.mp0);
-}
-
-const struct amdgpu_mca_ras_funcs mca_v3_0_mp0_ras_funcs = {
-	.ras_late_init = mca_v3_0_mp0_ras_late_init,
-	.ras_fini = mca_v3_0_mp0_ras_fini,
+static const struct amdgpu_ras_block_hw_ops mca_v3_0_mp0_hw_ops = {
 	.query_ras_error_count = mca_v3_0_mp0_query_ras_error_count,
 	.query_ras_error_address = NULL,
-	.ras_block = AMDGPU_RAS_BLOCK__MP0,
-	.sysfs_name = "mp0_err_count",
+};
+
+struct amdgpu_mca_ras_block mca_v3_0_mp0_ras = {
+	.ras_block = {
+		.hw_ops = &mca_v3_0_mp0_hw_ops,
+		.ras_block_match = mca_v3_0_ras_block_match,
+	},
 };
 
 static void mca_v3_0_mp1_query_ras_error_count(struct amdgpu_device *adev,
@@ -64,23 +71,16 @@ static void mca_v3_0_mp1_query_ras_error_count(struct amdgpu_device *adev,
 				         ras_error_status);
 }
 
-static int mca_v3_0_mp1_ras_late_init(struct amdgpu_device *adev)
-{
-	return amdgpu_mca_ras_late_init(adev, &adev->mca.mp1);
-}
-
-static void mca_v3_0_mp1_ras_fini(struct amdgpu_device *adev)
-{
-	amdgpu_mca_ras_fini(adev, &adev->mca.mp1);
-}
-
-const struct amdgpu_mca_ras_funcs mca_v3_0_mp1_ras_funcs = {
-	.ras_late_init = mca_v3_0_mp1_ras_late_init,
-	.ras_fini = mca_v3_0_mp1_ras_fini,
+static const struct amdgpu_ras_block_hw_ops mca_v3_0_mp1_hw_ops = {
 	.query_ras_error_count = mca_v3_0_mp1_query_ras_error_count,
 	.query_ras_error_address = NULL,
-	.ras_block = AMDGPU_RAS_BLOCK__MP1,
-	.sysfs_name = "mp1_err_count",
+};
+
+struct amdgpu_mca_ras_block mca_v3_0_mp1_ras = {
+	.ras_block = {
+		.hw_ops = &mca_v3_0_mp1_hw_ops,
+		.ras_block_match = mca_v3_0_ras_block_match,
+	},
 };
 
 static void mca_v3_0_mpio_query_ras_error_count(struct amdgpu_device *adev,
@@ -91,35 +91,14 @@ static void mca_v3_0_mpio_query_ras_error_count(struct amdgpu_device *adev,
 				         ras_error_status);
 }
 
-static int mca_v3_0_mpio_ras_late_init(struct amdgpu_device *adev)
-{
-	return amdgpu_mca_ras_late_init(adev, &adev->mca.mpio);
-}
-
-static void mca_v3_0_mpio_ras_fini(struct amdgpu_device *adev)
-{
-	amdgpu_mca_ras_fini(adev, &adev->mca.mpio);
-}
-
-const struct amdgpu_mca_ras_funcs mca_v3_0_mpio_ras_funcs = {
-	.ras_late_init = mca_v3_0_mpio_ras_late_init,
-	.ras_fini = mca_v3_0_mpio_ras_fini,
+static const struct amdgpu_ras_block_hw_ops mca_v3_0_mpio_hw_ops = {
 	.query_ras_error_count = mca_v3_0_mpio_query_ras_error_count,
 	.query_ras_error_address = NULL,
-	.ras_block = AMDGPU_RAS_BLOCK__MPIO,
-	.sysfs_name = "mpio_err_count",
 };
 
-
-static void mca_v3_0_init(struct amdgpu_device *adev)
-{
-	struct amdgpu_mca *mca = &adev->mca;
-
-	mca->mp0.ras_funcs = &mca_v3_0_mp0_ras_funcs;
-	mca->mp1.ras_funcs = &mca_v3_0_mp1_ras_funcs;
-	mca->mpio.ras_funcs = &mca_v3_0_mpio_ras_funcs;
-}
-
-const struct amdgpu_mca_funcs mca_v3_0_funcs = {
-	.init = mca_v3_0_init,
+struct amdgpu_mca_ras_block mca_v3_0_mpio_ras = {
+	.ras_block = {
+		.hw_ops = &mca_v3_0_mpio_hw_ops,
+		.ras_block_match = mca_v3_0_ras_block_match,
+	},
 };

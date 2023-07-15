@@ -37,7 +37,7 @@ struct ttm_pool;
 struct ttm_operation_ctx;
 
 /**
- * ttm_pool_type - Pool for a certain memory type
+ * struct ttm_pool_type - Pool for a certain memory type
  *
  * @pool: the pool we belong to, might be NULL for the global ones
  * @order: the allocation order our pages have
@@ -58,8 +58,9 @@ struct ttm_pool_type {
 };
 
 /**
- * ttm_pool - Pool for all caching and orders
+ * struct ttm_pool - Pool for all caching and orders
  *
+ * @dev: the device we allocate pages for
  * @use_dma_alloc: if coherent DMA allocations should be used
  * @use_dma32: if GFP_DMA32 should be used
  * @caching: pools for each caching/order
@@ -71,7 +72,7 @@ struct ttm_pool {
 	bool use_dma32;
 
 	struct {
-		struct ttm_pool_type orders[MAX_ORDER];
+		struct ttm_pool_type orders[MAX_ORDER + 1];
 	} caching[TTM_NUM_CACHING_TYPES];
 };
 

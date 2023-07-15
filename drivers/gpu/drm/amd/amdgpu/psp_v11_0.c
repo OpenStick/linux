@@ -53,11 +53,13 @@ MODULE_FIRMWARE("amdgpu/navi14_ta.bin");
 MODULE_FIRMWARE("amdgpu/navi12_sos.bin");
 MODULE_FIRMWARE("amdgpu/navi12_asd.bin");
 MODULE_FIRMWARE("amdgpu/navi12_ta.bin");
+MODULE_FIRMWARE("amdgpu/navi12_cap.bin");
 MODULE_FIRMWARE("amdgpu/arcturus_sos.bin");
 MODULE_FIRMWARE("amdgpu/arcturus_asd.bin");
 MODULE_FIRMWARE("amdgpu/arcturus_ta.bin");
 MODULE_FIRMWARE("amdgpu/sienna_cichlid_sos.bin");
 MODULE_FIRMWARE("amdgpu/sienna_cichlid_ta.bin");
+MODULE_FIRMWARE("amdgpu/sienna_cichlid_cap.bin");
 MODULE_FIRMWARE("amdgpu/navy_flounder_sos.bin");
 MODULE_FIRMWARE("amdgpu/navy_flounder_ta.bin");
 MODULE_FIRMWARE("amdgpu/vangogh_asd.bin");
@@ -86,154 +88,56 @@ MODULE_FIRMWARE("amdgpu/beige_goby_ta.bin");
 static int psp_v11_0_init_microcode(struct psp_context *psp)
 {
 	struct amdgpu_device *adev = psp->adev;
-	const char *chip_name;
-	char fw_name[PSP_FW_NAME_LEN];
+	char ucode_prefix[30];
 	int err = 0;
-	const struct ta_firmware_header_v1_0 *ta_hdr;
 
 	DRM_DEBUG("\n");
 
-	switch (adev->asic_type) {
-	case CHIP_VEGA20:
-		chip_name = "vega20";
+	amdgpu_ucode_ip_version_decode(adev, MP0_HWIP, ucode_prefix, sizeof(ucode_prefix));
+
+	switch (adev->ip_versions[MP0_HWIP][0]) {
+	case IP_VERSION(11, 0, 2):
+	case IP_VERSION(11, 0, 4):
+		err = psp_init_sos_microcode(psp, ucode_prefix);
+		if (err)
+			return err;
+		err = psp_init_asd_microcode(psp, ucode_prefix);
+		if (err)
+			return err;
+		err = psp_init_ta_microcode(psp, ucode_prefix);
+		adev->psp.securedisplay_context.context.bin_desc.size_bytes = 0;
 		break;
-	case CHIP_NAVI10:
-		chip_name = "navi10";
+	case IP_VERSION(11, 0, 0):
+	case IP_VERSION(11, 0, 5):
+	case IP_VERSION(11, 0, 9):
+		err = psp_init_sos_microcode(psp, ucode_prefix);
+		if (err)
+			return err;
+		err = psp_init_asd_microcode(psp, ucode_prefix);
+		if (err)
+			return err;
+		err = psp_init_ta_microcode(psp, ucode_prefix);
+		adev->psp.securedisplay_context.context.bin_desc.size_bytes = 0;
 		break;
-	case CHIP_NAVI14:
-		chip_name = "navi14";
+	case IP_VERSION(11, 0, 7):
+	case IP_VERSION(11, 0, 11):
+	case IP_VERSION(11, 0, 12):
+	case IP_VERSION(11, 0, 13):
+		err = psp_init_sos_microcode(psp, ucode_prefix);
+		if (err)
+			return err;
+		err = psp_init_ta_microcode(psp, ucode_prefix);
 		break;
-	case CHIP_NAVI12:
-		chip_name = "navi12";
-		break;
-	case CHIP_ARCTURUS:
-		chip_name = "arcturus";
-		break;
-	case CHIP_SIENNA_CICHLID:
-		chip_name = "sienna_cichlid";
-		break;
-	case CHIP_NAVY_FLOUNDER:
-		chip_name = "navy_flounder";
-		break;
-	case CHIP_VANGOGH:
-		chip_name = "vangogh";
-		break;
-	case CHIP_DIMGREY_CAVEFISH:
-		chip_name = "dimgrey_cavefish";
-		break;
-	case CHIP_BEIGE_GOBY:
-		chip_name = "beige_goby";
+	case IP_VERSION(11, 5, 0):
+		err = psp_init_asd_microcode(psp, ucode_prefix);
+		if (err)
+			return err;
+		err = psp_init_toc_microcode(psp, ucode_prefix);
 		break;
 	default:
 		BUG();
 	}
 
-
-	switch (adev->asic_type) {
-	case CHIP_VEGA20:
-	case CHIP_ARCTURUS:
-		err = psp_init_sos_microcode(psp, chip_name);
-		if (err)
-			return err;
-		err = psp_init_asd_microcode(psp, chip_name);
-		if (err)
-			return err;
-		snprintf(fw_name, sizeof(fw_name), "amdgpu/%s_ta.bin", chip_name);
-		err = request_firmware(&adev->psp.ta_fw, fw_name, adev->dev);
-		if (err) {
-			release_firmware(adev->psp.ta_fw);
-			adev->psp.ta_fw = NULL;
-			dev_info(adev->dev,
-				 "psp v11.0: Failed to load firmware \"%s\"\n", fw_name);
-		} else {
-			err = amdgpu_ucode_validate(adev->psp.ta_fw);
-			if (err)
-				goto out2;
-
-			ta_hdr = (const struct ta_firmware_header_v1_0 *)adev->psp.ta_fw->data;
-			adev->psp.xgmi.feature_version = le32_to_cpu(ta_hdr->xgmi.fw_version);
-			adev->psp.xgmi.size_bytes = le32_to_cpu(ta_hdr->xgmi.size_bytes);
-			adev->psp.xgmi.start_addr = (uint8_t *)ta_hdr +
-				le32_to_cpu(ta_hdr->header.ucode_array_offset_bytes);
-			adev->psp.ta_fw_version = le32_to_cpu(ta_hdr->header.ucode_version);
-			adev->psp.ras.feature_version = le32_to_cpu(ta_hdr->ras.fw_version);
-			adev->psp.ras.size_bytes = le32_to_cpu(ta_hdr->ras.size_bytes);
-			adev->psp.ras.start_addr = (uint8_t *)adev->psp.xgmi.start_addr +
-				le32_to_cpu(ta_hdr->ras.offset_bytes);
-		}
-		break;
-	case CHIP_NAVI10:
-	case CHIP_NAVI14:
-	case CHIP_NAVI12:
-		err = psp_init_sos_microcode(psp, chip_name);
-		if (err)
-			return err;
-		err = psp_init_asd_microcode(psp, chip_name);
-		if (err)
-			return err;
-		if (amdgpu_sriov_vf(adev))
-			break;
-		snprintf(fw_name, sizeof(fw_name), "amdgpu/%s_ta.bin", chip_name);
-		err = request_firmware(&adev->psp.ta_fw, fw_name, adev->dev);
-		if (err) {
-			release_firmware(adev->psp.ta_fw);
-			adev->psp.ta_fw = NULL;
-			dev_info(adev->dev,
-				 "psp v11.0: Failed to load firmware \"%s\"\n", fw_name);
-		} else {
-			err = amdgpu_ucode_validate(adev->psp.ta_fw);
-			if (err)
-				goto out2;
-
-			ta_hdr = (const struct ta_firmware_header_v1_0 *)adev->psp.ta_fw->data;
-			adev->psp.hdcp.feature_version = le32_to_cpu(ta_hdr->hdcp.fw_version);
-			adev->psp.hdcp.size_bytes = le32_to_cpu(ta_hdr->hdcp.size_bytes);
-			adev->psp.hdcp.start_addr = (uint8_t *)ta_hdr +
-				le32_to_cpu(ta_hdr->header.ucode_array_offset_bytes);
-
-			adev->psp.ta_fw_version = le32_to_cpu(ta_hdr->header.ucode_version);
-
-			adev->psp.dtm.feature_version = le32_to_cpu(ta_hdr->dtm.fw_version);
-			adev->psp.dtm.size_bytes = le32_to_cpu(ta_hdr->dtm.size_bytes);
-			adev->psp.dtm.start_addr = (uint8_t *)adev->psp.hdcp.start_addr +
-				le32_to_cpu(ta_hdr->dtm.offset_bytes);
-		}
-		break;
-	case CHIP_SIENNA_CICHLID:
-	case CHIP_NAVY_FLOUNDER:
-	case CHIP_DIMGREY_CAVEFISH:
-		err = psp_init_sos_microcode(psp, chip_name);
-		if (err)
-			return err;
-		err = psp_init_ta_microcode(psp, chip_name);
-		if (err)
-			return err;
-		break;
-	case CHIP_BEIGE_GOBY:
-		err = psp_init_sos_microcode(psp, chip_name);
-		if (err)
-			return err;
-		err = psp_init_ta_microcode(psp, chip_name);
-		if (err)
-			return err;
-		break;
-	case CHIP_VANGOGH:
-		err = psp_init_asd_microcode(psp, chip_name);
-		if (err)
-			return err;
-		err = psp_init_toc_microcode(psp, chip_name);
-		if (err)
-			return err;
-		break;
-	default:
-		BUG();
-	}
-
-	return 0;
-
-out2:
-	release_firmware(adev->psp.ta_fw);
-	adev->psp.ta_fw = NULL;
 	return err;
 }
 
@@ -270,69 +174,9 @@ static bool psp_v11_0_is_sos_alive(struct psp_context *psp)
 	return sol_reg != 0x0;
 }
 
-static int psp_v11_0_bootloader_load_kdb(struct psp_context *psp)
-{
-	int ret;
-	uint32_t psp_gfxdrv_command_reg = 0;
-	struct amdgpu_device *adev = psp->adev;
-
-	/* Check tOS sign of life register to confirm sys driver and sOS
-	 * are already been loaded.
-	 */
-	if (psp_v11_0_is_sos_alive(psp))
-		return 0;
-
-	ret = psp_v11_0_wait_for_bootloader(psp);
-	if (ret)
-		return ret;
-
-	/* Copy PSP KDB binary to memory */
-	psp_copy_fw(psp, psp->kdb.start_addr, psp->kdb.size_bytes);
-
-	/* Provide the PSP KDB to bootloader */
-	WREG32_SOC15(MP0, 0, mmMP0_SMN_C2PMSG_36,
-	       (uint32_t)(psp->fw_pri_mc_addr >> 20));
-	psp_gfxdrv_command_reg = PSP_BL__LOAD_KEY_DATABASE;
-	WREG32_SOC15(MP0, 0, mmMP0_SMN_C2PMSG_35,
-	       psp_gfxdrv_command_reg);
-
-	ret = psp_v11_0_wait_for_bootloader(psp);
-
-	return ret;
-}
-
-static int psp_v11_0_bootloader_load_spl(struct psp_context *psp)
-{
-	int ret;
-	uint32_t psp_gfxdrv_command_reg = 0;
-	struct amdgpu_device *adev = psp->adev;
-
-	/* Check tOS sign of life register to confirm sys driver and sOS
-	 * are already been loaded.
-	 */
-	if (psp_v11_0_is_sos_alive(psp))
-		return 0;
-
-	ret = psp_v11_0_wait_for_bootloader(psp);
-	if (ret)
-		return ret;
-
-	/* Copy PSP SPL binary to memory */
-	psp_copy_fw(psp, psp->spl.start_addr, psp->spl.size_bytes);
-
-	/* Provide the PSP SPL to bootloader */
-	WREG32_SOC15(MP0, 0, mmMP0_SMN_C2PMSG_36,
-	       (uint32_t)(psp->fw_pri_mc_addr >> 20));
-	psp_gfxdrv_command_reg = PSP_BL__LOAD_TOS_SPL_TABLE;
-	WREG32_SOC15(MP0, 0, mmMP0_SMN_C2PMSG_35,
-	       psp_gfxdrv_command_reg);
-
-	ret = psp_v11_0_wait_for_bootloader(psp);
-
-	return ret;
-}
-
-static int psp_v11_0_bootloader_load_sysdrv(struct psp_context *psp)
+static int psp_v11_0_bootloader_load_component(struct psp_context  	*psp,
+					       struct psp_bin_desc 	*bin_desc,
+					       enum psp_bootloader_cmd  bl_cmd)
 {
 	int ret;
 	uint32_t psp_gfxdrv_command_reg = 0;
@@ -349,21 +193,33 @@ static int psp_v11_0_bootloader_load_sysdrv(struct psp_context *psp)
 		return ret;
 
 	/* Copy PSP System Driver binary to memory */
-	psp_copy_fw(psp, psp->sys.start_addr, psp->sys.size_bytes);
+	psp_copy_fw(psp, bin_desc->start_addr, bin_desc->size_bytes);
 
 	/* Provide the sys driver to bootloader */
 	WREG32_SOC15(MP0, 0, mmMP0_SMN_C2PMSG_36,
 	       (uint32_t)(psp->fw_pri_mc_addr >> 20));
-	psp_gfxdrv_command_reg = PSP_BL__LOAD_SYSDRV;
+	psp_gfxdrv_command_reg = bl_cmd;
 	WREG32_SOC15(MP0, 0, mmMP0_SMN_C2PMSG_35,
 	       psp_gfxdrv_command_reg);
-
-	/* there might be handshake issue with hardware which needs delay */
-	mdelay(20);
 
 	ret = psp_v11_0_wait_for_bootloader(psp);
 
 	return ret;
+}
+
+static int psp_v11_0_bootloader_load_kdb(struct psp_context *psp)
+{
+	return psp_v11_0_bootloader_load_component(psp, &psp->kdb, PSP_BL__LOAD_KEY_DATABASE);
+}
+
+static int psp_v11_0_bootloader_load_spl(struct psp_context *psp)
+{
+	return psp_v11_0_bootloader_load_component(psp, &psp->spl, PSP_BL__LOAD_TOS_SPL_TABLE);
+}
+
+static int psp_v11_0_bootloader_load_sysdrv(struct psp_context *psp)
+{
+	return psp_v11_0_bootloader_load_component(psp, &psp->sys, PSP_BL__LOAD_SYSDRV);
 }
 
 static int psp_v11_0_bootloader_load_sos(struct psp_context *psp)
@@ -399,32 +255,6 @@ static int psp_v11_0_bootloader_load_sos(struct psp_context *psp)
 			   0, true);
 
 	return ret;
-}
-
-static int psp_v11_0_ring_init(struct psp_context *psp,
-			      enum psp_ring_type ring_type)
-{
-	int ret = 0;
-	struct psp_ring *ring;
-	struct amdgpu_device *adev = psp->adev;
-
-	ring = &psp->km_ring;
-
-	ring->ring_type = ring_type;
-
-	/* allocate 4k Page of Local Frame Buffer memory for ring */
-	ring->ring_size = 0x1000;
-	ret = amdgpu_bo_create_kernel(adev, ring->ring_size, PAGE_SIZE,
-				      AMDGPU_GEM_DOMAIN_VRAM,
-				      &adev->firmware.rbuf,
-				      &ring->ring_mem_mc_addr,
-				      (void **)&ring->ring_mem);
-	if (ret) {
-		ring->ring_size = 0;
-		return ret;
-	}
-
-	return 0;
 }
 
 static int psp_v11_0_ring_stop(struct psp_context *psp,
@@ -691,7 +521,7 @@ static int psp_v11_0_memory_training(struct psp_context *psp, uint32_t ops)
 			return -ENOMEM;
 		}
 
-		if (drm_dev_enter(&adev->ddev, &idx)) {
+		if (drm_dev_enter(adev_to_drm(adev), &idx)) {
 			memcpy_fromio(buf, adev->mman.aper_base_kaddr, sz);
 			ret = psp_v11_0_memory_training_send_msg(psp, PSP_BL__DRAM_LONG_TRAIN);
 			if (ret) {
@@ -820,7 +650,6 @@ static const struct psp_funcs psp_v11_0_funcs = {
 	.bootloader_load_spl = psp_v11_0_bootloader_load_spl,
 	.bootloader_load_sysdrv = psp_v11_0_bootloader_load_sysdrv,
 	.bootloader_load_sos = psp_v11_0_bootloader_load_sos,
-	.ring_init = psp_v11_0_ring_init,
 	.ring_create = psp_v11_0_ring_create,
 	.ring_stop = psp_v11_0_ring_stop,
 	.ring_destroy = psp_v11_0_ring_destroy,

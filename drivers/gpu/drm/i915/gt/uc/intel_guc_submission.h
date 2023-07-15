@@ -15,7 +15,7 @@ struct intel_engine_cs;
 
 void intel_guc_submission_init_early(struct intel_guc *guc);
 int intel_guc_submission_init(struct intel_guc *guc);
-void intel_guc_submission_enable(struct intel_guc *guc);
+int intel_guc_submission_enable(struct intel_guc *guc);
 void intel_guc_submission_disable(struct intel_guc *guc);
 void intel_guc_submission_fini(struct intel_guc *guc);
 int intel_guc_preempt_work_create(struct intel_guc *guc);
@@ -28,6 +28,8 @@ void intel_guc_submission_print_context_info(struct intel_guc *guc,
 void intel_guc_dump_active_requests(struct intel_engine_cs *engine,
 				    struct i915_request *hung_rq,
 				    struct drm_printer *m);
+void intel_guc_busyness_park(struct intel_gt *gt);
+void intel_guc_busyness_unpark(struct intel_gt *gt);
 
 bool intel_guc_virtual_engine_has_heartbeat(const struct intel_engine_cs *ve);
 

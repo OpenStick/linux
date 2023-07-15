@@ -125,27 +125,6 @@ static int bd71837_get_buck34_enable_hwctrl(struct regulator_dev *rdev)
 
 	return !!(BD718XX_BUCK_RUN_ON & val);
 }
-/*
- * On BD71837 (not on BD71847, BD71850, ...)
- * Bucks 1 to 4 support DVS. PWM mode is used when voltage is changed.
- * Bucks 5 to 8 and LDOs can use PFM and must be disabled when voltage
- * is changed. Hence we return -EBUSY for these if voltage is changed
- * when BUCK/LDO is enabled.
- *
- * On BD71847, BD71850, ... The LDO voltage can be changed when LDO is
- * enabled. But if voltage is increased the LDO power-good monitoring
- * must be disabled for the duration of changing + 1mS to ensure voltage
- * has reached the higher level before HW does next under voltage detection
- * cycle.
- */
-static int bd71837_set_voltage_sel_restricted(struct regulator_dev *rdev,
-						    unsigned int sel)
-{
-	if (rdev->desc->ops->is_enabled(rdev))
-		return -EBUSY;
-
-	return regulator_set_voltage_sel_regmap(rdev, sel);
-}
 
 static void voltage_change_done(struct regulator_dev *rdev, unsigned int sel,
 				unsigned int *mask)
@@ -642,22 +621,22 @@ BD718XX_OPS(bd71837_pickable_range_buck_ops,
 	    bd718x7_set_buck_ovp);
 
 BD718XX_OPS(bd71837_ldo_regulator_ops, regulator_list_voltage_linear_range,
-	    NULL, bd71837_set_voltage_sel_restricted,
+	    NULL, rohm_regulator_set_voltage_sel_restricted,
 	    regulator_get_voltage_sel_regmap, NULL, NULL, bd718x7_set_ldo_uvp,
 	    NULL);
 
 BD718XX_OPS(bd71837_ldo_regulator_nolinear_ops, regulator_list_voltage_table,
-	    NULL, bd71837_set_voltage_sel_restricted,
+	    NULL, rohm_regulator_set_voltage_sel_restricted,
 	    regulator_get_voltage_sel_regmap, NULL, NULL, bd718x7_set_ldo_uvp,
 	    NULL);
 
 BD718XX_OPS(bd71837_buck_regulator_ops, regulator_list_voltage_linear_range,
-	    NULL, bd71837_set_voltage_sel_restricted,
+	    NULL, rohm_regulator_set_voltage_sel_restricted,
 	    regulator_get_voltage_sel_regmap, regulator_set_voltage_time_sel,
 	    NULL, bd718x7_set_buck_uvp, bd718x7_set_buck_ovp);
 
 BD718XX_OPS(bd71837_buck_regulator_nolinear_ops, regulator_list_voltage_table,
-	    regulator_map_voltage_ascend, bd71837_set_voltage_sel_restricted,
+	    regulator_map_voltage_ascend, rohm_regulator_set_voltage_sel_restricted,
 	    regulator_get_voltage_sel_regmap, regulator_set_voltage_time_sel,
 	    NULL, bd718x7_set_buck_uvp, bd718x7_set_buck_ovp);
 /*
@@ -1597,8 +1576,6 @@ static int setup_feedback_loop(struct device *dev, struct device_node *np,
 		if (!of_node_name_eq(np, desc->of_match))
 			continue;
 
-		pr_info("Looking at node '%s'\n", desc->of_match);
-
 		/* The feedback loop connection does not make sense for LDOs */
 		if (desc->id >= BD718XX_LDO1)
 			return -EINVAL;
@@ -1729,20 +1706,17 @@ static int bd718xx_probe(struct platform_device *pdev)
 		break;
 	default:
 		dev_err(&pdev->dev, "Unsupported chip type\n");
-		err = -EINVAL;
-		goto err;
+		return -EINVAL;
 	}
 
 	/* Register LOCK release */
 	err = regmap_update_bits(regmap, BD718XX_REG_REGLOCK,
 				 (REGLOCK_PWRSEQ | REGLOCK_VREG), 0);
-	if (err) {
-		dev_err(&pdev->dev, "Failed to unlock PMIC (%d)\n", err);
-		goto err;
-	} else {
-		dev_dbg(&pdev->dev, "Unlocked lock register 0x%x\n",
-			BD718XX_REG_REGLOCK);
-	}
+	if (err)
+		return dev_err_probe(&pdev->dev, err, "Failed to unlock PMIC\n");
+
+	dev_dbg(&pdev->dev, "Unlocked lock register 0x%x\n",
+		BD718XX_REG_REGLOCK);
 
 	use_snvs = of_property_read_bool(pdev->dev.parent->of_node,
 					 "rohm,reset-snvs-powered");
@@ -1759,13 +1733,11 @@ static int bd718xx_probe(struct platform_device *pdev)
 					 BD718XX_WDOG_POWEROFF_MASK |
 					 BD718XX_KEY_L_POWEROFF_MASK,
 					 BD718XX_POWOFF_TO_RDY);
-		if (err) {
-			dev_err(&pdev->dev, "Failed to change reset target\n");
-			goto err;
-		} else {
-			dev_dbg(&pdev->dev,
-				"Changed all resets from SVNS to READY\n");
-		}
+		if (err)
+			return dev_err_probe(&pdev->dev, err,
+					     "Failed to change reset target\n");
+
+		dev_dbg(&pdev->dev, "Changed all resets from SVNS to READY\n");
 	}
 
 	config.dev = pdev->dev.parent;
@@ -1801,13 +1773,10 @@ static int bd718xx_probe(struct platform_device *pdev)
 			desc->ops = swops[i];
 
 		rdev = devm_regulator_register(&pdev->dev, desc, &config);
-		if (IS_ERR(rdev)) {
-			dev_err(&pdev->dev,
-				"failed to register %s regulator\n",
-				desc->name);
-			err = PTR_ERR(rdev);
-			goto err;
-		}
+		if (IS_ERR(rdev))
+			return dev_err_probe(&pdev->dev, PTR_ERR(rdev),
+					     "failed to register %s regulator\n",
+					     desc->name);
 
 		/*
 		 * Regulator register gets the regulator constraints and
@@ -1830,28 +1799,23 @@ static int bd718xx_probe(struct platform_device *pdev)
 		    !rdev->constraints->boot_on)) {
 			err = regmap_update_bits(regmap, r->init.reg,
 						 r->init.mask, r->init.val);
-			if (err) {
-				dev_err(&pdev->dev,
+			if (err)
+				return dev_err_probe(&pdev->dev, err,
 					"Failed to take control for (%s)\n",
 					desc->name);
-				goto err;
-			}
 		}
 		for (j = 0; j < r->additional_init_amnt; j++) {
 			err = regmap_update_bits(regmap,
 						 r->additional_inits[j].reg,
 						 r->additional_inits[j].mask,
 						 r->additional_inits[j].val);
-			if (err) {
-				dev_err(&pdev->dev,
+			if (err)
+				return dev_err_probe(&pdev->dev, err,
 					"Buck (%s) initialization failed\n",
 					desc->name);
-				goto err;
-			}
 		}
 	}
 
-err:
 	return err;
 }
 
@@ -1865,6 +1829,7 @@ MODULE_DEVICE_TABLE(platform, bd718x7_pmic_id);
 static struct platform_driver bd718xx_regulator = {
 	.driver = {
 		.name = "bd718xx-pmic",
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 	.probe = bd718xx_probe,
 	.id_table = bd718x7_pmic_id,

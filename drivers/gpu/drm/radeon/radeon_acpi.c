@@ -22,6 +22,7 @@
  */
 
 #include <linux/acpi.h>
+#include <linux/backlight.h>
 #include <linux/pci.h>
 #include <linux/pm_runtime.h>
 #include <linux/power_supply.h>
@@ -30,7 +31,6 @@
 #include <acpi/acpi_bus.h>
 #include <acpi/video.h>
 
-#include <drm/drm_crtc_helper.h>
 #include <drm/drm_probe_helper.h>
 
 #include "atom.h"
@@ -391,7 +391,6 @@ static int radeon_atif_handler(struct radeon_device *rdev,
 
 			radeon_set_backlight_level(rdev, enc, req.backlight_level);
 
-#if defined(CONFIG_BACKLIGHT_CLASS_DEVICE) || defined(CONFIG_BACKLIGHT_CLASS_DEVICE_MODULE)
 			if (rdev->is_atom_bios) {
 				struct radeon_encoder_atom_dig *dig = enc->enc_priv;
 				backlight_force_update(dig->bl_dev,
@@ -401,7 +400,6 @@ static int radeon_atif_handler(struct radeon_device *rdev,
 				backlight_force_update(dig->bl_dev,
 						       BACKLIGHT_UPDATE_HOTKEY);
 			}
-#endif
 		}
 	}
 	if (req.pending & ATIF_DGPU_DISPLAY_EVENT) {

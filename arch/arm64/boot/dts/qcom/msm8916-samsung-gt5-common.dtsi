@@ -40,18 +40,18 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&gpio_keys_default>;
+		pinctrl-names = "default";
 
 		label = "GPIO Buttons";
 
-		volume-up {
+		volume-up-button {
 			label = "Volume Up";
 			gpios = <&msmgpio 107 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEUP>;
 		};
 
-		home {
+		home-button {
 			label = "Home";
 			gpios = <&msmgpio 109 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_HOMEPAGE>;
@@ -61,12 +61,12 @@
 	gpio-hall-sensor {
 		compatible = "gpio-keys";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&gpio_hall_sensor_default>;
+		pinctrl-names = "default";
 
 		label = "GPIO Hall Effect Sensor";
 
-		hall-sensor {
+		hall-sensor-switch {
 			label = "Hall Effect Sensor";
 			gpios = <&msmgpio 52 GPIO_ACTIVE_LOW>;
 			linux,input-type = <EV_SW>;
@@ -90,13 +90,18 @@
 		interrupt-parent = <&msmgpio>;
 		interrupts = <121 IRQ_TYPE_EDGE_FALLING>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&fuelgauge_int_default>;
+		pinctrl-names = "default";
 	};
 };
 
 &blsp_i2c2 {
 	status = "okay";
+
+	light-sensor@10 {
+		compatible = "capella,cm3323";
+		reg = <0x10>;
+	};
 
 	accelerometer@1d {
 		compatible = "st,lis2hh12";
@@ -106,7 +111,7 @@
 		vddio-supply = <&pm8916_l5>;
 
 		interrupt-parent = <&msmgpio>;
-		interrupts = <115 IRQ_TYPE_EDGE_RISING>;
+		interrupts = <115 IRQ_TYPE_LEVEL_HIGH>;
 		interrupt-names = "INT1";
 
 		st,drdy-int-pin = <1>;
@@ -114,13 +119,8 @@
 			      "-1", "0", "0",
 			       "0", "0", "1";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&accel_int_default>;
-	};
-
-	light-sensor@10 {
-		compatible = "capella,cm3323";
-		reg = <0x10>;
+		pinctrl-names = "default";
 	};
 };
 
@@ -136,21 +136,13 @@
 };
 
 &pm8916_resin {
-	status = "okay";
 	linux,code = <KEY_VOLUMEDOWN>;
+	status = "okay";
 };
 
 /* FIXME: Replace with MAX77849 MUIC when driver is available */
 &pm8916_usbin {
 	status = "okay";
-};
-
-&pronto {
-	status = "okay";
-
-	iris {
-		compatible = "qcom,wcn3660b";
-	};
 };
 
 &q6afedai {
@@ -161,35 +153,35 @@
 };
 
 &sdhc_1 {
-	status = "okay";
-
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&sdc1_clk_on &sdc1_cmd_on &sdc1_data_on>;
 	pinctrl-1 = <&sdc1_clk_off &sdc1_cmd_off &sdc1_data_off>;
+	pinctrl-names = "default", "sleep";
+
+	status = "okay";
 };
 
 &sdhc_2 {
-	status = "okay";
-
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&sdc2_clk_on &sdc2_cmd_on &sdc2_data_on &sdc2_cd_on>;
 	pinctrl-1 = <&sdc2_clk_off &sdc2_cmd_off &sdc2_data_off &sdc2_cd_off>;
+	pinctrl-names = "default", "sleep";
 
 	cd-gpios = <&msmgpio 38 GPIO_ACTIVE_LOW>;
+
+	status = "okay";
 };
 
 &sound {
-	status = "okay";
-
 	model = "samsung-gt510";
 	audio-routing =
 		"AMIC1", "MIC BIAS External1",
 		"AMIC2", "MIC BIAS Internal2",
 		"AMIC3", "MIC BIAS External1";
 
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&cdc_pdm_lines_act &ext_sec_tlmm_lines_act>;
 	pinctrl-1 = <&cdc_pdm_lines_sus &ext_sec_tlmm_lines_sus>;
+	pinctrl-names = "default", "sleep";
+
+	status = "okay";
 };
 
 &sound_dai_quaternary {
@@ -201,9 +193,10 @@
 };
 
 &usb {
-	status = "okay";
 	dr_mode = "peripheral";
 	extcon = <&pm8916_usbin>;
+
+	status = "okay";
 };
 
 &usb_hs_phy {
@@ -216,8 +209,16 @@
 	qcom,mbhc-vtreshold-low = <75 150 237 450 500>;
 	qcom,mbhc-vtreshold-high = <75 150 237 450 500>;
 
-	pinctrl-names = "default";
 	pinctrl-0 = <&jack_default>;
+	pinctrl-names = "default";
+};
+
+&wcnss {
+	status = "okay";
+};
+
+&wcnss_iris {
+	compatible = "qcom,wcn3660b";
 };
 
 &smd_rpm_regulators {
@@ -283,8 +284,8 @@
 	l11 {
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <2950000>;
-		regulator-allow-set-load;
 		regulator-system-load = <200000>;
+		regulator-allow-set-load;
 	};
 
 	l12 {
@@ -324,42 +325,37 @@
 };
 
 &msmgpio {
-	accel_int_default: accel-int-default {
+	accel_int_default: accel-int-default-state {
 		pins = "gpio115";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	fuelgauge_int_default: fuelgauge-int-default {
+	fuelgauge_int_default: fuelgauge-int-default-state {
 		pins = "gpio121";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	gpio_keys_default: gpio-keys-default {
+	gpio_keys_default: gpio-keys-default-state {
 		pins = "gpio107", "gpio109";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-pull-up;
 	};
 
-	gpio_hall_sensor_default: gpio-hall-sensor-default {
+	gpio_hall_sensor_default: gpio-hall-sensor-default-state {
 		pins = "gpio52";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	jack_default: jack-default {
+	jack_default: jack-default-state {
 		pins = "gpio110";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};

@@ -5,11 +5,14 @@
 
 #include <linux/uuid.h>
 #include <asm/unaligned.h>
+#include "messages.h"
 #include "ctree.h"
 #include "transaction.h"
 #include "disk-io.h"
 #include "print-tree.h"
-
+#include "fs.h"
+#include "accessors.h"
+#include "uuid-tree.h"
 
 static void btrfs_uuid_to_key(u8 *uuid, u8 type, struct btrfs_key *key)
 {
@@ -52,7 +55,7 @@ static int btrfs_uuid_tree_lookup(struct btrfs_root *uuid_root, u8 *uuid,
 
 	eb = path->nodes[0];
 	slot = path->slots[0];
-	item_size = btrfs_item_size_nr(eb, slot);
+	item_size = btrfs_item_size(eb, slot);
 	offset = btrfs_item_ptr_offset(eb, slot);
 	ret = -ENOENT;
 
@@ -125,7 +128,7 @@ int btrfs_uuid_tree_add(struct btrfs_trans_handle *trans, u8 *uuid, u8 type,
 		eb = path->nodes[0];
 		slot = path->slots[0];
 		offset = btrfs_item_ptr_offset(eb, slot);
-		offset += btrfs_item_size_nr(eb, slot) - sizeof(subid_le);
+		offset += btrfs_item_size(eb, slot) - sizeof(subid_le);
 	} else {
 		btrfs_warn(fs_info,
 			   "insert uuid item failed %d (0x%016llx, 0x%016llx) type %u!",
@@ -186,7 +189,7 @@ int btrfs_uuid_tree_remove(struct btrfs_trans_handle *trans, u8 *uuid, u8 type,
 	eb = path->nodes[0];
 	slot = path->slots[0];
 	offset = btrfs_item_ptr_offset(eb, slot);
-	item_size = btrfs_item_size_nr(eb, slot);
+	item_size = btrfs_item_size(eb, slot);
 	if (!IS_ALIGNED(item_size, sizeof(u64))) {
 		btrfs_warn(fs_info, "uuid item with illegal size %lu!",
 			   (unsigned long)item_size);
@@ -208,7 +211,7 @@ int btrfs_uuid_tree_remove(struct btrfs_trans_handle *trans, u8 *uuid, u8 type,
 		goto out;
 	}
 
-	item_size = btrfs_item_size_nr(eb, slot);
+	item_size = btrfs_item_size(eb, slot);
 	if (item_size == sizeof(subid)) {
 		ret = btrfs_del_item(trans, uuid_root, path);
 		goto out;
@@ -331,7 +334,7 @@ again_search_slot:
 			goto skip;
 
 		offset = btrfs_item_ptr_offset(leaf, slot);
-		item_size = btrfs_item_size_nr(leaf, slot);
+		item_size = btrfs_item_size(leaf, slot);
 		if (!IS_ALIGNED(item_size, sizeof(u64))) {
 			btrfs_warn(fs_info,
 				   "uuid item with illegal size %lu!",

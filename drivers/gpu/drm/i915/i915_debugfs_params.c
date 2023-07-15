@@ -40,8 +40,8 @@ static int notify_guc(struct drm_i915_private *i915)
 {
 	int ret = 0;
 
-	if (intel_uc_uses_guc_submission(&i915->gt.uc))
-		ret = intel_guc_global_policies_update(&i915->gt.uc.guc);
+	if (intel_uc_uses_guc_submission(&to_gt(i915)->uc))
+		ret = intel_guc_global_policies_update(&to_gt(i915)->uc.guc);
 
 	return ret;
 }
@@ -230,27 +230,16 @@ i915_debugfs_create_charp(const char *name, umode_t mode,
 				   &i915_param_charp_fops);
 }
 
-static __always_inline void
-_i915_param_create_file(struct dentry *parent, const char *name,
-			const char *type, int mode, void *value)
-{
-	if (!mode)
-		return;
-
-	if (!__builtin_strcmp(type, "bool"))
-		debugfs_create_bool(name, mode, parent, value);
-	else if (!__builtin_strcmp(type, "int"))
-		i915_debugfs_create_int(name, mode, parent, value);
-	else if (!__builtin_strcmp(type, "unsigned int"))
-		i915_debugfs_create_uint(name, mode, parent, value);
-	else if (!__builtin_strcmp(type, "unsigned long"))
-		debugfs_create_ulong(name, mode, parent, value);
-	else if (!__builtin_strcmp(type, "char *"))
-		i915_debugfs_create_charp(name, mode, parent, value);
-	else
-		WARN(1, "no debugfs fops defined for param type %s (i915.%s)\n",
-		     type, name);
-}
+#define _i915_param_create_file(parent, name, mode, valp)		\
+	do {								\
+		if (mode)						\
+			_Generic(valp,					\
+				 bool *: debugfs_create_bool,		\
+				 int *: i915_debugfs_create_int,	\
+				 unsigned int *: i915_debugfs_create_uint, \
+				 unsigned long *: debugfs_create_ulong,	\
+				 char **: i915_debugfs_create_charp)(name, mode, parent, valp); \
+	} while(0)
 
 /* add a subdirectory with files for each i915 param */
 struct dentry *i915_debugfs_params(struct drm_i915_private *i915)
@@ -269,7 +258,7 @@ struct dentry *i915_debugfs_params(struct drm_i915_private *i915)
 	 * just let the generic create file fail silently with -EEXIST.
 	 */
 
-#define REGISTER(T, x, unused, mode, ...) _i915_param_create_file(dir, #x, #T, mode, &params->x);
+#define REGISTER(T, x, unused, mode, ...) _i915_param_create_file(dir, #x, mode, &params->x);
 	I915_PARAMS_FOR_EACH(REGISTER);
 #undef REGISTER
 

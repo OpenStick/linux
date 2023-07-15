@@ -3,14 +3,19 @@
  * Copyright © 2014-2019 Intel Corporation
  */
 
+#include "gem/i915_gem_lmem.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_irq.h"
 #include "gt/intel_gt_pm_irq.h"
+#include "gt/intel_gt_regs.h"
 #include "intel_guc.h"
-#include "intel_guc_slpc.h"
 #include "intel_guc_ads.h"
+#include "intel_guc_capture.h"
+#include "intel_guc_print.h"
+#include "intel_guc_slpc.h"
 #include "intel_guc_submission.h"
 #include "i915_drv.h"
+#include "i915_irq.h"
 
 /**
  * DOC: GuC
@@ -78,9 +83,9 @@ static void gen9_reset_guc_interrupts(struct intel_guc *guc)
 
 	assert_rpm_wakelock_held(&gt->i915->runtime_pm);
 
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 	gen6_gt_pm_reset_iir(gt, gt->pm_guc_events);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 static void gen9_enable_guc_interrupts(struct intel_guc *guc)
@@ -89,11 +94,13 @@ static void gen9_enable_guc_interrupts(struct intel_guc *guc)
 
 	assert_rpm_wakelock_held(&gt->i915->runtime_pm);
 
-	spin_lock_irq(&gt->irq_lock);
-	WARN_ON_ONCE(intel_uncore_read(gt->uncore, GEN8_GT_IIR(2)) &
-		     gt->pm_guc_events);
+	spin_lock_irq(gt->irq_lock);
+	guc_WARN_ON_ONCE(guc, intel_uncore_read(gt->uncore, GEN8_GT_IIR(2)) &
+			 gt->pm_guc_events);
 	gen6_gt_pm_enable_irq(gt, gt->pm_guc_events);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
+
+	guc->interrupts.enabled = true;
 }
 
 static void gen9_disable_guc_interrupts(struct intel_guc *guc)
@@ -101,50 +108,51 @@ static void gen9_disable_guc_interrupts(struct intel_guc *guc)
 	struct intel_gt *gt = guc_to_gt(guc);
 
 	assert_rpm_wakelock_held(&gt->i915->runtime_pm);
+	guc->interrupts.enabled = false;
 
-	spin_lock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
 
 	gen6_gt_pm_disable_irq(gt, gt->pm_guc_events);
 
-	spin_unlock_irq(&gt->irq_lock);
+	spin_unlock_irq(gt->irq_lock);
 	intel_synchronize_irq(gt->i915);
 
 	gen9_reset_guc_interrupts(guc);
+}
+
+static bool __gen11_reset_guc_interrupts(struct intel_gt *gt)
+{
+	u32 irq = gt->type == GT_MEDIA ? MTL_MGUC : GEN11_GUC;
+
+	lockdep_assert_held(gt->irq_lock);
+	return gen11_gt_reset_one_iir(gt, 0, irq);
 }
 
 static void gen11_reset_guc_interrupts(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 
-	spin_lock_irq(&gt->irq_lock);
-	gen11_gt_reset_one_iir(gt, 0, GEN11_GUC);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
+	__gen11_reset_guc_interrupts(gt);
+	spin_unlock_irq(gt->irq_lock);
 }
 
 static void gen11_enable_guc_interrupts(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
-	u32 events = REG_FIELD_PREP(ENGINE1_MASK, GUC_INTR_GUC2HOST);
 
-	spin_lock_irq(&gt->irq_lock);
-	WARN_ON_ONCE(gen11_gt_reset_one_iir(gt, 0, GEN11_GUC));
-	intel_uncore_write(gt->uncore,
-			   GEN11_GUC_SG_INTR_ENABLE, events);
-	intel_uncore_write(gt->uncore,
-			   GEN11_GUC_SG_INTR_MASK, ~events);
-	spin_unlock_irq(&gt->irq_lock);
+	spin_lock_irq(gt->irq_lock);
+	__gen11_reset_guc_interrupts(gt);
+	spin_unlock_irq(gt->irq_lock);
+
+	guc->interrupts.enabled = true;
 }
 
 static void gen11_disable_guc_interrupts(struct intel_guc *guc)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
 
-	spin_lock_irq(&gt->irq_lock);
-
-	intel_uncore_write(gt->uncore, GEN11_GUC_SG_INTR_MASK, ~0);
-	intel_uncore_write(gt->uncore, GEN11_GUC_SG_INTR_ENABLE, 0);
-
-	spin_unlock_irq(&gt->irq_lock);
+	guc->interrupts.enabled = false;
 	intel_synchronize_irq(gt->i915);
 
 	gen11_reset_guc_interrupts(guc);
@@ -152,7 +160,8 @@ static void gen11_disable_guc_interrupts(struct intel_guc *guc)
 
 void intel_guc_init_early(struct intel_guc *guc)
 {
-	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
+	struct intel_gt *gt = guc_to_gt(guc);
+	struct drm_i915_private *i915 = gt->i915;
 
 	intel_uc_fw_init_early(&guc->fw, INTEL_UC_FW_TYPE_GUC);
 	intel_guc_ct_init_early(&guc->ct);
@@ -164,12 +173,17 @@ void intel_guc_init_early(struct intel_guc *guc)
 	mutex_init(&guc->send_mutex);
 	spin_lock_init(&guc->irq_lock);
 	if (GRAPHICS_VER(i915) >= 11) {
-		guc->notify_reg = GEN11_GUC_HOST_INTERRUPT;
 		guc->interrupts.reset = gen11_reset_guc_interrupts;
 		guc->interrupts.enable = gen11_enable_guc_interrupts;
 		guc->interrupts.disable = gen11_disable_guc_interrupts;
-		guc->send_regs.base =
-			i915_mmio_reg_offset(GEN11_SOFT_SCRATCH(0));
+		if (gt->type == GT_MEDIA) {
+			guc->notify_reg = MEDIA_GUC_HOST_INTERRUPT;
+			guc->send_regs.base = i915_mmio_reg_offset(MEDIA_SOFT_SCRATCH(0));
+		} else {
+			guc->notify_reg = GEN11_GUC_HOST_INTERRUPT;
+			guc->send_regs.base = i915_mmio_reg_offset(GEN11_SOFT_SCRATCH(0));
+		}
+
 		guc->send_regs.count = GEN11_SOFT_SCRATCH_COUNT;
 
 	} else {
@@ -181,6 +195,9 @@ void intel_guc_init_early(struct intel_guc *guc)
 		guc->send_regs.count = GUC_MAX_MMIO_MSG_LEN;
 		BUILD_BUG_ON(GUC_MAX_MMIO_MSG_LEN > SOFT_SCRATCH_COUNT);
 	}
+
+	intel_guc_enable_msg(guc, INTEL_GUC_RECV_MSG_EXCEPTION |
+				  INTEL_GUC_RECV_MSG_CRASH_DUMP_POSTED);
 }
 
 void intel_guc_init_late(struct intel_guc *guc)
@@ -217,36 +234,21 @@ static u32 guc_ctl_feature_flags(struct intel_guc *guc)
 
 static u32 guc_ctl_log_params_flags(struct intel_guc *guc)
 {
-	u32 offset = intel_guc_ggtt_offset(guc, guc->log.vma) >> PAGE_SHIFT;
-	u32 flags;
+	struct intel_guc_log *log = &guc->log;
+	u32 offset, flags;
 
-	#if (((CRASH_BUFFER_SIZE) % SZ_1M) == 0)
-	#define UNIT SZ_1M
-	#define FLAG GUC_LOG_ALLOC_IN_MEGABYTE
-	#else
-	#define UNIT SZ_4K
-	#define FLAG 0
-	#endif
+	GEM_BUG_ON(!log->sizes_initialised);
 
-	BUILD_BUG_ON(!CRASH_BUFFER_SIZE);
-	BUILD_BUG_ON(!IS_ALIGNED(CRASH_BUFFER_SIZE, UNIT));
-	BUILD_BUG_ON(!DEBUG_BUFFER_SIZE);
-	BUILD_BUG_ON(!IS_ALIGNED(DEBUG_BUFFER_SIZE, UNIT));
-
-	BUILD_BUG_ON((CRASH_BUFFER_SIZE / UNIT - 1) >
-			(GUC_LOG_CRASH_MASK >> GUC_LOG_CRASH_SHIFT));
-	BUILD_BUG_ON((DEBUG_BUFFER_SIZE / UNIT - 1) >
-			(GUC_LOG_DEBUG_MASK >> GUC_LOG_DEBUG_SHIFT));
+	offset = intel_guc_ggtt_offset(guc, log->vma) >> PAGE_SHIFT;
 
 	flags = GUC_LOG_VALID |
 		GUC_LOG_NOTIFY_ON_HALF_FULL |
-		FLAG |
-		((CRASH_BUFFER_SIZE / UNIT - 1) << GUC_LOG_CRASH_SHIFT) |
-		((DEBUG_BUFFER_SIZE / UNIT - 1) << GUC_LOG_DEBUG_SHIFT) |
+		log->sizes[GUC_LOG_SECTIONS_DEBUG].flag |
+		log->sizes[GUC_LOG_SECTIONS_CAPTURE].flag |
+		(log->sizes[GUC_LOG_SECTIONS_CRASH].count << GUC_LOG_CRASH_SHIFT) |
+		(log->sizes[GUC_LOG_SECTIONS_DEBUG].count << GUC_LOG_DEBUG_SHIFT) |
+		(log->sizes[GUC_LOG_SECTIONS_CAPTURE].count << GUC_LOG_CAPTURE_SHIFT) |
 		(offset << GUC_LOG_BUF_ADDR_SHIFT);
-
-	#undef UNIT
-	#undef FLAG
 
 	return flags;
 }
@@ -257,6 +259,68 @@ static u32 guc_ctl_ads_flags(struct intel_guc *guc)
 	u32 flags = ads << GUC_ADS_ADDR_SHIFT;
 
 	return flags;
+}
+
+static u32 guc_ctl_wa_flags(struct intel_guc *guc)
+{
+	struct intel_gt *gt = guc_to_gt(guc);
+	u32 flags = 0;
+
+	/* Wa_22012773006:gen11,gen12 < XeHP */
+	if (GRAPHICS_VER(gt->i915) >= 11 &&
+	    GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 50))
+		flags |= GUC_WA_POLLCS;
+
+	/* Wa_16011759253:dg2_g10:a0 */
+	if (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_B0))
+		flags |= GUC_WA_GAM_CREDITS;
+
+	/* Wa_14014475959 */
+	if (IS_MTL_GRAPHICS_STEP(gt->i915, M, STEP_A0, STEP_B0) ||
+	    IS_DG2(gt->i915))
+		flags |= GUC_WA_HOLD_CCS_SWITCHOUT;
+
+	/*
+	 * Wa_14012197797:dg2_g10:a0,dg2_g11:a0
+	 * Wa_22011391025:dg2_g10,dg2_g11,dg2_g12
+	 *
+	 * The same WA bit is used for both and 22011391025 is applicable to
+	 * all DG2.
+	 */
+	if (IS_DG2(gt->i915))
+		flags |= GUC_WA_DUAL_QUEUE;
+
+	/* Wa_22011802037: graphics version 11/12 */
+	if (IS_MTL_GRAPHICS_STEP(gt->i915, M, STEP_A0, STEP_B0) ||
+	    (GRAPHICS_VER(gt->i915) >= 11 &&
+	    GRAPHICS_VER_FULL(gt->i915) < IP_VER(12, 70)))
+		flags |= GUC_WA_PRE_PARSER;
+
+	/* Wa_16011777198:dg2 */
+	if (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_C0) ||
+	    IS_DG2_GRAPHICS_STEP(gt->i915, G11, STEP_A0, STEP_B0))
+		flags |= GUC_WA_RCS_RESET_BEFORE_RC6;
+
+	/*
+	 * Wa_22012727170:dg2_g10[a0-c0), dg2_g11[a0..)
+	 * Wa_22012727685:dg2_g11[a0..)
+	 */
+	if (IS_DG2_GRAPHICS_STEP(gt->i915, G10, STEP_A0, STEP_C0) ||
+	    IS_DG2_GRAPHICS_STEP(gt->i915, G11, STEP_A0, STEP_FOREVER))
+		flags |= GUC_WA_CONTEXT_ISOLATION;
+
+	/* Wa_16015675438 */
+	if (!RCS_MASK(gt))
+		flags |= GUC_WA_RCS_REGS_IN_CCS_REGS_LIST;
+
+	return flags;
+}
+
+static u32 guc_ctl_devid(struct intel_guc *guc)
+{
+	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
+
+	return (INTEL_DEVID(i915) << 16) | INTEL_REVID(i915);
 }
 
 /*
@@ -275,9 +339,11 @@ static void guc_init_params(struct intel_guc *guc)
 	params[GUC_CTL_FEATURE] = guc_ctl_feature_flags(guc);
 	params[GUC_CTL_DEBUG] = guc_ctl_debug_flags(guc);
 	params[GUC_CTL_ADS] = guc_ctl_ads_flags(guc);
+	params[GUC_CTL_WA] = guc_ctl_wa_flags(guc);
+	params[GUC_CTL_DEVID] = guc_ctl_devid(guc);
 
 	for (i = 0; i < GUC_CTL_MAX_DWORDS; i++)
-		DRM_DEBUG_DRIVER("param[%2d] = %#x\n", i, params[i]);
+		guc_dbg(guc, "param[%2d] = %#x\n", i, params[i]);
 }
 
 /*
@@ -305,9 +371,25 @@ void intel_guc_write_params(struct intel_guc *guc)
 	intel_uncore_forcewake_put(uncore, FORCEWAKE_GT);
 }
 
-int intel_guc_init(struct intel_guc *guc)
+void intel_guc_dump_time_info(struct intel_guc *guc, struct drm_printer *p)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
+	intel_wakeref_t wakeref;
+	u32 stamp = 0;
+	u64 ktime;
+
+	with_intel_runtime_pm(&gt->i915->runtime_pm, wakeref)
+		stamp = intel_uncore_read(gt->uncore, GUCPMTIMESTAMP);
+	ktime = ktime_get_boottime_ns();
+
+	drm_printf(p, "Kernel timestamp: 0x%08llX [%llu]\n", ktime, ktime);
+	drm_printf(p, "GuC timestamp: 0x%08X [%u]\n", stamp, stamp);
+	drm_printf(p, "CS timestamp frequency: %u Hz, %u ns\n",
+		   gt->clock_frequency, gt->clock_period_ns);
+}
+
+int intel_guc_init(struct intel_guc *guc)
+{
 	int ret;
 
 	ret = intel_uc_fw_init(&guc->fw);
@@ -318,9 +400,14 @@ int intel_guc_init(struct intel_guc *guc)
 	if (ret)
 		goto err_fw;
 
-	ret = intel_guc_ads_create(guc);
+	ret = intel_guc_capture_init(guc);
 	if (ret)
 		goto err_log;
+
+	ret = intel_guc_ads_create(guc);
+	if (ret)
+		goto err_capture;
+
 	GEM_BUG_ON(!guc->ads_vma);
 
 	ret = intel_guc_ct_init(&guc->ct);
@@ -346,9 +433,6 @@ int intel_guc_init(struct intel_guc *guc)
 	/* now that everything is perma-pinned, initialize the parameters */
 	guc_init_params(guc);
 
-	/* We need to notify the guc whenever we change the GGTT */
-	i915_ggtt_enable_guc(gt->ggtt);
-
 	intel_uc_fw_change_status(&guc->fw, INTEL_UC_FIRMWARE_LOADABLE);
 
 	return 0;
@@ -359,23 +443,22 @@ err_ct:
 	intel_guc_ct_fini(&guc->ct);
 err_ads:
 	intel_guc_ads_destroy(guc);
+err_capture:
+	intel_guc_capture_destroy(guc);
 err_log:
 	intel_guc_log_destroy(&guc->log);
 err_fw:
 	intel_uc_fw_fini(&guc->fw);
 out:
-	i915_probe_error(gt->i915, "failed with %d\n", ret);
+	intel_uc_fw_change_status(&guc->fw, INTEL_UC_FIRMWARE_INIT_FAIL);
+	guc_probe_error(guc, "failed with %pe\n", ERR_PTR(ret));
 	return ret;
 }
 
 void intel_guc_fini(struct intel_guc *guc)
 {
-	struct intel_gt *gt = guc_to_gt(guc);
-
 	if (!intel_uc_fw_is_loadable(&guc->fw))
 		return;
-
-	i915_ggtt_disable_guc(gt->ggtt);
 
 	if (intel_guc_slpc_is_used(guc))
 		intel_guc_slpc_fini(&guc->slpc);
@@ -386,6 +469,7 @@ void intel_guc_fini(struct intel_guc *guc)
 	intel_guc_ct_fini(&guc->ct);
 
 	intel_guc_ads_destroy(guc);
+	intel_guc_capture_destroy(guc);
 	intel_guc_log_destroy(&guc->log);
 	intel_uc_fw_fini(&guc->fw);
 }
@@ -396,7 +480,6 @@ void intel_guc_fini(struct intel_guc *guc)
 int intel_guc_send_mmio(struct intel_guc *guc, const u32 *request, u32 len,
 			u32 *response_buf, u32 response_buf_size)
 {
-	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
 	struct intel_uncore *uncore = guc_to_gt(guc)->uncore;
 	u32 header;
 	int i;
@@ -431,7 +514,7 @@ retry:
 					   10, 10, &header);
 	if (unlikely(ret)) {
 timeout:
-		drm_err(&i915->drm, "mmio request %#x: no reply %x\n",
+		guc_err(guc, "mmio request %#x: no reply %x\n",
 			request[0], header);
 		goto out;
 	}
@@ -453,7 +536,7 @@ timeout:
 	if (FIELD_GET(GUC_HXG_MSG_0_TYPE, header) == GUC_HXG_TYPE_NO_RESPONSE_RETRY) {
 		u32 reason = FIELD_GET(GUC_HXG_RETRY_MSG_0_REASON, header);
 
-		drm_dbg(&i915->drm, "mmio request %#x: retrying, reason %u\n",
+		guc_dbg(guc, "mmio request %#x: retrying, reason %u\n",
 			request[0], reason);
 		goto retry;
 	}
@@ -462,7 +545,7 @@ timeout:
 		u32 hint = FIELD_GET(GUC_HXG_FAILURE_MSG_0_HINT, header);
 		u32 error = FIELD_GET(GUC_HXG_FAILURE_MSG_0_ERROR, header);
 
-		drm_err(&i915->drm, "mmio request %#x: failure %x/%u\n",
+		guc_err(guc, "mmio request %#x: failure %x/%u\n",
 			request[0], error, hint);
 		ret = -ENXIO;
 		goto out;
@@ -470,7 +553,7 @@ timeout:
 
 	if (FIELD_GET(GUC_HXG_MSG_0_TYPE, header) != GUC_HXG_TYPE_RESPONSE_SUCCESS) {
 proto:
-		drm_err(&i915->drm, "mmio request %#x: unexpected reply %#x\n",
+		guc_err(guc, "mmio request %#x: unexpected reply %#x\n",
 			request[0], header);
 		ret = -EPROTO;
 		goto out;
@@ -512,9 +595,10 @@ int intel_guc_to_host_process_recv_msg(struct intel_guc *guc,
 	/* Make sure to handle only enabled messages */
 	msg = payload[0] & guc->msg_enabled_mask;
 
-	if (msg & (INTEL_GUC_RECV_MSG_FLUSH_LOG_BUFFER |
-		   INTEL_GUC_RECV_MSG_CRASH_DUMP_POSTED))
-		intel_guc_log_handle_flush_event(&guc->log);
+	if (msg & INTEL_GUC_RECV_MSG_CRASH_DUMP_POSTED)
+		guc_err(guc, "Received early crash dump notification!\n");
+	if (msg & INTEL_GUC_RECV_MSG_EXCEPTION)
+		guc_err(guc, "Received early exception notification!\n");
 
 	return 0;
 }
@@ -548,7 +632,7 @@ int intel_guc_suspend(struct intel_guc *guc)
 {
 	int ret;
 	u32 action[] = {
-		INTEL_GUC_ACTION_RESET_CLIENT,
+		INTEL_GUC_ACTION_CLIENT_SOFT_RESET,
 	};
 
 	if (!intel_guc_is_ready(guc))
@@ -568,7 +652,8 @@ int intel_guc_suspend(struct intel_guc *guc)
 		 */
 		ret = intel_guc_send_mmio(guc, action, ARRAY_SIZE(action), NULL, 0);
 		if (ret)
-			DRM_ERROR("GuC suspend: RESET_CLIENT action failed with error %d!\n", ret);
+			guc_err(guc, "suspend: RESET_CLIENT action failed with %pe\n",
+				ERR_PTR(ret));
 	}
 
 	/* Signal that the GuC isn't running. */
@@ -647,7 +732,14 @@ struct i915_vma *intel_guc_allocate_vma(struct intel_guc *guc, u32 size)
 	u64 flags;
 	int ret;
 
-	obj = i915_gem_object_create_shmem(gt->i915, size);
+	if (HAS_LMEM(gt->i915))
+		obj = i915_gem_object_create_lmem(gt->i915, size,
+						  I915_BO_ALLOC_CPU_CLEAR |
+						  I915_BO_ALLOC_CONTIGUOUS |
+						  I915_BO_ALLOC_PM_EARLY);
+	else
+		obj = i915_gem_object_create_shmem(gt->i915, size);
+
 	if (IS_ERR(obj))
 		return ERR_CAST(obj);
 
@@ -705,6 +797,55 @@ int intel_guc_allocate_and_map_vma(struct intel_guc *guc, u32 size,
 	return 0;
 }
 
+static int __guc_action_self_cfg(struct intel_guc *guc, u16 key, u16 len, u64 value)
+{
+	u32 request[HOST2GUC_SELF_CFG_REQUEST_MSG_LEN] = {
+		FIELD_PREP(GUC_HXG_MSG_0_ORIGIN, GUC_HXG_ORIGIN_HOST) |
+		FIELD_PREP(GUC_HXG_MSG_0_TYPE, GUC_HXG_TYPE_REQUEST) |
+		FIELD_PREP(GUC_HXG_REQUEST_MSG_0_ACTION, GUC_ACTION_HOST2GUC_SELF_CFG),
+		FIELD_PREP(HOST2GUC_SELF_CFG_REQUEST_MSG_1_KLV_KEY, key) |
+		FIELD_PREP(HOST2GUC_SELF_CFG_REQUEST_MSG_1_KLV_LEN, len),
+		FIELD_PREP(HOST2GUC_SELF_CFG_REQUEST_MSG_2_VALUE32, lower_32_bits(value)),
+		FIELD_PREP(HOST2GUC_SELF_CFG_REQUEST_MSG_3_VALUE64, upper_32_bits(value)),
+	};
+	int ret;
+
+	GEM_BUG_ON(len > 2);
+	GEM_BUG_ON(len == 1 && upper_32_bits(value));
+
+	/* Self config must go over MMIO */
+	ret = intel_guc_send_mmio(guc, request, ARRAY_SIZE(request), NULL, 0);
+
+	if (unlikely(ret < 0))
+		return ret;
+	if (unlikely(ret > 1))
+		return -EPROTO;
+	if (unlikely(!ret))
+		return -ENOKEY;
+
+	return 0;
+}
+
+static int __guc_self_cfg(struct intel_guc *guc, u16 key, u16 len, u64 value)
+{
+	int err = __guc_action_self_cfg(guc, key, len, value);
+
+	if (unlikely(err))
+		guc_probe_error(guc, "Unsuccessful self-config (%pe) key %#hx value %#llx\n",
+				ERR_PTR(err), key, value);
+	return err;
+}
+
+int intel_guc_self_cfg32(struct intel_guc *guc, u16 key, u32 value)
+{
+	return __guc_self_cfg(guc, key, 1, value);
+}
+
+int intel_guc_self_cfg64(struct intel_guc *guc, u16 key, u64 value)
+{
+	return __guc_self_cfg(guc, key, 2, value);
+}
+
 /**
  * intel_guc_load_status - dump information about GuC load status
  * @guc: the GuC
@@ -734,17 +875,46 @@ void intel_guc_load_status(struct intel_guc *guc, struct drm_printer *p)
 		u32 status = intel_uncore_read(uncore, GUC_STATUS);
 		u32 i;
 
-		drm_printf(p, "\nGuC status 0x%08x:\n", status);
+		drm_printf(p, "GuC status 0x%08x:\n", status);
 		drm_printf(p, "\tBootrom status = 0x%x\n",
 			   (status & GS_BOOTROM_MASK) >> GS_BOOTROM_SHIFT);
 		drm_printf(p, "\tuKernel status = 0x%x\n",
 			   (status & GS_UKERNEL_MASK) >> GS_UKERNEL_SHIFT);
 		drm_printf(p, "\tMIA Core status = 0x%x\n",
 			   (status & GS_MIA_MASK) >> GS_MIA_SHIFT);
-		drm_puts(p, "\nScratch registers:\n");
+		drm_puts(p, "Scratch registers:\n");
 		for (i = 0; i < 16; i++) {
 			drm_printf(p, "\t%2d: \t0x%x\n",
 				   i, intel_uncore_read(uncore, SOFT_SCRATCH(i)));
 		}
+	}
+}
+
+void intel_guc_write_barrier(struct intel_guc *guc)
+{
+	struct intel_gt *gt = guc_to_gt(guc);
+
+	if (i915_gem_object_is_lmem(guc->ct.vma->obj)) {
+		/*
+		 * Ensure intel_uncore_write_fw can be used rather than
+		 * intel_uncore_write.
+		 */
+		GEM_BUG_ON(guc->send_regs.fw_domains);
+
+		/*
+		 * This register is used by the i915 and GuC for MMIO based
+		 * communication. Once we are in this code CTBs are the only
+		 * method the i915 uses to communicate with the GuC so it is
+		 * safe to write to this register (a value of 0 is NOP for MMIO
+		 * communication). If we ever start mixing CTBs and MMIOs a new
+		 * register will have to be chosen. This function is also used
+		 * to enforce ordering of a work queue item write and an update
+		 * to the process descriptor. When a work queue is being used,
+		 * CTBs are also the only mechanism of communication.
+		 */
+		intel_uncore_write_fw(gt->uncore, GEN11_SOFT_SCRATCH(0), 0);
+	} else {
+		/* wmb() sufficient for a barrier if in smem */
+		wmb();
 	}
 }

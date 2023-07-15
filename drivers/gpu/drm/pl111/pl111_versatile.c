@@ -18,6 +18,8 @@
 #include <linux/regmap.h>
 #include <linux/vexpress.h>
 
+#include <drm/drm_fourcc.h>
+
 #include "pl111_versatile.h"
 #include "pl111_drm.h"
 
@@ -314,7 +316,7 @@ static const struct pl111_variant_data pl110_integrator = {
 	.broken_vblank = true,
 	.formats = pl110_integrator_pixel_formats,
 	.nformats = ARRAY_SIZE(pl110_integrator_pixel_formats),
-	.fb_bpp = 16,
+	.fb_depth = 16,
 };
 
 /*
@@ -328,7 +330,7 @@ static const struct pl111_variant_data pl110_impd1 = {
 	.broken_vblank = true,
 	.formats = pl110_integrator_pixel_formats,
 	.nformats = ARRAY_SIZE(pl110_integrator_pixel_formats),
-	.fb_bpp = 16,
+	.fb_depth = 15,
 };
 
 /*
@@ -341,7 +343,7 @@ static const struct pl111_variant_data pl110_versatile = {
 	.external_bgr = true,
 	.formats = pl110_versatile_pixel_formats,
 	.nformats = ARRAY_SIZE(pl110_versatile_pixel_formats),
-	.fb_bpp = 16,
+	.fb_depth = 16,
 };
 
 /*
@@ -353,7 +355,7 @@ static const struct pl111_variant_data pl111_realview = {
 	.name = "PL111 RealView",
 	.formats = pl111_realview_pixel_formats,
 	.nformats = ARRAY_SIZE(pl111_realview_pixel_formats),
-	.fb_bpp = 16,
+	.fb_depth = 16,
 };
 
 /*
@@ -365,7 +367,7 @@ static const struct pl111_variant_data pl111_vexpress = {
 	.name = "PL111 Versatile Express",
 	.formats = pl111_realview_pixel_formats,
 	.nformats = ARRAY_SIZE(pl111_realview_pixel_formats),
-	.fb_bpp = 16,
+	.fb_depth = 16,
 	.broken_clockdivider = true,
 };
 
@@ -402,6 +404,7 @@ static int pl111_vexpress_clcd_init(struct device *dev, struct device_node *np,
 		if (of_device_is_compatible(child, "arm,pl111")) {
 			has_coretile_clcd = true;
 			ct_clcd = child;
+			of_node_put(child);
 			break;
 		}
 		if (of_device_is_compatible(child, "arm,hdlcd")) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2021 FIXME
+// Copyright (c) 2023 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -30,14 +30,6 @@ struct s6d7aa0_lsl080al03 *to_s6d7aa0_lsl080al03(struct drm_panel *panel)
 	return container_of(panel, struct s6d7aa0_lsl080al03, panel);
 }
 
-#define dsi_dcs_write_seq(dsi, seq...) do {				\
-		static const u8 d[] = { seq };				\
-		int ret;						\
-		ret = mipi_dsi_dcs_write_buffer(dsi, d, ARRAY_SIZE(d));	\
-		if (ret < 0)						\
-			return ret;					\
-	} while (0)
-
 static void s6d7aa0_lsl080al03_reset(struct s6d7aa0_lsl080al03 *ctx)
 {
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
@@ -56,26 +48,26 @@ static int s6d7aa0_lsl080al03_on(struct s6d7aa0_lsl080al03 *ctx)
 
 	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
-	dsi_dcs_write_seq(dsi, 0xf0, 0x5a, 0x5a);
-	dsi_dcs_write_seq(dsi, 0xf1, 0x5a, 0x5a);
-	dsi_dcs_write_seq(dsi, 0xfc, 0xa5, 0xa5);
-	dsi_dcs_write_seq(dsi, 0xd0, 0x00, 0x10);
-	dsi_dcs_write_seq(dsi, 0xc3, 0xc7, 0x00, 0x29);
-	dsi_dcs_write_seq(dsi, 0xbc, 0x01, 0x4e, 0xa0);
-	dsi_dcs_write_seq(dsi, 0xfd, 0x16, 0x10, 0x11, 0x23, 0x09);
-	dsi_dcs_write_seq(dsi, 0xfe, 0x00, 0x02, 0x03, 0x21, 0x80, 0x78);
-	dsi_dcs_write_seq(dsi, 0xb3, 0x51);
-	dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x24);
-	dsi_dcs_write_seq(dsi, 0xf2, 0x02, 0x08, 0x08);
+	mipi_dsi_dcs_write_seq(dsi, 0xf0, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq(dsi, 0xf1, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq(dsi, 0xfc, 0xa5, 0xa5);
+	mipi_dsi_dcs_write_seq(dsi, 0xd0, 0x00, 0x10);
+	mipi_dsi_dcs_write_seq(dsi, 0xc3, 0xc7, 0x00, 0x29);
+	mipi_dsi_dcs_write_seq(dsi, 0xbc, 0x01, 0x4e, 0xa0);
+	mipi_dsi_dcs_write_seq(dsi, 0xfd, 0x16, 0x10, 0x11, 0x23, 0x09);
+	mipi_dsi_dcs_write_seq(dsi, 0xfe, 0x00, 0x02, 0x03, 0x21, 0x80, 0x78);
+	mipi_dsi_dcs_write_seq(dsi, 0xb3, 0x51);
+	mipi_dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x24);
+	mipi_dsi_dcs_write_seq(dsi, 0xf2, 0x02, 0x08, 0x08);
 	usleep_range(10000, 11000);
-	dsi_dcs_write_seq(dsi, 0xc0, 0x80, 0x80, 0x30);
-	dsi_dcs_write_seq(dsi, 0xcd,
-			  0x2e, 0x2e, 0x2e, 0x2e, 0x2e, 0x2e, 0x2e, 0x2e, 0x2e,
-			  0x2e, 0x2e, 0x2e, 0x2e);
-	dsi_dcs_write_seq(dsi, 0xce,
-			  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-			  0x00, 0x00, 0x00, 0x00);
-	dsi_dcs_write_seq(dsi, 0xc1, 0x03);
+	mipi_dsi_dcs_write_seq(dsi, 0xc0, 0x80, 0x80, 0x30);
+	mipi_dsi_dcs_write_seq(dsi, 0xcd,
+			       0x2e, 0x2e, 0x2e, 0x2e, 0x2e, 0x2e, 0x2e, 0x2e,
+			       0x2e, 0x2e, 0x2e, 0x2e, 0x2e);
+	mipi_dsi_dcs_write_seq(dsi, 0xce,
+			       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			       0x00, 0x00, 0x00, 0x00, 0x00);
+	mipi_dsi_dcs_write_seq(dsi, 0xc1, 0x03);
 
 	ret = mipi_dsi_dcs_exit_sleep_mode(dsi);
 	if (ret < 0) {
@@ -84,9 +76,9 @@ static int s6d7aa0_lsl080al03_on(struct s6d7aa0_lsl080al03 *ctx)
 	}
 	msleep(120);
 
-	dsi_dcs_write_seq(dsi, 0xf0, 0xa5, 0xa5);
-	dsi_dcs_write_seq(dsi, 0xf1, 0xa5, 0xa5);
-	dsi_dcs_write_seq(dsi, 0xfc, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq(dsi, 0xf0, 0xa5, 0xa5);
+	mipi_dsi_dcs_write_seq(dsi, 0xf1, 0xa5, 0xa5);
+	mipi_dsi_dcs_write_seq(dsi, 0xfc, 0x5a, 0x5a);
 
 	ret = mipi_dsi_dcs_set_tear_on(dsi, MIPI_DSI_DCS_TEAR_MODE_VBLANK);
 	if (ret < 0) {
@@ -112,7 +104,7 @@ static int s6d7aa0_lsl080al03_off(struct s6d7aa0_lsl080al03 *ctx)
 
 	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
 
-	dsi_dcs_write_seq(dsi, 0x22, 0x00);
+	mipi_dsi_dcs_write_seq(dsi, 0x22, 0x00);
 
 	ret = mipi_dsi_dcs_set_display_off(dsi);
 	if (ret < 0) {
@@ -324,7 +316,7 @@ static int s6d7aa0_lsl080al03_probe(struct mipi_dsi_device *dsi)
 	return 0;
 }
 
-static int s6d7aa0_lsl080al03_remove(struct mipi_dsi_device *dsi)
+static void s6d7aa0_lsl080al03_remove(struct mipi_dsi_device *dsi)
 {
 	struct s6d7aa0_lsl080al03 *ctx = mipi_dsi_get_drvdata(dsi);
 	int ret;
@@ -334,8 +326,6 @@ static int s6d7aa0_lsl080al03_remove(struct mipi_dsi_device *dsi)
 		dev_err(&dsi->dev, "Failed to detach from DSI host: %d\n", ret);
 
 	drm_panel_remove(&ctx->panel);
-
-	return 0;
 }
 
 static const struct of_device_id s6d7aa0_lsl080al03_of_match[] = {
@@ -356,4 +346,4 @@ module_mipi_dsi_driver(s6d7aa0_lsl080al03_driver);
 
 MODULE_AUTHOR("linux-mdss-dsi-panel-driver-generator <fix@me>"); // FIXME
 MODULE_DESCRIPTION("DRM driver for S6D7AA0 LSL080AL03 wxga video mode dsi panel");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

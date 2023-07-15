@@ -37,12 +37,12 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&gpio_keys_default>;
+		pinctrl-names = "default";
 
 		label = "GPIO Buttons";
 
-		volume-up {
+		volume-up-button {
 			label = "Volume Up";
 			gpios = <&msmgpio 107 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEUP>;
@@ -53,12 +53,12 @@
 	gpio-hall-sensor {
 		compatible = "gpio-keys";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&gpio_hall_sensor_default>;
+		pinctrl-names = "default";
 
 		label = "GPIO Hall Effect Sensor";
 
-		hall-sensor {
+		hall-sensor-switch {
 			label = "Hall Effect Sensor";
 			gpios = <&msmgpio 115 GPIO_ACTIVE_LOW>;
 			linux,input-type = <EV_SW>;
@@ -70,19 +70,19 @@
 	speaker_amp: audio-amplifier {
 		compatible = "awinic,aw8738";
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&spk_ext_pa_default>;
+		pinctrl-names = "default";
 
-		enable-gpios = <&msmgpio 112 GPIO_ACTIVE_HIGH>;
-		aw8738,mode = <2>;
+		mode-gpios = <&msmgpio 112 GPIO_ACTIVE_HIGH>;
+		awinic,mode = <2>;
 		sound-name-prefix = "Speaker Amp";
 	};
 
 	usb_id: usb-id {
 		compatible = "linux,extcon-usb-gpio";
 		id-gpios = <&msmgpio 110 GPIO_ACTIVE_HIGH>;
-		pinctrl-names = "default";
 		pinctrl-0 = <&usb_id_default>;
+		pinctrl-names = "default";
 	};
 };
 
@@ -99,8 +99,8 @@
 		vdd-supply = <&pm8916_l17>;
 		vddio-supply = <&pm8916_l6>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&accel_int_default>;
+		pinctrl-names = "default";
 	};
 
 	magnetometer@c {
@@ -112,8 +112,8 @@
 
 		reset-gpios = <&msmgpio 36 GPIO_ACTIVE_LOW>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&mag_reset_default>;
+		pinctrl-names = "default";
 	};
 
 	led-controller@45 {
@@ -159,8 +159,8 @@
 		touchscreen-size-x = <720>;
 		touchscreen-size-y = <1280>;
 
-		pinctrl-names = "default";
 		pinctrl-0 = <&touchscreen_default>;
+		pinctrl-names = "default";
 	};
 };
 
@@ -169,9 +169,9 @@
 };
 
 &dsi0 {
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&mdss_default>;
 	pinctrl-1 = <&mdss_sleep>;
+	pinctrl-names = "default", "sleep";
 
 	panel@0 {
 		compatible = "asus,z010d-r69339";
@@ -202,51 +202,54 @@
 };
 
 &pm8916_resin {
-	status = "okay";
 	linux,code = <KEY_VOLUMEDOWN>;
+	status = "okay";
 };
 
 &pm8916_vib {
 	status = "okay";
 };
 
-&pronto {
-	status = "okay";
-};
-
 &sdhc_1 {
-	status = "okay";
-
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&sdc1_clk_on &sdc1_cmd_on &sdc1_data_on>;
 	pinctrl-1 = <&sdc1_clk_off &sdc1_cmd_off &sdc1_data_off>;
+	pinctrl-names = "default", "sleep";
+
+	status = "okay";
 };
 
 &sdhc_2 {
-	status = "okay";
-
-	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&sdc2_clk_on &sdc2_cmd_on &sdc2_data_on &sdc2_cd_on>;
 	pinctrl-1 = <&sdc2_clk_off &sdc2_cmd_off &sdc2_data_off &sdc2_cd_off>;
+	pinctrl-names = "default", "sleep";
 
 	cd-gpios = <&msmgpio 38 GPIO_ACTIVE_LOW>;
+
+	status = "okay";
 };
 
 &sound {
-	status = "okay";
-
 	model = "bq-paella";
+	widgets =
+		"Speaker", "Speaker",
+		"Headphone", "Headphones";
+	pin-switches = "Speaker";
 	audio-routing =
-		"Speaker Amp IN", "HPH_R_EXT",
+		"Speaker", "Speaker Amp OUT",
+		"Speaker Amp IN", "HPH_R",
+		"Headphones", "HPH_L",
+		"Headphones", "HPH_R",
 		"AMIC1", "MIC BIAS Internal1",
 		"AMIC2", "MIC BIAS Internal2",
 		"AMIC3", "MIC BIAS Internal3";
 	aux-devs = <&speaker_amp>;
+
+	status = "okay";
 };
 
 &usb {
-	status = "okay";
 	extcon = <&usb_id>, <&usb_id>;
+	status = "okay";
 };
 
 &usb_hs_phy {
@@ -258,6 +261,14 @@
 	qcom,mbhc-vthreshold-low = <75 150 237 450 500>;
 	qcom,mbhc-vthreshold-high = <75 150 237 450 500>;
 	qcom,hphl-jack-type-normally-open;
+};
+
+&wcnss {
+	status = "okay";
+};
+
+&wcnss_iris {
+	compatible = "qcom,wcn3620";
 };
 
 &smd_rpm_regulators {
@@ -323,8 +334,8 @@
 	l11 {
 		regulator-min-microvolt = <1800000>;
 		regulator-max-microvolt = <2950000>;
-		regulator-allow-set-load;
 		regulator-system-load = <200000>;
+		regulator-allow-set-load;
 	};
 
 	l12 {
@@ -364,83 +375,74 @@
 };
 
 &msmgpio {
-	accel_int_default: accel-int-default {
+	accel_int_default: accel-int-default-state {
 		pins = "gpio114";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	gpio_hall_sensor_default: gpio-hall-sensor-default {
+	gpio_hall_sensor_default: gpio-hall-sensor-default-state {
 		pins = "gpio115";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	gpio_keys_default: gpio-keys-default {
+	gpio_keys_default: gpio-keys-default-state {
 		pins = "gpio107";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-pull-up;
 	};
 
-	mag_reset_default: mag-reset-default {
+	mag_reset_default: mag-reset-default-state {
 		pins = "gpio36";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	mdss {
-		mdss_default: mdss-default {
-			pins = "gpio25";
-			function = "gpio";
-
-			drive-strength = <8>;
-			bias-disable = <0>;
-		};
-		mdss_sleep: mdss-sleep {
-			pins = "gpio25";
-			function = "gpio";
-
-			drive-strength = <2>;
-			bias-pull-down;
-		};
+	mdss_default: mdss-default-state {
+		pins = "gpio25";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable = <0>;
 	};
 
-	spk_ext_pa_default: spk-ext-pa-default {
+	mdss_sleep: mdss-sleep-state {
+		pins = "gpio25";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	spk_ext_pa_default: spk-ext-pa-default-state {
 		pins = "gpio112";
 		function = "gpio";
-
 		drive-strength = <2>;
 		bias-disable;
 	};
 
-	touchscreen_default: touchscreen-default {
-		pins = "gpio13";
-		function = "gpio";
+	touchscreen_default: touchscreen-default-state {
+		touchscreen-pins {
+			pins = "gpio13";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-up;
+		};
 
-		drive-strength = <2>;
-		bias-pull-up;
-
-		reset {
+		reset-pins {
 			pins = "gpio12";
 			function = "gpio";
-
 			drive-strength = <2>;
 			bias-disable;
 		};
 	};
 
-	usb_id_default: usb-id-default {
+	usb_id_default: usb-id-default-state {
 		pins = "gpio110";
 		function = "gpio";
-
 		drive-strength = <8>;
 		bias-pull-up;
 	};

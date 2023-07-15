@@ -98,9 +98,12 @@ static int mei_cl_irq_read_msg(struct mei_cl *cl,
 	struct mei_device *dev = cl->dev;
 	struct mei_cl_cb *cb;
 
+	struct mei_ext_hdr_vtag *vtag_hdr = NULL;
+	struct mei_ext_hdr_gsc_f2h *gsc_f2h = NULL;
+
 	size_t buf_sz;
 	u32 length;
-	int ext_len;
+	u32 ext_len;
 
 	length = mei_hdr->length;
 	ext_len = 0;
@@ -122,18 +125,24 @@ static int mei_cl_irq_read_msg(struct mei_cl *cl,
 	}
 
 	if (mei_hdr->extended) {
-		struct mei_ext_hdr *ext;
-		struct mei_ext_hdr_vtag *vtag_hdr = NULL;
-
-		ext = mei_ext_begin(meta);
+		struct mei_ext_hdr *ext = mei_ext_begin(meta);
 		do {
 			switch (ext->type) {
 			case MEI_EXT_HDR_VTAG:
 				vtag_hdr = (struct mei_ext_hdr_vtag *)ext;
 				break;
+			case MEI_EXT_HDR_GSC:
+				gsc_f2h = (struct mei_ext_hdr_gsc_f2h *)ext;
+				cb->ext_hdr = kzalloc(sizeof(*gsc_f2h), GFP_KERNEL);
+				if (!cb->ext_hdr) {
+					cb->status = -ENOMEM;
+					goto discard;
+				}
+				break;
 			case MEI_EXT_HDR_NONE:
 				fallthrough;
 			default:
+				cl_err(dev, cl, "unknown extended header\n");
 				cb->status = -EPROTO;
 				break;
 			}
@@ -141,12 +150,14 @@ static int mei_cl_irq_read_msg(struct mei_cl *cl,
 			ext = mei_ext_next(ext);
 		} while (!mei_ext_last(meta, ext));
 
-		if (!vtag_hdr) {
-			cl_dbg(dev, cl, "vtag not found in extended header.\n");
+		if (!vtag_hdr && !gsc_f2h) {
+			cl_dbg(dev, cl, "no vtag or gsc found in extended header.\n");
 			cb->status = -EPROTO;
 			goto discard;
 		}
+	}
 
+	if (vtag_hdr) {
 		cl_dbg(dev, cl, "vtag: %d\n", vtag_hdr->vtag);
 		if (cb->vtag && cb->vtag != vtag_hdr->vtag) {
 			cl_err(dev, cl, "mismatched tag: %d != %d\n",
@@ -155,6 +166,28 @@ static int mei_cl_irq_read_msg(struct mei_cl *cl,
 			goto discard;
 		}
 		cb->vtag = vtag_hdr->vtag;
+	}
+
+	if (gsc_f2h) {
+		u32 ext_hdr_len = mei_ext_hdr_len(&gsc_f2h->hdr);
+
+		if (!dev->hbm_f_gsc_supported) {
+			cl_err(dev, cl, "gsc extended header is not supported\n");
+			cb->status = -EPROTO;
+			goto discard;
+		}
+
+		if (length) {
+			cl_err(dev, cl, "no data allowed in cb with gsc\n");
+			cb->status = -EPROTO;
+			goto discard;
+		}
+		if (ext_hdr_len > sizeof(*gsc_f2h)) {
+			cl_err(dev, cl, "gsc extended header is too big %u\n", ext_hdr_len);
+			cb->status = -EPROTO;
+			goto discard;
+		}
+		memcpy(cb->ext_hdr, gsc_f2h, ext_hdr_len);
 	}
 
 	if (!mei_cl_is_connected(cl)) {
@@ -424,31 +457,26 @@ int mei_irq_read_handler(struct mei_device *dev,
 	list_for_each_entry(cl, &dev->file_list, link) {
 		if (mei_cl_hbm_equal(cl, mei_hdr)) {
 			cl_dbg(dev, cl, "got a message\n");
-			break;
+			ret = mei_cl_irq_read_msg(cl, mei_hdr, meta_hdr, cmpl_list);
+			goto reset_slots;
 		}
 	}
 
 	/* if no recipient cl was found we assume corrupted header */
-	if (&cl->link == &dev->file_list) {
-		/* A message for not connected fixed address clients
-		 * should be silently discarded
-		 * On power down client may be force cleaned,
-		 * silently discard such messages
-		 */
-		if (hdr_is_fixed(mei_hdr) ||
-		    dev->dev_state == MEI_DEV_POWER_DOWN) {
-			mei_irq_discard_msg(dev, mei_hdr, mei_hdr->length);
-			ret = 0;
-			goto reset_slots;
-		}
-		dev_err(dev->dev, "no destination client found 0x%08X\n",
-				dev->rd_msg_hdr[0]);
-		ret = -EBADMSG;
-		goto end;
+	/* A message for not connected fixed address clients
+	 * should be silently discarded
+	 * On power down client may be force cleaned,
+	 * silently discard such messages
+	 */
+	if (hdr_is_fixed(mei_hdr) ||
+	    dev->dev_state == MEI_DEV_POWER_DOWN) {
+		mei_irq_discard_msg(dev, mei_hdr, mei_hdr->length);
+		ret = 0;
+		goto reset_slots;
 	}
-
-	ret = mei_cl_irq_read_msg(cl, mei_hdr, meta_hdr, cmpl_list);
-
+	dev_err(dev->dev, "no destination client found 0x%08X\n", dev->rd_msg_hdr[0]);
+	ret = -EBADMSG;
+	goto end;
 
 reset_slots:
 	/* reset the number of slots and header */

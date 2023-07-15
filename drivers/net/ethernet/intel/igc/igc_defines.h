@@ -85,9 +85,6 @@
 
 #define IGC_WUFC_EXT_FILTER_MASK GENMASK(31, 8)
 
-/* Physical Func Reset Done Indication */
-#define IGC_CTRL_EXT_LINK_MODE_MASK	0x00C00000
-
 /* Loop limit on how long we wait for auto-negotiation to complete */
 #define COPPER_LINK_UP_LIMIT		10
 #define PHY_AUTO_NEG_LIMIT		45
@@ -130,7 +127,7 @@
 #define IGC_ERR_SWFW_SYNC		13
 
 /* Device Control */
-#define IGC_CTRL_DEV_RST	0x20000000  /* Device reset */
+#define IGC_CTRL_RST		0x04000000  /* Global reset */
 
 #define IGC_CTRL_PHY_RST	0x80000000  /* PHY Reset */
 #define IGC_CTRL_SLU		0x00000040  /* Set link up (Force Link) */
@@ -324,6 +321,8 @@
 #define IGC_ADVTXD_L4LEN_SHIFT	8  /* Adv ctxt L4LEN shift */
 #define IGC_ADVTXD_MSS_SHIFT	16 /* Adv ctxt MSS shift */
 
+#define IGC_ADVTXD_TSN_CNTX_FIRST	0x00000080
+
 /* Transmit Control */
 #define IGC_TCTL_EN		0x00000002 /* enable Tx */
 #define IGC_TCTL_PSP		0x00000008 /* pad short packets */
@@ -403,6 +402,15 @@
 #define IGC_DTXMXPKTSZ_TSN	0x19 /* 1600 bytes of max TX DMA packet size */
 #define IGC_DTXMXPKTSZ_DEFAULT	0x98 /* 9728-byte Jumbo frames */
 
+/* Transmit Scheduling Latency */
+/* Latency between transmission scheduling (LaunchTime) and the time
+ * the packet is transmitted to the network in nanosecond.
+ */
+#define IGC_TXOFFSET_SPEED_10	0x000034BC
+#define IGC_TXOFFSET_SPEED_100	0x00000578
+#define IGC_TXOFFSET_SPEED_1000	0x0000012C
+#define IGC_TXOFFSET_SPEED_2500	0x00000578
+
 /* Time Sync Interrupt Causes */
 #define IGC_TSICR_SYS_WRAP	BIT(0) /* SYSTIM Wrap around. */
 #define IGC_TSICR_TXTS		BIT(1) /* Transmit Timestamp. */
@@ -467,7 +475,9 @@
 #define IGC_TSAUXC_EN_TT0	BIT(0)  /* Enable target time 0. */
 #define IGC_TSAUXC_EN_TT1	BIT(1)  /* Enable target time 1. */
 #define IGC_TSAUXC_EN_CLK0	BIT(2)  /* Enable Configurable Frequency Clock 0. */
+#define IGC_TSAUXC_ST0		BIT(4)  /* Start Clock 0 Toggle on Target Time 0. */
 #define IGC_TSAUXC_EN_CLK1	BIT(5)  /* Enable Configurable Frequency Clock 1. */
+#define IGC_TSAUXC_ST1		BIT(7)  /* Start Clock 1 Toggle on Target Time 1. */
 #define IGC_TSAUXC_EN_TS0	BIT(8)  /* Enable hardware timestamp 0. */
 #define IGC_TSAUXC_AUTT0	BIT(9)  /* Auxiliary Timestamp Taken. */
 #define IGC_TSAUXC_EN_TS1	BIT(10) /* Enable hardware timestamp 0. */
@@ -514,6 +524,7 @@
 /* Transmit Scheduling */
 #define IGC_TQAVCTRL_TRANSMIT_MODE_TSN	0x00000001
 #define IGC_TQAVCTRL_ENHANCED_QAV	0x00000008
+#define IGC_TQAVCTRL_FUTSCDDIS		0x00000080
 
 #define IGC_TXQCTL_QUEUE_MODE_LAUNCHT	0x00000001
 #define IGC_TXQCTL_STRICT_CYCLE		0x00000002
@@ -584,7 +595,6 @@
 #define IGC_GEN_POLL_TIMEOUT	1920
 
 /* PHY Control Register */
-#define MII_CR_FULL_DUPLEX	0x0100  /* FDX =1, half duplex =0 */
 #define MII_CR_RESTART_AUTO_NEG	0x0200  /* Restart auto negotiation */
 #define MII_CR_POWER_DOWN	0x0800  /* Power down */
 #define MII_CR_AUTO_NEG_EN	0x1000  /* Auto Neg Enable */
@@ -605,9 +615,6 @@
 #define PHY_1000T_CTRL		0x09 /* 1000Base-T Control Reg */
 #define PHY_1000T_STATUS	0x0A /* 1000Base-T Status Reg */
 
-/* Bit definitions for valid PHY IDs. I = Integrated E = External */
-#define I225_I_PHY_ID		0x67C9DC00
-
 /* MDI Control */
 #define IGC_MDIC_DATA_MASK	0x0000FFFF
 #define IGC_MDIC_REG_MASK	0x001F0000
@@ -617,7 +624,6 @@
 #define IGC_MDIC_OP_WRITE	0x04000000
 #define IGC_MDIC_OP_READ	0x08000000
 #define IGC_MDIC_READY		0x10000000
-#define IGC_MDIC_INT_EN		0x20000000
 #define IGC_MDIC_ERROR		0x40000000
 
 #define IGC_N0_QUEUE		-1
@@ -656,9 +662,6 @@
  */
 #define IGC_TW_SYSTEM_100_MASK		0x0000FF00
 #define IGC_TW_SYSTEM_100_SHIFT		8
-#define IGC_DMACR_DMAC_EN		0x80000000 /* Enable DMA Coalescing */
-#define IGC_DMACR_DMACTHR_MASK		0x00FF0000
-#define IGC_DMACR_DMACTHR_SHIFT		16
 /* Reg val to set scale to 1024 nsec */
 #define IGC_LTRMINV_SCALE_1024		2
 /* Reg val to set scale to 32768 nsec */

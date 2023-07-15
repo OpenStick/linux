@@ -18,7 +18,6 @@
 #include <linux/ipv6.h>
 #include <linux/inetdevice.h>
 #include <linux/sysfs.h>
-#include <linux/aer.h>
 
 MODULE_DESCRIPTION("QLogic/NetXen (1/10) GbE Intelligent Ethernet Driver");
 MODULE_LICENSE("GPL");
@@ -173,8 +172,7 @@ netxen_napi_add(struct netxen_adapter *adapter, struct net_device *netdev)
 
 	for (ring = 0; ring < adapter->max_sds_rings; ring++) {
 		sds_ring = &recv_ctx->sds_rings[ring];
-		netif_napi_add(netdev, &sds_ring->napi,
-				netxen_nic_poll, NAPI_POLL_WEIGHT);
+		netif_napi_add(netdev, &sds_ring->napi, netxen_nic_poll);
 	}
 
 	return 0;
@@ -463,6 +461,7 @@ netxen_read_mac_addr(struct netxen_adapter *adapter)
 	u64 mac_addr;
 	struct net_device *netdev = adapter->netdev;
 	struct pci_dev *pdev = adapter->pdev;
+	u8 addr[ETH_ALEN];
 
 	if (NX_IS_REVISION_P3(adapter->ahw.revision_id)) {
 		if (netxen_p3_get_mac_addr(adapter, &mac_addr) != 0)
@@ -474,7 +473,8 @@ netxen_read_mac_addr(struct netxen_adapter *adapter)
 
 	p = (unsigned char *)&mac_addr;
 	for (i = 0; i < 6; i++)
-		netdev->dev_addr[i] = *(p + 5 - i);
+		addr[i] = *(p + 5 - i);
+	eth_hw_addr_set(netdev, addr);
 
 	memcpy(adapter->mac_addr, netdev->dev_addr, netdev->addr_len);
 
@@ -500,7 +500,7 @@ static int netxen_nic_set_mac(struct net_device *netdev, void *p)
 	}
 
 	memcpy(adapter->mac_addr, addr->sa_data, netdev->addr_len);
-	memcpy(netdev->dev_addr, addr->sa_data, netdev->addr_len);
+	eth_hw_addr_set(netdev, addr->sa_data);
 	adapter->macaddr_set(adapter, addr->sa_data);
 
 	if (netif_running(netdev)) {
@@ -842,7 +842,7 @@ netxen_check_options(struct netxen_adapter *adapter)
 	adapter->fw_version = NETXEN_VERSION_CODE(fw_major, fw_minor, fw_build);
 
 	/* Get FW Mini Coredump template and store it */
-	 if (NX_IS_REVISION_P3(adapter->ahw.revision_id)) {
+	if (NX_IS_REVISION_P3(adapter->ahw.revision_id)) {
 		if (adapter->mdump.md_template == NULL ||
 				adapter->fw_version > prev_fw_version) {
 			kfree(adapter->mdump.md_template);
@@ -1463,9 +1463,6 @@ netxen_nic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if ((err = pci_request_regions(pdev, netxen_nic_driver_name)))
 		goto err_out_disable_pdev;
 
-	if (NX_IS_REVISION_P3(pdev->revision))
-		pci_enable_pcie_error_reporting(pdev);
-
 	pci_set_master(pdev);
 
 	netdev = alloc_etherdev(sizeof(struct netxen_adapter));
@@ -1602,8 +1599,6 @@ err_out_free_netdev:
 	free_netdev(netdev);
 
 err_out_free_res:
-	if (NX_IS_REVISION_P3(pdev->revision))
-		pci_disable_pcie_error_reporting(pdev);
 	pci_release_regions(pdev);
 
 err_out_disable_pdev:
@@ -1658,10 +1653,8 @@ static void netxen_nic_remove(struct pci_dev *pdev)
 
 	netxen_release_firmware(adapter);
 
-	if (NX_IS_REVISION_P3(pdev->revision)) {
+	if (NX_IS_REVISION_P3(pdev->revision))
 		netxen_cleanup_minidump(adapter);
-		pci_disable_pcie_error_reporting(pdev);
-	}
 
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
@@ -1861,7 +1854,7 @@ netxen_tso_check(struct net_device *netdev,
 
 	if (protocol == cpu_to_be16(ETH_P_8021Q)) {
 
-		vh = (struct vlan_ethhdr *)skb->data;
+		vh = skb_vlan_eth_hdr(skb);
 		protocol = vh->h_vlan_encapsulated_proto;
 		flags = FLAGS_VLAN_TAGGED;
 
@@ -1875,7 +1868,7 @@ netxen_tso_check(struct net_device *netdev,
 	if ((netdev->features & (NETIF_F_TSO | NETIF_F_TSO6)) &&
 			skb_shinfo(skb)->gso_size > 0) {
 
-		hdr_len = skb_transport_offset(skb) + tcp_hdrlen(skb);
+		hdr_len = skb_tcp_all_headers(skb);
 
 		first_desc->mss = cpu_to_le16(skb_shinfo(skb)->gso_size);
 		first_desc->total_hdr_length = hdr_len;

@@ -15,8 +15,6 @@
 #include <bpf/bpf_helpers.h>
 #include "test_select_reuseport_common.h"
 
-int _version SEC("version") = 1;
-
 #ifndef offsetof
 #define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
 #endif
@@ -24,8 +22,8 @@ int _version SEC("version") = 1;
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY_OF_MAPS);
 	__uint(max_entries, 1);
-	__uint(key_size, sizeof(__u32));
-	__uint(value_size, sizeof(__u32));
+	__type(key, __u32);
+	__type(value, __u32);
 } outer_map SEC(".maps");
 
 struct {
@@ -66,7 +64,7 @@ SEC("sk_reuseport")
 int _select_by_skb_data(struct sk_reuseport_md *reuse_md)
 {
 	__u32 linum, index = 0, flags = 0, index_zero = 0;
-	__u32 *result_cnt, *linum_value;
+	__u32 *result_cnt;
 	struct data_check data_check = {};
 	struct cmd *cmd, cmd_copy;
 	void *data, *data_end;

@@ -113,6 +113,9 @@ static int savu_probe(struct hid_device *hdev,
 {
 	int retval;
 
+	if (!hid_is_usb(hdev))
+		return -EINVAL;
+
 	retval = hid_parse(hdev);
 	if (retval) {
 		hid_err(hdev, "parse failed\n");
@@ -201,7 +204,7 @@ static int __init savu_init(void)
 {
 	int retval;
 
-	savu_class = class_create(THIS_MODULE, "savu");
+	savu_class = class_create("savu");
 	if (IS_ERR(savu_class))
 		return PTR_ERR(savu_class);
 	savu_class->dev_groups = savu_groups;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2021 FIXME
+// Copyright (c) 2023 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -28,22 +28,6 @@ static inline struct inx_500_v0 *to_inx_500_v0(struct drm_panel *panel)
 	return container_of(panel, struct inx_500_v0, panel);
 }
 
-#define dsi_generic_write_seq(dsi, seq...) do {				\
-		static const u8 d[] = { seq };				\
-		int ret;						\
-		ret = mipi_dsi_generic_write(dsi, d, ARRAY_SIZE(d));	\
-		if (ret < 0)						\
-			return ret;					\
-	} while (0)
-
-#define dsi_dcs_write_seq(dsi, seq...) do {				\
-		static const u8 d[] = { seq };				\
-		int ret;						\
-		ret = mipi_dsi_dcs_write_buffer(dsi, d, ARRAY_SIZE(d));	\
-		if (ret < 0)						\
-			return ret;					\
-	} while (0)
-
 static void inx_500_v0_reset(struct inx_500_v0 *ctx)
 {
 	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
@@ -62,12 +46,12 @@ static int inx_500_v0_on(struct inx_500_v0 *ctx)
 	struct device *dev = &dsi->dev;
 	int ret;
 
-	dsi_generic_write_seq(dsi, 0xf0, 0x55, 0xaa, 0x52, 0x08, 0x00);
-	dsi_generic_write_seq(dsi, 0xe8,
-			      0xf3, 0xd9, 0xcc, 0xc0, 0xb8, 0xb0, 0xa0, 0xa0,
-			      0xa0, 0x9c);
-	dsi_generic_write_seq(dsi, 0xd9, 0x03, 0x06);
-	dsi_generic_write_seq(dsi, 0xea, 0x09);
+	mipi_dsi_generic_write_seq(dsi, 0xf0, 0x55, 0xaa, 0x52, 0x08, 0x00);
+	mipi_dsi_generic_write_seq(dsi, 0xe8,
+				   0xf3, 0xd9, 0xcc, 0xc0, 0xb8, 0xb0, 0xa0,
+				   0xa0, 0xa0, 0x9c);
+	mipi_dsi_generic_write_seq(dsi, 0xd9, 0x03, 0x06);
+	mipi_dsi_generic_write_seq(dsi, 0xea, 0x09);
 
 	ret = mipi_dsi_dcs_exit_sleep_mode(dsi);
 	if (ret < 0) {
@@ -82,9 +66,9 @@ static int inx_500_v0_on(struct inx_500_v0 *ctx)
 		return ret;
 	}
 
-	dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x2c);
-	dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_POWER_SAVE, 0x01);
-	dsi_dcs_write_seq(dsi, MIPI_DCS_SET_ADDRESS_MODE, 0x03);
+	mipi_dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x2c);
+	mipi_dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_POWER_SAVE, 0x01);
+	mipi_dsi_dcs_write_seq(dsi, MIPI_DCS_SET_ADDRESS_MODE, 0x03);
 
 	ret = mipi_dsi_dcs_set_display_on(dsi);
 	if (ret < 0) {
@@ -256,7 +240,7 @@ static int inx_500_v0_probe(struct mipi_dsi_device *dsi)
 	return 0;
 }
 
-static int inx_500_v0_remove(struct mipi_dsi_device *dsi)
+static void inx_500_v0_remove(struct mipi_dsi_device *dsi)
 {
 	struct inx_500_v0 *ctx = mipi_dsi_get_drvdata(dsi);
 	int ret;
@@ -266,8 +250,6 @@ static int inx_500_v0_remove(struct mipi_dsi_device *dsi)
 		dev_err(&dsi->dev, "Failed to detach from DSI host: %d\n", ret);
 
 	drm_panel_remove(&ctx->panel);
-
-	return 0;
 }
 
 static const struct of_device_id inx_500_v0_of_match[] = {
@@ -288,4 +270,4 @@ module_mipi_dsi_driver(inx_500_v0_driver);
 
 MODULE_AUTHOR("linux-mdss-dsi-panel-driver-generator <fix@me>"); // FIXME
 MODULE_DESCRIPTION("DRM driver for mipi_mot_video_inx_720p_500_v0");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

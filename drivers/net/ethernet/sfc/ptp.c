@@ -33,6 +33,7 @@
 #include <linux/ip.h>
 #include <linux/udp.h>
 #include <linux/time.h>
+#include <linux/errno.h>
 #include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/pps_kernel.h>
@@ -45,6 +46,7 @@
 #include "farch_regs.h"
 #include "tx.h"
 #include "nic.h" /* indirectly includes ptp.h */
+#include "efx_channels.h"
 
 /* Maximum number of events expected to make up a PTP event */
 #define	MAX_EVENT_FRAGS			3
@@ -72,6 +74,9 @@
 
 /* How long an unmatched event or packet can be held */
 #define PKT_EVENT_LIFETIME_MS		10
+
+/* How long unused unicast filters can be held */
+#define UCAST_FILTER_EXPIRY_JIFFIES	msecs_to_jiffies(30000)
 
 /* Offsets into PTP packet for identification.  These offsets are from the
  * start of the IP header, not the MAC header.  Note that neither PTP V1 nor
@@ -117,9 +122,12 @@
 
 #define	PTP_MIN_LENGTH		63
 
-#define PTP_ADDRESS		0xe0000181	/* 224.0.1.129 */
+#define PTP_ADDR_IPV4		0xe0000181	/* 224.0.1.129 */
+#define PTP_ADDR_IPV6		{0xff, 0x0e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, \
+				0, 0x01, 0x81}	/* ff0e::181 */
 #define PTP_EVENT_PORT		319
 #define PTP_GENERAL_PORT	320
+#define PTP_ADDR_ETHER		{0x01, 0x1b, 0x19, 0, 0, 0} /* 01-1B-19-00-00-00 */
 
 /* Annoyingly the format of the version numbers are different between
  * versions 1 and 2 so it isn't possible to simply look for 1 or 2.
@@ -208,6 +216,24 @@ struct efx_ptp_timeset {
 };
 
 /**
+ * struct efx_ptp_rxfilter - Filter for PTP packets
+ * @list: Node of the list where the filter is added
+ * @ether_type: Network protocol of the filter (ETHER_P_IP / ETHER_P_IPV6)
+ * @loc_port: UDP port of the filter (PTP_EVENT_PORT / PTP_GENERAL_PORT)
+ * @loc_host: IPv4/v6 address of the filter
+ * @expiry: time when the filter expires, in jiffies
+ * @handle: Handle ID for the MCDI filters table
+ */
+struct efx_ptp_rxfilter {
+	struct list_head list;
+	__be16 ether_type;
+	__be16 loc_port;
+	__be32 loc_host[4];
+	unsigned long expiry;
+	int handle;
+};
+
+/**
  * struct efx_ptp_data - Precision Time Protocol (PTP) state
  * @efx: The NIC context
  * @channel: The PTP channel (Siena only)
@@ -221,11 +247,11 @@ struct efx_ptp_timeset {
  * @rx_evts: Instantiated events (on evt_list and evt_free_list)
  * @workwq: Work queue for processing pending PTP operations
  * @work: Work task
+ * @cleanup_work: Work task for periodic cleanup
  * @reset_required: A serious error has occurred and the PTP task needs to be
  *                  reset (disable, enable).
- * @rxfilter_event: Receive filter when operating
- * @rxfilter_general: Receive filter when operating
- * @rxfilter_installed: Receive filter installed
+ * @rxfilters_mcast: Receive filters for multicast PTP packets
+ * @rxfilters_ucast: Receive filters for unicast PTP packets
  * @config: Current timestamp configuration
  * @enabled: PTP operation enabled
  * @mode: Mode in which PTP operating (PTP version)
@@ -293,10 +319,10 @@ struct efx_ptp_data {
 	struct efx_ptp_event_rx rx_evts[MAX_RECEIVE_EVENTS];
 	struct workqueue_struct *workwq;
 	struct work_struct work;
+	struct delayed_work cleanup_work;
 	bool reset_required;
-	u32 rxfilter_event;
-	u32 rxfilter_general;
-	bool rxfilter_installed;
+	struct list_head rxfilters_mcast;
+	struct list_head rxfilters_ucast;
 	struct hwtstamp_config config;
 	bool enabled;
 	unsigned int mode;
@@ -347,13 +373,15 @@ struct efx_ptp_data {
 	void (*xmit_skb)(struct efx_nic *efx, struct sk_buff *skb);
 };
 
-static int efx_phc_adjfreq(struct ptp_clock_info *ptp, s32 delta);
+static int efx_phc_adjfine(struct ptp_clock_info *ptp, long scaled_ppm);
 static int efx_phc_adjtime(struct ptp_clock_info *ptp, s64 delta);
 static int efx_phc_gettime(struct ptp_clock_info *ptp, struct timespec64 *ts);
 static int efx_phc_settime(struct ptp_clock_info *ptp,
 			   const struct timespec64 *e_ts);
 static int efx_phc_enable(struct ptp_clock_info *ptp,
 			  struct ptp_clock_request *request, int on);
+static int efx_ptp_insert_unicast_filter(struct efx_nic *efx,
+					 struct sk_buff *skb);
 
 bool efx_ptp_use_mac_tx_timestamps(struct efx_nic *efx)
 {
@@ -539,6 +567,12 @@ static ktime_t efx_ptp_s_qns_to_ktime_correction(u32 nic_major, u32 nic_minor,
 struct efx_channel *efx_ptp_channel(struct efx_nic *efx)
 {
 	return efx->ptp_data ? efx->ptp_data->channel : NULL;
+}
+
+void efx_ptp_update_channel(struct efx_nic *efx, struct efx_channel *channel)
+{
+	if (efx->ptp_data)
+		efx->ptp_data->channel = channel;
 }
 
 static u32 last_sync_timestamp_major(struct efx_nic *efx)
@@ -1093,7 +1127,38 @@ static void efx_ptp_xmit_skb_queue(struct efx_nic *efx, struct sk_buff *skb)
 
 	tx_queue = efx_channel_get_tx_queue(ptp_data->channel, type);
 	if (tx_queue && tx_queue->timestamping) {
+		skb_get(skb);
+
+		/* This code invokes normal driver TX code which is always
+		 * protected from softirqs when called from generic TX code,
+		 * which in turn disables preemption. Look at __dev_queue_xmit
+		 * which uses rcu_read_lock_bh disabling preemption for RCU
+		 * plus disabling softirqs. We do not need RCU reader
+		 * protection here.
+		 *
+		 * Although it is theoretically safe for current PTP TX/RX code
+		 * running without disabling softirqs, there are three good
+		 * reasond for doing so:
+		 *
+		 *      1) The code invoked is mainly implemented for non-PTP
+		 *         packets and it is always executed with softirqs
+		 *         disabled.
+		 *      2) This being a single PTP packet, better to not
+		 *         interrupt its processing by softirqs which can lead
+		 *         to high latencies.
+		 *      3) netdev_xmit_more checks preemption is disabled and
+		 *         triggers a BUG_ON if not.
+		 */
+		local_bh_disable();
 		efx_enqueue_skb(tx_queue, skb);
+		local_bh_enable();
+
+		/* We need to add the filters after enqueuing the packet.
+		 * Otherwise, there's high latency in sending back the
+		 * timestamp, causing ptp4l timeouts
+		 */
+		efx_ptp_insert_unicast_filter(efx, skb);
+		dev_consume_skb_any(skb);
 	} else {
 		WARN_ONCE(1, "PTP channel has no timestamped tx queue\n");
 		dev_kfree_skb_any(skb);
@@ -1103,11 +1168,11 @@ static void efx_ptp_xmit_skb_queue(struct efx_nic *efx, struct sk_buff *skb)
 /* Transmit a PTP packet, via the MCDI interface, to the wire. */
 static void efx_ptp_xmit_skb_mc(struct efx_nic *efx, struct sk_buff *skb)
 {
+	MCDI_DECLARE_BUF(txtime, MC_CMD_PTP_OUT_TRANSMIT_LEN);
 	struct efx_ptp_data *ptp_data = efx->ptp_data;
 	struct skb_shared_hwtstamps timestamps;
-	int rc = -EIO;
-	MCDI_DECLARE_BUF(txtime, MC_CMD_PTP_OUT_TRANSMIT_LEN);
 	size_t len;
+	int rc;
 
 	MCDI_SET_DWORD(ptp_data->txbuf, PTP_IN_OP, MC_CMD_PTP_OP_TRANSMIT);
 	MCDI_SET_DWORD(ptp_data->txbuf, PTP_IN_PERIPH_ID, 0);
@@ -1141,7 +1206,10 @@ static void efx_ptp_xmit_skb_mc(struct efx_nic *efx, struct sk_buff *skb)
 
 	skb_tstamp_tx(skb, &timestamps);
 
-	rc = 0;
+	/* Add the filters after sending back the timestamp to avoid delaying it
+	 * or ptp4l may timeout.
+	 */
+	efx_ptp_insert_unicast_filter(efx, skb);
 
 fail:
 	dev_kfree_skb_any(skb);
@@ -1257,65 +1325,231 @@ static inline void efx_ptp_process_rx(struct efx_nic *efx, struct sk_buff *skb)
 	local_bh_enable();
 }
 
-static void efx_ptp_remove_multicast_filters(struct efx_nic *efx)
+static struct efx_ptp_rxfilter *
+efx_ptp_find_filter(struct list_head *filter_list, struct efx_filter_spec *spec)
+{
+	struct efx_ptp_rxfilter *rxfilter;
+
+	list_for_each_entry(rxfilter, filter_list, list) {
+		if (rxfilter->ether_type == spec->ether_type &&
+		    rxfilter->loc_port == spec->loc_port &&
+		    !memcmp(rxfilter->loc_host, spec->loc_host, sizeof(spec->loc_host)))
+			return rxfilter;
+	}
+
+	return NULL;
+}
+
+static void efx_ptp_remove_one_filter(struct efx_nic *efx,
+				      struct efx_ptp_rxfilter *rxfilter)
+{
+	efx_filter_remove_id_safe(efx, EFX_FILTER_PRI_REQUIRED,
+				  rxfilter->handle);
+	list_del(&rxfilter->list);
+	kfree(rxfilter);
+}
+
+static void efx_ptp_remove_filters(struct efx_nic *efx,
+				   struct list_head *filter_list)
+{
+	struct efx_ptp_rxfilter *rxfilter, *tmp;
+
+	list_for_each_entry_safe(rxfilter, tmp, filter_list, list)
+		efx_ptp_remove_one_filter(efx, rxfilter);
+}
+
+static void efx_ptp_init_filter(struct efx_nic *efx,
+				struct efx_filter_spec *rxfilter)
+{
+	struct efx_channel *channel = efx->ptp_data->channel;
+	struct efx_rx_queue *queue = efx_channel_get_rx_queue(channel);
+
+	efx_filter_init_rx(rxfilter, EFX_FILTER_PRI_REQUIRED, 0,
+			   efx_rx_queue_index(queue));
+}
+
+static int efx_ptp_insert_filter(struct efx_nic *efx,
+				 struct list_head *filter_list,
+				 struct efx_filter_spec *spec,
+				 unsigned long expiry)
 {
 	struct efx_ptp_data *ptp = efx->ptp_data;
+	struct efx_ptp_rxfilter *rxfilter;
+	int rc;
 
-	if (ptp->rxfilter_installed) {
-		efx_filter_remove_id_safe(efx, EFX_FILTER_PRI_REQUIRED,
-					  ptp->rxfilter_general);
-		efx_filter_remove_id_safe(efx, EFX_FILTER_PRI_REQUIRED,
-					  ptp->rxfilter_event);
-		ptp->rxfilter_installed = false;
+	rxfilter = efx_ptp_find_filter(filter_list, spec);
+	if (rxfilter) {
+		rxfilter->expiry = expiry;
+		return 0;
 	}
+
+	rxfilter = kzalloc(sizeof(*rxfilter), GFP_KERNEL);
+	if (!rxfilter)
+		return -ENOMEM;
+
+	rc = efx_filter_insert_filter(efx, spec, true);
+	if (rc < 0)
+		goto fail;
+
+	rxfilter->handle = rc;
+	rxfilter->ether_type = spec->ether_type;
+	rxfilter->loc_port = spec->loc_port;
+	memcpy(rxfilter->loc_host, spec->loc_host, sizeof(spec->loc_host));
+	rxfilter->expiry = expiry;
+	list_add(&rxfilter->list, filter_list);
+
+	queue_delayed_work(ptp->workwq, &ptp->cleanup_work,
+			   UCAST_FILTER_EXPIRY_JIFFIES + 1);
+
+	return 0;
+
+fail:
+	kfree(rxfilter);
+	return rc;
+}
+
+static int efx_ptp_insert_ipv4_filter(struct efx_nic *efx,
+				      struct list_head *filter_list,
+				      __be32 addr, u16 port,
+				      unsigned long expiry)
+{
+	struct efx_filter_spec spec;
+
+	efx_ptp_init_filter(efx, &spec);
+	efx_filter_set_ipv4_local(&spec, IPPROTO_UDP, addr, htons(port));
+	return efx_ptp_insert_filter(efx, filter_list, &spec, expiry);
+}
+
+static int efx_ptp_insert_ipv6_filter(struct efx_nic *efx,
+				      struct list_head *filter_list,
+				      struct in6_addr *addr, u16 port,
+				      unsigned long expiry)
+{
+	struct efx_filter_spec spec;
+
+	efx_ptp_init_filter(efx, &spec);
+	efx_filter_set_ipv6_local(&spec, IPPROTO_UDP, addr, htons(port));
+	return efx_ptp_insert_filter(efx, filter_list, &spec, expiry);
+}
+
+static int efx_ptp_insert_eth_multicast_filter(struct efx_nic *efx)
+{
+	struct efx_ptp_data *ptp = efx->ptp_data;
+	const u8 addr[ETH_ALEN] = PTP_ADDR_ETHER;
+	struct efx_filter_spec spec;
+
+	efx_ptp_init_filter(efx, &spec);
+	efx_filter_set_eth_local(&spec, EFX_FILTER_VID_UNSPEC, addr);
+	spec.match_flags |= EFX_FILTER_MATCH_ETHER_TYPE;
+	spec.ether_type = htons(ETH_P_1588);
+	return efx_ptp_insert_filter(efx, &ptp->rxfilters_mcast, &spec, 0);
 }
 
 static int efx_ptp_insert_multicast_filters(struct efx_nic *efx)
 {
 	struct efx_ptp_data *ptp = efx->ptp_data;
-	struct efx_filter_spec rxfilter;
 	int rc;
 
-	if (!ptp->channel || ptp->rxfilter_installed)
+	if (!ptp->channel || !list_empty(&ptp->rxfilters_mcast))
 		return 0;
 
 	/* Must filter on both event and general ports to ensure
 	 * that there is no packet re-ordering.
 	 */
-	efx_filter_init_rx(&rxfilter, EFX_FILTER_PRI_REQUIRED, 0,
-			   efx_rx_queue_index(
-				   efx_channel_get_rx_queue(ptp->channel)));
-	rc = efx_filter_set_ipv4_local(&rxfilter, IPPROTO_UDP,
-				       htonl(PTP_ADDRESS),
-				       htons(PTP_EVENT_PORT));
-	if (rc != 0)
-		return rc;
-
-	rc = efx_filter_insert_filter(efx, &rxfilter, true);
-	if (rc < 0)
-		return rc;
-	ptp->rxfilter_event = rc;
-
-	efx_filter_init_rx(&rxfilter, EFX_FILTER_PRI_REQUIRED, 0,
-			   efx_rx_queue_index(
-				   efx_channel_get_rx_queue(ptp->channel)));
-	rc = efx_filter_set_ipv4_local(&rxfilter, IPPROTO_UDP,
-				       htonl(PTP_ADDRESS),
-				       htons(PTP_GENERAL_PORT));
-	if (rc != 0)
-		goto fail;
-
-	rc = efx_filter_insert_filter(efx, &rxfilter, true);
+	rc = efx_ptp_insert_ipv4_filter(efx, &ptp->rxfilters_mcast,
+					htonl(PTP_ADDR_IPV4), PTP_EVENT_PORT,
+					0);
 	if (rc < 0)
 		goto fail;
-	ptp->rxfilter_general = rc;
 
-	ptp->rxfilter_installed = true;
+	rc = efx_ptp_insert_ipv4_filter(efx, &ptp->rxfilters_mcast,
+					htonl(PTP_ADDR_IPV4), PTP_GENERAL_PORT,
+					0);
+	if (rc < 0)
+		goto fail;
+
+	/* if the NIC supports hw timestamps by the MAC, we can support
+	 * PTP over IPv6 and Ethernet
+	 */
+	if (efx_ptp_use_mac_tx_timestamps(efx)) {
+		struct in6_addr ipv6_addr = {{PTP_ADDR_IPV6}};
+
+		rc = efx_ptp_insert_ipv6_filter(efx, &ptp->rxfilters_mcast,
+						&ipv6_addr, PTP_EVENT_PORT, 0);
+		if (rc < 0)
+			goto fail;
+
+		rc = efx_ptp_insert_ipv6_filter(efx, &ptp->rxfilters_mcast,
+						&ipv6_addr, PTP_GENERAL_PORT, 0);
+		if (rc < 0)
+			goto fail;
+
+		rc = efx_ptp_insert_eth_multicast_filter(efx);
+		if (rc < 0)
+			goto fail;
+	}
+
 	return 0;
 
 fail:
-	efx_filter_remove_id_safe(efx, EFX_FILTER_PRI_REQUIRED,
-				  ptp->rxfilter_event);
+	efx_ptp_remove_filters(efx, &ptp->rxfilters_mcast);
+	return rc;
+}
+
+static bool efx_ptp_valid_unicast_event_pkt(struct sk_buff *skb)
+{
+	if (skb->protocol == htons(ETH_P_IP)) {
+		return ip_hdr(skb)->daddr != htonl(PTP_ADDR_IPV4) &&
+			ip_hdr(skb)->protocol == IPPROTO_UDP &&
+			udp_hdr(skb)->source == htons(PTP_EVENT_PORT);
+	} else if (skb->protocol == htons(ETH_P_IPV6)) {
+		struct in6_addr mcast_addr = {{PTP_ADDR_IPV6}};
+
+		return !ipv6_addr_equal(&ipv6_hdr(skb)->daddr, &mcast_addr) &&
+			ipv6_hdr(skb)->nexthdr == IPPROTO_UDP &&
+			udp_hdr(skb)->source == htons(PTP_EVENT_PORT);
+	}
+	return false;
+}
+
+static int efx_ptp_insert_unicast_filter(struct efx_nic *efx,
+					 struct sk_buff *skb)
+{
+	struct efx_ptp_data *ptp = efx->ptp_data;
+	unsigned long expiry;
+	int rc;
+
+	if (!efx_ptp_valid_unicast_event_pkt(skb))
+		return -EINVAL;
+
+	expiry = jiffies + UCAST_FILTER_EXPIRY_JIFFIES;
+
+	if (skb->protocol == htons(ETH_P_IP)) {
+		__be32 addr = ip_hdr(skb)->saddr;
+
+		rc = efx_ptp_insert_ipv4_filter(efx, &ptp->rxfilters_ucast,
+						addr, PTP_EVENT_PORT, expiry);
+		if (rc < 0)
+			goto out;
+
+		rc = efx_ptp_insert_ipv4_filter(efx, &ptp->rxfilters_ucast,
+						addr, PTP_GENERAL_PORT, expiry);
+	} else if (efx_ptp_use_mac_tx_timestamps(efx)) {
+		/* IPv6 PTP only supported by devices with MAC hw timestamp */
+		struct in6_addr *addr = &ipv6_hdr(skb)->saddr;
+
+		rc = efx_ptp_insert_ipv6_filter(efx, &ptp->rxfilters_ucast,
+						addr, PTP_EVENT_PORT, expiry);
+		if (rc < 0)
+			goto out;
+
+		rc = efx_ptp_insert_ipv6_filter(efx, &ptp->rxfilters_ucast,
+						addr, PTP_GENERAL_PORT, expiry);
+	} else {
+		return -EOPNOTSUPP;
+	}
+
+out:
 	return rc;
 }
 
@@ -1340,7 +1574,7 @@ static int efx_ptp_start(struct efx_nic *efx)
 	return 0;
 
 fail:
-	efx_ptp_remove_multicast_filters(efx);
+	efx_ptp_remove_filters(efx, &ptp->rxfilters_mcast);
 	return rc;
 }
 
@@ -1356,7 +1590,8 @@ static int efx_ptp_stop(struct efx_nic *efx)
 
 	rc = efx_ptp_disable(efx);
 
-	efx_ptp_remove_multicast_filters(efx);
+	efx_ptp_remove_filters(efx, &ptp->rxfilters_mcast);
+	efx_ptp_remove_filters(efx, &ptp->rxfilters_ucast);
 
 	/* Make sure RX packets are really delivered */
 	efx_ptp_deliver_rx_queue(&efx->ptp_data->rxq);
@@ -1420,6 +1655,23 @@ static void efx_ptp_worker(struct work_struct *work)
 		efx_ptp_process_rx(efx, skb);
 }
 
+static void efx_ptp_cleanup_worker(struct work_struct *work)
+{
+	struct efx_ptp_data *ptp =
+		container_of(work, struct efx_ptp_data, cleanup_work.work);
+	struct efx_ptp_rxfilter *rxfilter, *tmp;
+
+	list_for_each_entry_safe(rxfilter, tmp, &ptp->rxfilters_ucast, list) {
+		if (time_is_before_jiffies(rxfilter->expiry))
+			efx_ptp_remove_one_filter(ptp->efx, rxfilter);
+	}
+
+	if (!list_empty(&ptp->rxfilters_ucast)) {
+		queue_delayed_work(ptp->workwq, &ptp->cleanup_work,
+				   UCAST_FILTER_EXPIRY_JIFFIES + 1);
+	}
+}
+
 static const struct ptp_clock_info efx_phc_clock_info = {
 	.owner		= THIS_MODULE,
 	.name		= "sfc",
@@ -1429,7 +1681,7 @@ static const struct ptp_clock_info efx_phc_clock_info = {
 	.n_per_out	= 0,
 	.n_pins		= 0,
 	.pps		= 1,
-	.adjfreq	= efx_phc_adjfreq,
+	.adjfine	= efx_phc_adjfine,
 	.adjtime	= efx_phc_adjtime,
 	.gettime64	= efx_phc_gettime,
 	.settime64	= efx_phc_settime,
@@ -1442,6 +1694,11 @@ int efx_ptp_probe(struct efx_nic *efx, struct efx_channel *channel)
 	struct efx_ptp_data *ptp;
 	int rc = 0;
 	unsigned int pos;
+
+	if (efx->ptp_data) {
+		efx->ptp_data->channel = channel;
+		return 0;
+	}
 
 	ptp = kzalloc(sizeof(struct efx_ptp_data), GFP_KERNEL);
 	efx->ptp_data = ptp;
@@ -1473,6 +1730,7 @@ int efx_ptp_probe(struct efx_nic *efx, struct efx_channel *channel)
 	}
 
 	INIT_WORK(&ptp->work, efx_ptp_worker);
+	INIT_DELAYED_WORK(&ptp->cleanup_work, efx_ptp_cleanup_worker);
 	ptp->config.flags = 0;
 	ptp->config.tx_type = HWTSTAMP_TX_OFF;
 	ptp->config.rx_filter = HWTSTAMP_FILTER_NONE;
@@ -1481,6 +1739,9 @@ int efx_ptp_probe(struct efx_nic *efx, struct efx_channel *channel)
 	spin_lock_init(&ptp->evt_lock);
 	for (pos = 0; pos < MAX_RECEIVE_EVENTS; pos++)
 		list_add(&ptp->rx_evts[pos].link, &ptp->evt_free_list);
+
+	INIT_LIST_HEAD(&ptp->rxfilters_mcast);
+	INIT_LIST_HEAD(&ptp->rxfilters_ucast);
 
 	/* Get the NIC PTP attributes and set up time conversions */
 	rc = efx_ptp_get_attributes(efx);
@@ -1561,6 +1822,7 @@ void efx_ptp_remove(struct efx_nic *efx)
 	(void)efx_ptp_disable(efx);
 
 	cancel_work_sync(&efx->ptp_data->work);
+	cancel_delayed_work_sync(&efx->ptp_data->cleanup_work);
 	if (efx->ptp_data->pps_workwq)
 		cancel_work_sync(&efx->ptp_data->pps_work);
 
@@ -1764,9 +2026,6 @@ int efx_ptp_change_mode(struct efx_nic *efx, bool enable_wanted,
 static int efx_ptp_ts_init(struct efx_nic *efx, struct hwtstamp_config *init)
 {
 	int rc;
-
-	if (init->flags)
-		return -EINVAL;
 
 	if ((init->tx_type != HWTSTAMP_TX_OFF) &&
 	    (init->tx_type != HWTSTAMP_TX_ON))
@@ -2056,11 +2315,12 @@ void __efx_rx_skb_attach_timestamp(struct efx_channel *channel,
 					ptp->ts_corrections.general_rx);
 }
 
-static int efx_phc_adjfreq(struct ptp_clock_info *ptp, s32 delta)
+static int efx_phc_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
 {
 	struct efx_ptp_data *ptp_data = container_of(ptp,
 						     struct efx_ptp_data,
 						     phc_clock_info);
+	s32 delta = scaled_ppm_to_ppb(scaled_ppm);
 	struct efx_nic *efx = ptp_data->efx;
 	MCDI_DECLARE_BUF(inadj, MC_CMD_PTP_IN_ADJUST_LEN);
 	s64 adjustment_ns;
@@ -2179,7 +2439,7 @@ static const struct efx_channel_type efx_ptp_channel_type = {
 	.pre_probe		= efx_ptp_probe_channel,
 	.post_remove		= efx_ptp_remove_channel,
 	.get_name		= efx_ptp_get_channel_name,
-	/* no copy operation; there is no need to reallocate this channel */
+	.copy                   = efx_copy_channel,
 	.receive_skb		= efx_ptp_rx,
 	.want_txqs		= efx_ptp_want_txqs,
 	.keep_eventq		= false,

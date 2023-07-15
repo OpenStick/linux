@@ -58,16 +58,6 @@ int sparx5_vlan_vid_add(struct sparx5_port *port, u16 vid, bool pvid,
 	struct sparx5 *sparx5 = port->sparx5;
 	int ret;
 
-	/* Make the port a member of the VLAN */
-	set_bit(port->portno, sparx5->vlan_mask[vid]);
-	ret = sparx5_vlant_set_mask(sparx5, vid);
-	if (ret)
-		return ret;
-
-	/* Default ingress vlan classification */
-	if (pvid)
-		port->pvid = vid;
-
 	/* Untagged egress vlan classification */
 	if (untagged && port->vid != vid) {
 		if (port->vid) {
@@ -78,6 +68,16 @@ int sparx5_vlan_vid_add(struct sparx5_port *port, u16 vid, bool pvid,
 		}
 		port->vid = vid;
 	}
+
+	/* Make the port a member of the VLAN */
+	set_bit(port->portno, sparx5->vlan_mask[vid]);
+	ret = sparx5_vlant_set_mask(sparx5, vid);
+	if (ret)
+		return ret;
+
+	/* Default ingress vlan classification */
+	if (pvid)
+		port->pvid = vid;
 
 	sparx5_vlan_port_apply(sparx5, port);
 
@@ -136,6 +136,20 @@ void sparx5_pgid_update_mask(struct sparx5_port *port, int pgid, bool enable)
 	} else {
 		netdev_err(port->ndev, "Invalid port no: %d\n", port->portno);
 	}
+}
+
+void sparx5_pgid_clear(struct sparx5 *spx5, int pgid)
+{
+	spx5_wr(0, spx5, ANA_AC_PGID_CFG(pgid));
+	spx5_wr(0, spx5, ANA_AC_PGID_CFG1(pgid));
+	spx5_wr(0, spx5, ANA_AC_PGID_CFG2(pgid));
+}
+
+void sparx5_pgid_read_mask(struct sparx5 *spx5, int pgid, u32 portmask[3])
+{
+	portmask[0] = spx5_rd(spx5, ANA_AC_PGID_CFG(pgid));
+	portmask[1] = spx5_rd(spx5, ANA_AC_PGID_CFG1(pgid));
+	portmask[2] = spx5_rd(spx5, ANA_AC_PGID_CFG2(pgid));
 }
 
 void sparx5_update_fwd(struct sparx5 *sparx5)
@@ -205,8 +219,8 @@ void sparx5_vlan_port_apply(struct sparx5 *sparx5,
 	spx5_wr(val, sparx5,
 		ANA_CL_VLAN_FILTER_CTRL(port->portno, 0));
 
-	/* Egress configuration (REW_TAG_CFG): VLAN tag type to 8021Q */
-	val = REW_TAG_CTRL_TAG_TPID_CFG_SET(0);
+	/* Egress configuration (REW_TAG_CFG): VLAN tag selected via IFH */
+	val = REW_TAG_CTRL_TAG_TPID_CFG_SET(5);
 	if (port->vlan_aware) {
 		if (port->vid)
 			/* Tag all frames except when VID == DEFAULT_VLAN */

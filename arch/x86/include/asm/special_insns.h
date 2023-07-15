@@ -115,20 +115,9 @@ static inline void wrpkru(u32 pkru)
 }
 #endif
 
-static inline void native_wbinvd(void)
+static __always_inline void native_wbinvd(void)
 {
 	asm volatile("wbinvd": : :"memory");
-}
-
-extern asmlinkage void asm_load_gs_index(unsigned int selector);
-
-static inline void native_load_gs_index(unsigned int selector)
-{
-	unsigned long flags;
-
-	local_irq_save(flags);
-	asm_load_gs_index(selector);
-	local_irq_restore(flags);
 }
 
 static inline unsigned long __read_cr4(void)
@@ -179,23 +168,14 @@ static inline void __write_cr4(unsigned long x)
 	native_write_cr4(x);
 }
 
-static inline void wbinvd(void)
+static __always_inline void wbinvd(void)
 {
 	native_wbinvd();
 }
 
-#ifdef CONFIG_X86_64
-
-static inline void load_gs_index(unsigned int selector)
-{
-	native_load_gs_index(selector);
-}
-
-#endif
-
 #endif /* CONFIG_PARAVIRT_XXL */
 
-static inline void clflush(volatile void *__p)
+static __always_inline void clflush(volatile void *__p)
 {
 	asm volatile("clflush %0" : "+m" (*(volatile char __force *)__p));
 }
@@ -292,6 +272,15 @@ static inline int enqcmds(void __iomem *dst, const void *src)
 		return -EAGAIN;
 
 	return 0;
+}
+
+static __always_inline void tile_release(void)
+{
+	/*
+	 * Instruction opcode for TILERELEASE; supported in binutils
+	 * version >= 2.36.
+	 */
+	asm volatile(".byte 0xc4, 0xe2, 0x78, 0x49, 0xc0");
 }
 
 #endif /* __KERNEL__ */

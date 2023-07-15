@@ -57,12 +57,12 @@
 	};
 };
 
-&pronto {
+&wcnss {
 	status = "okay";
+};
 
-	iris {
-		compatible = "qcom,wcn3660b";
-	};
+&wcnss_iris {
+	compatible = "qcom,wcn3660b";
 };
 
 &msmgpio {

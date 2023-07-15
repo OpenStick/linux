@@ -81,62 +81,24 @@ nvkm_pmu_fini(struct nvkm_subdev *subdev, bool suspend)
 {
 	struct nvkm_pmu *pmu = nvkm_pmu(subdev);
 
+	if (!subdev->use.enabled)
+		return 0;
+
 	if (pmu->func->fini)
 		pmu->func->fini(pmu);
 
-	flush_work(&pmu->recv.work);
-
-	reinit_completion(&pmu->wpr_ready);
-
-	nvkm_falcon_cmdq_fini(pmu->lpq);
-	nvkm_falcon_cmdq_fini(pmu->hpq);
-	pmu->initmsg_received = false;
 	return 0;
-}
-
-static int
-nvkm_pmu_reset(struct nvkm_pmu *pmu)
-{
-	struct nvkm_device *device = pmu->subdev.device;
-
-	if (!pmu->func->enabled(pmu))
-		return 0;
-
-	/* Inhibit interrupts, and wait for idle. */
-	nvkm_wr32(device, 0x10a014, 0x0000ffff);
-	nvkm_msec(device, 2000,
-		if (!nvkm_rd32(device, 0x10a04c))
-			break;
-	);
-
-	/* Reset. */
-	if (pmu->func->reset)
-		pmu->func->reset(pmu);
-
-	/* Wait for IMEM/DMEM scrubbing to be complete. */
-	nvkm_msec(device, 2000,
-		if (!(nvkm_rd32(device, 0x10a10c) & 0x00000006))
-			break;
-	);
-
-	return 0;
-}
-
-static int
-nvkm_pmu_preinit(struct nvkm_subdev *subdev)
-{
-	struct nvkm_pmu *pmu = nvkm_pmu(subdev);
-	return nvkm_pmu_reset(pmu);
 }
 
 static int
 nvkm_pmu_init(struct nvkm_subdev *subdev)
 {
 	struct nvkm_pmu *pmu = nvkm_pmu(subdev);
-	int ret = nvkm_pmu_reset(pmu);
-	if (ret == 0 && pmu->func->init)
-		ret = pmu->func->init(pmu);
-	return ret;
+
+	if (!pmu->func->init)
+		return 0;
+
+	return pmu->func->init(pmu);
 }
 
 static void *
@@ -155,7 +117,6 @@ nvkm_pmu_dtor(struct nvkm_subdev *subdev)
 static const struct nvkm_subdev_func
 nvkm_pmu = {
 	.dtor = nvkm_pmu_dtor,
-	.preinit = nvkm_pmu_preinit,
 	.init = nvkm_pmu_init,
 	.fini = nvkm_pmu_fini,
 	.intr = nvkm_pmu_intr,

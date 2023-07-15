@@ -70,6 +70,7 @@ static inline void mmc_delay(unsigned int ms)
 
 void mmc_rescan(struct work_struct *work);
 void mmc_start_host(struct mmc_host *host);
+void __mmc_stop_host(struct mmc_host *host);
 void mmc_stop_host(struct mmc_host *host);
 
 void _mmc_detect_change(struct mmc_host *host, unsigned long delay,
@@ -85,11 +86,26 @@ int mmc_attach_sdio(struct mmc_host *host);
 extern bool use_spi_crc;
 
 /* Debugfs information for hosts and cards */
+#ifdef CONFIG_DEBUG_FS
 void mmc_add_host_debugfs(struct mmc_host *host);
 void mmc_remove_host_debugfs(struct mmc_host *host);
 
 void mmc_add_card_debugfs(struct mmc_card *card);
 void mmc_remove_card_debugfs(struct mmc_card *card);
+#else
+static inline void mmc_add_host_debugfs(struct mmc_host *host)
+{
+}
+static inline void mmc_remove_host_debugfs(struct mmc_host *host)
+{
+}
+static inline void mmc_add_card_debugfs(struct mmc_card *card)
+{
+}
+static inline void mmc_remove_card_debugfs(struct mmc_card *card)
+{
+}
+#endif
 
 int mmc_execute_tuning(struct mmc_card *card);
 int mmc_hs200_to_hs400(struct mmc_card *card);

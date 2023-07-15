@@ -4,7 +4,7 @@
  *
  * External function declarations.
  *
- * Copyright IBM Corp. 2002, 2020
+ * Copyright IBM Corp. 2002, 2023
  */
 
 #ifndef ZFCP_EXT_H
@@ -46,6 +46,9 @@ extern void zfcp_dbf_hba_fsf_res(char *, int, struct zfcp_fsf_req *);
 extern void zfcp_dbf_hba_fsf_fces(char *tag, const struct zfcp_fsf_req *req,
 				  u64 wwpn, u32 fc_security_old,
 				  u32 fc_security_new);
+extern void zfcp_dbf_hba_fsf_reqid(const char *const tag, const int level,
+				   struct zfcp_adapter *const adapter,
+				   const u64 req_id);
 extern void zfcp_dbf_hba_bit_err(char *, struct zfcp_fsf_req *);
 extern void zfcp_dbf_hba_def_err(struct zfcp_adapter *, u64, u16, void **);
 extern void zfcp_dbf_san_req(char *, struct zfcp_fsf_req *, u32);
@@ -184,8 +187,8 @@ extern const struct attribute_group *zfcp_sysfs_adapter_attr_groups[];
 extern const struct attribute_group *zfcp_unit_attr_groups[];
 extern const struct attribute_group *zfcp_port_attr_groups[];
 extern struct mutex zfcp_sysfs_port_units_mutex;
-extern struct device_attribute *zfcp_sysfs_sdev_attrs[];
-extern struct device_attribute *zfcp_sysfs_shost_attrs[];
+extern const struct attribute_group *zfcp_sysfs_sdev_attr_groups[];
+extern const struct attribute_group *zfcp_sysfs_shost_attr_groups[];
 bool zfcp_sysfs_port_is_removing(const struct zfcp_port *const port);
 
 /* zfcp_unit.c */

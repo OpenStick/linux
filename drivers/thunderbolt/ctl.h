@@ -35,7 +35,7 @@ struct tb_cfg_result {
 			    * If err = 1 then this is the port that send the
 			    * error.
 			    * If err = 0 and if this was a cfg_read/write then
-			    * this is the the upstream port of the responding
+			    * this is the upstream port of the responding
 			    * switch.
 			    * Otherwise the field is set to zero.
 			    */
@@ -122,6 +122,8 @@ static inline struct tb_cfg_header tb_cfg_make_header(u64 route)
 	return header;
 }
 
+int tb_cfg_ack_notification(struct tb_ctl *ctl, u64 route,
+			    const struct cfg_error_pkg *error);
 int tb_cfg_ack_plug(struct tb_ctl *ctl, u64 route, u32 port, bool unplug);
 struct tb_cfg_result tb_cfg_reset(struct tb_ctl *ctl, u64 route);
 struct tb_cfg_result tb_cfg_read_raw(struct tb_ctl *ctl, void *buffer,

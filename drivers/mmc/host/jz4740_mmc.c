@@ -21,6 +21,7 @@
 #include <linux/of_device.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
+#include <linux/regulator/consumer.h>
 #include <linux/scatterlist.h>
 
 #include <asm/cacheflush.h>
@@ -158,6 +159,8 @@ struct jz4740_mmc_host {
 	struct mmc_request *req;
 	struct mmc_command *cmd;
 
+	bool vqmmc_enabled;
+
 	unsigned long waiting;
 
 	uint32_t cmdat;
@@ -217,11 +220,23 @@ static void jz4740_mmc_release_dma_channels(struct jz4740_mmc_host *host)
 		return;
 
 	dma_release_channel(host->dma_tx);
-	dma_release_channel(host->dma_rx);
+	if (host->dma_rx)
+		dma_release_channel(host->dma_rx);
 }
 
 static int jz4740_mmc_acquire_dma_channels(struct jz4740_mmc_host *host)
 {
+	struct device *dev = mmc_dev(host->mmc);
+
+	host->dma_tx = dma_request_chan(dev, "tx-rx");
+	if (!IS_ERR(host->dma_tx))
+		return 0;
+
+	if (PTR_ERR(host->dma_tx) != -ENODEV) {
+		dev_err(dev, "Failed to get dma tx-rx channel\n");
+		return PTR_ERR(host->dma_tx);
+	}
+
 	host->dma_tx = dma_request_chan(mmc_dev(host->mmc), "tx");
 	if (IS_ERR(host->dma_tx)) {
 		dev_err(mmc_dev(host->mmc), "Failed to get dma_tx channel\n");
@@ -235,13 +250,36 @@ static int jz4740_mmc_acquire_dma_channels(struct jz4740_mmc_host *host)
 		return PTR_ERR(host->dma_rx);
 	}
 
+	/*
+	 * Limit the maximum segment size in any SG entry according to
+	 * the parameters of the DMA engine device.
+	 */
+	if (host->dma_tx) {
+		struct device *dev = host->dma_tx->device->dev;
+		unsigned int max_seg_size = dma_get_max_seg_size(dev);
+
+		if (max_seg_size < host->mmc->max_seg_size)
+			host->mmc->max_seg_size = max_seg_size;
+	}
+
+	if (host->dma_rx) {
+		struct device *dev = host->dma_rx->device->dev;
+		unsigned int max_seg_size = dma_get_max_seg_size(dev);
+
+		if (max_seg_size < host->mmc->max_seg_size)
+			host->mmc->max_seg_size = max_seg_size;
+	}
+
 	return 0;
 }
 
 static inline struct dma_chan *jz4740_mmc_get_dma_chan(struct jz4740_mmc_host *host,
 						       struct mmc_data *data)
 {
-	return (data->flags & MMC_DATA_READ) ? host->dma_rx : host->dma_tx;
+	if ((data->flags & MMC_DATA_READ) && host->dma_rx)
+		return host->dma_rx;
+	else
+		return host->dma_tx;
 }
 
 static void jz4740_mmc_dma_unmap(struct jz4740_mmc_host *host,
@@ -263,7 +301,7 @@ static int jz4740_mmc_prepare_dma_data(struct jz4740_mmc_host *host,
 {
 	struct dma_chan *chan = jz4740_mmc_get_dma_chan(host, data);
 	enum dma_data_direction dir = mmc_get_dma_dir(data);
-	int sg_count;
+	unsigned int sg_count;
 
 	if (data->host_cookie == COOKIE_PREMAPPED)
 		return data->sg_count;
@@ -273,7 +311,7 @@ static int jz4740_mmc_prepare_dma_data(struct jz4740_mmc_host *host,
 			data->sg_len,
 			dir);
 
-	if (sg_count <= 0) {
+	if (!sg_count) {
 		dev_err(mmc_dev(host->mmc),
 			"Failed to map scatterlist for DMA operation\n");
 		return -EINVAL;
@@ -900,6 +938,8 @@ static void jz4740_mmc_request(struct mmc_host *mmc, struct mmc_request *req)
 static void jz4740_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 {
 	struct jz4740_mmc_host *host = mmc_priv(mmc);
+	int ret;
+
 	if (ios->clock)
 		jz4740_mmc_set_clock_rate(host, ios->clock);
 
@@ -912,11 +952,24 @@ static void jz4740_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		clk_prepare_enable(host->clk);
 		break;
 	case MMC_POWER_ON:
+		if (!IS_ERR(mmc->supply.vqmmc) && !host->vqmmc_enabled) {
+			ret = regulator_enable(mmc->supply.vqmmc);
+			if (ret)
+				dev_err(&host->pdev->dev, "Failed to set vqmmc power!\n");
+			else
+				host->vqmmc_enabled = true;
+		}
 		break;
-	default:
+	case MMC_POWER_OFF:
 		if (!IS_ERR(mmc->supply.vmmc))
 			mmc_regulator_set_ocr(mmc, mmc->supply.vmmc, 0);
+		if (!IS_ERR(mmc->supply.vqmmc) && host->vqmmc_enabled) {
+			regulator_disable(mmc->supply.vqmmc);
+			host->vqmmc_enabled = false;
+		}
 		clk_disable_unprepare(host->clk);
+		break;
+	default:
 		break;
 	}
 
@@ -943,6 +996,23 @@ static void jz4740_mmc_enable_sdio_irq(struct mmc_host *mmc, int enable)
 	jz4740_mmc_set_irq_enabled(host, JZ_MMC_IRQ_SDIO, enable);
 }
 
+static int jz4740_voltage_switch(struct mmc_host *mmc, struct mmc_ios *ios)
+{
+	int ret;
+
+	/* vqmmc regulator is available */
+	if (!IS_ERR(mmc->supply.vqmmc)) {
+		ret = mmc_regulator_set_vqmmc(mmc, ios);
+		return ret < 0 ? ret : 0;
+	}
+
+	/* no vqmmc regulator, assume fixed regulator at 3/3.3V */
+	if (ios->signal_voltage == MMC_SIGNAL_VOLTAGE_330)
+		return 0;
+
+	return -EINVAL;
+}
+
 static const struct mmc_host_ops jz4740_mmc_ops = {
 	.request	= jz4740_mmc_request,
 	.pre_req	= jz4740_mmc_pre_request,
@@ -951,6 +1021,7 @@ static const struct mmc_host_ops jz4740_mmc_ops = {
 	.get_ro		= mmc_gpio_get_ro,
 	.get_cd		= mmc_gpio_get_cd,
 	.enable_sdio_irq = jz4740_mmc_enable_sdio_irq,
+	.start_signal_voltage_switch = jz4740_voltage_switch,
 };
 
 static const struct of_device_id jz4740_mmc_of_match[] = {
@@ -1008,8 +1079,7 @@ static int jz4740_mmc_probe(struct platform_device* pdev)
 		goto err_free_host;
 	}
 
-	host->mem_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	host->base = devm_ioremap_resource(&pdev->dev, host->mem_res);
+	host->base = devm_platform_get_and_ioremap_resource(pdev, 0, &host->mem_res);
 	if (IS_ERR(host->base)) {
 		ret = PTR_ERR(host->base);
 		goto err_free_host;
@@ -1018,6 +1088,16 @@ static int jz4740_mmc_probe(struct platform_device* pdev)
 	mmc->ops = &jz4740_mmc_ops;
 	if (!mmc->f_max)
 		mmc->f_max = JZ_MMC_CLK_RATE;
+
+	/*
+	 * There seems to be a problem with this driver on the JZ4760 and
+	 * JZ4760B SoCs. There, when using the maximum rate supported (50 MHz),
+	 * the communication fails with many SD cards.
+	 * Until this bug is sorted out, limit the maximum rate to 24 MHz.
+	 */
+	if (host->version == JZ_MMC_JZ4760 && mmc->f_max > JZ_MMC_CLK_RATE)
+		mmc->f_max = JZ_MMC_CLK_RATE;
+
 	mmc->f_min = mmc->f_max / 128;
 	mmc->ocr_avail = MMC_VDD_32_33 | MMC_VDD_33_34;
 
@@ -1103,18 +1183,18 @@ static int jz4740_mmc_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static int __maybe_unused jz4740_mmc_suspend(struct device *dev)
+static int jz4740_mmc_suspend(struct device *dev)
 {
 	return pinctrl_pm_select_sleep_state(dev);
 }
 
-static int __maybe_unused jz4740_mmc_resume(struct device *dev)
+static int jz4740_mmc_resume(struct device *dev)
 {
 	return pinctrl_select_default_state(dev);
 }
 
-static SIMPLE_DEV_PM_OPS(jz4740_mmc_pm_ops, jz4740_mmc_suspend,
-	jz4740_mmc_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(jz4740_mmc_pm_ops, jz4740_mmc_suspend,
+				jz4740_mmc_resume);
 
 static struct platform_driver jz4740_mmc_driver = {
 	.probe = jz4740_mmc_probe,
@@ -1123,7 +1203,7 @@ static struct platform_driver jz4740_mmc_driver = {
 		.name = "jz4740-mmc",
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table = of_match_ptr(jz4740_mmc_of_match),
-		.pm = pm_ptr(&jz4740_mmc_pm_ops),
+		.pm = pm_sleep_ptr(&jz4740_mmc_pm_ops),
 	},
 };
 

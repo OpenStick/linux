@@ -48,6 +48,7 @@
 
 ******************************************************************************/
 
+#include <linux/aperture.h>
 #include <linux/compat.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -79,7 +80,6 @@
 
 #ifdef __powerpc__
 #include <asm/machdep.h>
-#include <asm/prom.h>
 #include "../macmodes.h"
 #endif
 #ifdef __sparc__
@@ -2219,13 +2219,7 @@ static int aty_bl_update_status(struct backlight_device *bd)
 {
 	struct atyfb_par *par = bl_get_data(bd);
 	unsigned int reg = aty_ld_lcd(LCD_MISC_CNTL, par);
-	int level;
-
-	if (bd->props.power != FB_BLANK_UNBLANK ||
-	    bd->props.fb_blank != FB_BLANK_UNBLANK)
-		level = 0;
-	else
-		level = bd->props.brightness;
+	int level = backlight_get_brightness(bd);
 
 	reg |= (BLMOD_EN | BIASMOD_EN);
 	if (level > 0) {
@@ -3192,8 +3186,7 @@ static void aty_init_lcd(struct atyfb_par *par, u32 bios_base)
 		 * which we print to the screen.
 		 */
 		id = *(u8 *)par->lcd_table;
-		strncpy(model, (char *)par->lcd_table+1, 24);
-		model[23] = 0;
+		strscpy(model, (char *)par->lcd_table+1, sizeof(model));
 
 		width = par->lcd_width = *(u16 *)(par->lcd_table+25);
 		height = par->lcd_height = *(u16 *)(par->lcd_table+27);
@@ -3505,11 +3498,6 @@ static int atyfb_setup_generic(struct pci_dev *pdev, struct fb_info *info,
 	if (ret)
 		goto atyfb_setup_generic_fail;
 #endif
-	if (!(aty_ld_le32(CRTC_GEN_CNTL, par) & CRTC_EXT_DISP_EN))
-		par->clk_wr_offset = (inb(R_GENMO) & 0x0CU) >> 2;
-	else
-		par->clk_wr_offset = aty_ld_8(CLOCK_CNTL, par) & 0x03U;
-
 	/* according to ATI, we should use clock 3 for acelerated mode */
 	par->clk_wr_offset = 3;
 
@@ -3534,7 +3522,11 @@ static int atyfb_pci_probe(struct pci_dev *pdev,
 	struct fb_info *info;
 	struct resource *rp;
 	struct atyfb_par *par;
-	int rc = -ENOMEM;
+	int rc;
+
+	rc = aperture_remove_conflicting_pci_devices(pdev, "atyfb");
+	if (rc)
+		return rc;
 
 	/* Enable device in PCI config */
 	if (pci_enable_device(pdev)) {
@@ -3892,7 +3884,7 @@ static int __init atyfb_setup(char *options)
 			 && (!strncmp(this_opt, "Mach64:", 7))) {
 			static unsigned char m64_num;
 			static char mach64_str[80];
-			strlcpy(mach64_str, this_opt + 7, sizeof(mach64_str));
+			strscpy(mach64_str, this_opt + 7, sizeof(mach64_str));
 			if (!store_video_par(mach64_str, m64_num)) {
 				m64_num++;
 				mach64_count = m64_num;
@@ -3961,7 +3953,12 @@ static int __init atyfb_init(void)
 	int err1 = 1, err2 = 1;
 #ifndef MODULE
 	char *option = NULL;
+#endif
 
+	if (fb_modesetting_disabled("atyfb"))
+		return -ENODEV;
+
+#ifndef MODULE
 	if (fb_get_options("atyfb", &option))
 		return -ENODEV;
 	atyfb_setup(option);

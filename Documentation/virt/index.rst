@@ -1,8 +1,8 @@
 .. SPDX-License-Identifier: GPL-2.0
 
-============================
-Linux Virtualization Support
-============================
+======================
+Virtualization Support
+======================
 
 .. toctree::
    :maxdepth: 2
@@ -13,6 +13,9 @@ Linux Virtualization Support
    guest-halt-polling
    ne_overview
    acrn/index
+   coco/sev-guest
+   coco/tdx-guest
+   hyperv/index
 
 .. only:: html and subproject
 

@@ -130,76 +130,52 @@ static u8 const clock_table[] = { F81232_CLK_1_846_MHZ, F81232_CLK_14_77_MHZ,
 
 static int calc_baud_divisor(speed_t baudrate, speed_t clockrate)
 {
-	if (!baudrate)
-		return 0;
-
 	return DIV_ROUND_CLOSEST(clockrate, baudrate);
 }
 
 static int f81232_get_register(struct usb_serial_port *port, u16 reg, u8 *val)
 {
 	int status;
-	u8 *tmp;
 	struct usb_device *dev = port->serial->dev;
 
-	tmp = kmalloc(sizeof(*val), GFP_KERNEL);
-	if (!tmp)
-		return -ENOMEM;
-
-	status = usb_control_msg(dev,
-				usb_rcvctrlpipe(dev, 0),
-				F81232_REGISTER_REQUEST,
-				F81232_GET_REGISTER,
-				reg,
-				0,
-				tmp,
-				sizeof(*val),
-				USB_CTRL_GET_TIMEOUT);
-	if (status != sizeof(*val)) {
+	status = usb_control_msg_recv(dev,
+				      0,
+				      F81232_REGISTER_REQUEST,
+				      F81232_GET_REGISTER,
+				      reg,
+				      0,
+				      val,
+				      sizeof(*val),
+				      USB_CTRL_GET_TIMEOUT,
+				      GFP_KERNEL);
+	if (status) {
 		dev_err(&port->dev, "%s failed status: %d\n", __func__, status);
-
-		if (status < 0)
-			status = usb_translate_errors(status);
-		else
-			status = -EIO;
-	} else {
-		status = 0;
-		*val = *tmp;
+		status = usb_translate_errors(status);
 	}
 
-	kfree(tmp);
 	return status;
 }
 
 static int f81232_set_register(struct usb_serial_port *port, u16 reg, u8 val)
 {
 	int status;
-	u8 *tmp;
 	struct usb_device *dev = port->serial->dev;
 
-	tmp = kmalloc(sizeof(val), GFP_KERNEL);
-	if (!tmp)
-		return -ENOMEM;
-
-	*tmp = val;
-
-	status = usb_control_msg(dev,
-				usb_sndctrlpipe(dev, 0),
-				F81232_REGISTER_REQUEST,
-				F81232_SET_REGISTER,
-				reg,
-				0,
-				tmp,
-				sizeof(val),
-				USB_CTRL_SET_TIMEOUT);
-	if (status < 0) {
+	status = usb_control_msg_send(dev,
+				      0,
+				      F81232_REGISTER_REQUEST,
+				      F81232_SET_REGISTER,
+				      reg,
+				      0,
+				      &val,
+				      sizeof(val),
+				      USB_CTRL_SET_TIMEOUT,
+				      GFP_KERNEL);
+	if (status) {
 		dev_err(&port->dev, "%s failed status: %d\n", __func__, status);
 		status = usb_translate_errors(status);
-	} else {
-		status = 0;
 	}
 
-	kfree(tmp);
 	return status;
 }
 
@@ -519,9 +495,14 @@ static void f81232_set_baudrate(struct tty_struct *tty,
 	speed_t baud_list[] = { baudrate, old_baudrate, F81232_DEF_BAUDRATE };
 
 	for (i = 0; i < ARRAY_SIZE(baud_list); ++i) {
-		idx = f81232_find_clk(baud_list[i]);
+		baudrate = baud_list[i];
+		if (baudrate == 0) {
+			tty_encode_baud_rate(tty, 0, 0);
+			return;
+		}
+
+		idx = f81232_find_clk(baudrate);
 		if (idx >= 0) {
-			baudrate = baud_list[i];
 			tty_encode_baud_rate(tty, baudrate, baudrate);
 			break;
 		}
@@ -624,7 +605,8 @@ static int f81232_port_disable(struct usb_serial_port *port)
 }
 
 static void f81232_set_termios(struct tty_struct *tty,
-		struct usb_serial_port *port, struct ktermios *old_termios)
+			       struct usb_serial_port *port,
+			       const struct ktermios *old_termios)
 {
 	struct f81232_private *priv = usb_get_serial_port_data(port);
 	u8 new_lcr = 0;
@@ -664,21 +646,7 @@ static void f81232_set_termios(struct tty_struct *tty,
 	if (C_CSTOPB(tty))
 		new_lcr |= UART_LCR_STOP;
 
-	switch (C_CSIZE(tty)) {
-	case CS5:
-		new_lcr |= UART_LCR_WLEN5;
-		break;
-	case CS6:
-		new_lcr |= UART_LCR_WLEN6;
-		break;
-	case CS7:
-		new_lcr |= UART_LCR_WLEN7;
-		break;
-	default:
-	case CS8:
-		new_lcr |= UART_LCR_WLEN8;
-		break;
-	}
+	new_lcr |= UART_LCR_WLEN(tty_get_char_size(tty->termios.c_cflag));
 
 	mutex_lock(&priv->lock);
 
@@ -857,28 +825,22 @@ static int f81534a_ctrl_set_register(struct usb_interface *intf, u16 reg,
 	struct usb_device *dev = interface_to_usbdev(intf);
 	int retry = F81534A_ACCESS_REG_RETRY;
 	int status;
-	u8 *tmp;
-
-	tmp = kmemdup(val, size, GFP_KERNEL);
-	if (!tmp)
-		return -ENOMEM;
 
 	while (retry--) {
-		status = usb_control_msg(dev,
-					usb_sndctrlpipe(dev, 0),
-					F81232_REGISTER_REQUEST,
-					F81232_SET_REGISTER,
-					reg,
-					0,
-					tmp,
-					size,
-					USB_CTRL_SET_TIMEOUT);
-		if (status < 0) {
+		status = usb_control_msg_send(dev,
+					      0,
+					      F81232_REGISTER_REQUEST,
+					      F81232_SET_REGISTER,
+					      reg,
+					      0,
+					      val,
+					      size,
+					      USB_CTRL_SET_TIMEOUT,
+					      GFP_KERNEL);
+		if (status) {
 			status = usb_translate_errors(status);
 			if (status == -EIO)
 				continue;
-		} else {
-			status = 0;
 		}
 
 		break;
@@ -889,7 +851,6 @@ static int f81534a_ctrl_set_register(struct usb_interface *intf, u16 reg,
 				reg, status);
 	}
 
-	kfree(tmp);
 	return status;
 }
 

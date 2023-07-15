@@ -61,13 +61,15 @@
 		};
 
 		pci@c0000000 {
-			status = "ok";
+			status = "okay";
 
 			/*
 			 * Taken from IXDPG425 PCI boardfile.
 			 * We have slots (IDSEL) 12, 13 and 14 with one assigned IRQ
 			 * for 12 & 13 and one for 14.
 			 */
+			#interrupt-cells = <1>;
+			interrupt-map-mask = <0xf800 0 0 7>;
 			interrupt-map =
 			/* IDSEL 12 */
 			<0x6000 0 0 1 &gpio0 7 IRQ_TYPE_LEVEL_LOW>, /* INT A on slot 12 is irq 7 */
@@ -93,7 +95,7 @@
 
 		/* EthB */
 		ethernet@c8009000 {
-			status = "ok";
+			status = "okay";
 			queue-rx = <&qmgr 3>;
 			queue-txready = <&qmgr 20>;
 			phy-mode = "rgmii";
@@ -115,7 +117,7 @@
 
 		/* EthC */
 		ethernet@c800a000 {
-			status = "ok";
+			status = "okay";
 			queue-rx = <&qmgr 4>;
 			queue-txready = <&qmgr 21>;
 			phy-mode = "rgmii";

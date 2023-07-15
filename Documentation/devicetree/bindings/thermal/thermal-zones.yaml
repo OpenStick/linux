@@ -5,7 +5,7 @@
 $id: http://devicetree.org/schemas/thermal/thermal-zones.yaml#
 $schema: http://devicetree.org/meta-schemas/base.yaml#
 
-title: Thermal zone binding
+title: Thermal zone
 
 maintainers:
   - Amit Kucheria <amitk@kernel.org>
@@ -171,6 +171,7 @@ patternProperties:
 
       cooling-maps:
         type: object
+        additionalProperties: false
         description:
           This node describes the action to be taken when a thermal zone
           crosses one of the temperature thresholds described in the trips
@@ -199,12 +200,11 @@ patternProperties:
 
               contribution:
                 $ref: /schemas/types.yaml#/definitions/uint32
-                minimum: 0
-                maximum: 100
                 description:
-                  The percentage contribution of the cooling devices at the
-                  specific trip temperature referenced in this map
-                  to this thermal zone
+                  The cooling contribution to the thermal zone of the referred
+                  cooling device at the referred trip point. The contribution is
+                  a ratio of the sum of all cooling contributions within a
+                  thermal zone.
 
             required:
               - trip
@@ -215,6 +215,7 @@ patternProperties:
       - polling-delay
       - polling-delay-passive
       - thermal-sensors
+      - trips
 
     additionalProperties: false
 

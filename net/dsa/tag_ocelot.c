@@ -2,16 +2,61 @@
 /* Copyright 2019 NXP
  */
 #include <linux/dsa/ocelot.h>
-#include "dsa_priv.h"
+
+#include "tag.h"
+
+#define OCELOT_NAME	"ocelot"
+#define SEVILLE_NAME	"seville"
+
+/* If the port is under a VLAN-aware bridge, remove the VLAN header from the
+ * payload and move it into the DSA tag, which will make the switch classify
+ * the packet to the bridge VLAN. Otherwise, leave the classified VLAN at zero,
+ * which is the pvid of standalone and VLAN-unaware bridge ports.
+ */
+static void ocelot_xmit_get_vlan_info(struct sk_buff *skb, struct dsa_port *dp,
+				      u64 *vlan_tci, u64 *tag_type)
+{
+	struct net_device *br = dsa_port_bridge_dev_get(dp);
+	struct vlan_ethhdr *hdr;
+	u16 proto, tci;
+
+	if (!br || !br_vlan_enabled(br)) {
+		*vlan_tci = 0;
+		*tag_type = IFH_TAG_TYPE_C;
+		return;
+	}
+
+	hdr = skb_vlan_eth_hdr(skb);
+	br_vlan_get_proto(br, &proto);
+
+	if (ntohs(hdr->h_vlan_proto) == proto) {
+		vlan_remove_tag(skb, &tci);
+		*vlan_tci = tci;
+	} else {
+		rcu_read_lock();
+		br_vlan_get_pvid_rcu(br, &tci);
+		rcu_read_unlock();
+		*vlan_tci = tci;
+	}
+
+	*tag_type = (proto != ETH_P_8021Q) ? IFH_TAG_TYPE_S : IFH_TAG_TYPE_C;
+}
 
 static void ocelot_xmit_common(struct sk_buff *skb, struct net_device *netdev,
 			       __be32 ifh_prefix, void **ifh)
 {
 	struct dsa_port *dp = dsa_slave_to_port(netdev);
 	struct dsa_switch *ds = dp->ds;
+	u64 vlan_tci, tag_type;
 	void *injection;
 	__be32 *prefix;
 	u32 rew_op = 0;
+	u64 qos_class;
+
+	ocelot_xmit_get_vlan_info(skb, dp, &vlan_tci, &tag_type);
+
+	qos_class = netdev_get_num_tc(netdev) ?
+		    netdev_get_prio_tc_map(netdev, skb->priority) : skb->priority;
 
 	injection = skb_push(skb, OCELOT_TAG_LEN);
 	prefix = skb_push(skb, OCELOT_SHORT_PREFIX_LEN);
@@ -20,7 +65,9 @@ static void ocelot_xmit_common(struct sk_buff *skb, struct net_device *netdev,
 	memset(injection, 0, OCELOT_TAG_LEN);
 	ocelot_ifh_set_bypass(injection, 1);
 	ocelot_ifh_set_src(injection, ds->num_ports);
-	ocelot_ifh_set_qos_class(injection, skb->priority);
+	ocelot_ifh_set_qos_class(injection, qos_class);
+	ocelot_ifh_set_vlan_tci(injection, vlan_tci);
+	ocelot_ifh_set_tag_type(injection, tag_type);
 
 	rew_op = ocelot_ptp_rew_op(skb);
 	if (rew_op)
@@ -62,6 +109,7 @@ static struct sk_buff *ocelot_rcv(struct sk_buff *skb,
 	struct dsa_port *dp;
 	u8 *extraction;
 	u16 vlan_tpid;
+	u64 rew_val;
 
 	/* Revert skb->data by the amount consumed by the DSA master,
 	 * so it points to the beginning of the frame.
@@ -91,6 +139,7 @@ static struct sk_buff *ocelot_rcv(struct sk_buff *skb,
 	ocelot_xfh_get_qos_class(extraction, &qos_class);
 	ocelot_xfh_get_tag_type(extraction, &tag_type);
 	ocelot_xfh_get_vlan_tci(extraction, &vlan_tci);
+	ocelot_xfh_get_rew_val(extraction, &rew_val);
 
 	skb->dev = dsa_master_find_slave(netdev, 0, src_port);
 	if (!skb->dev)
@@ -104,6 +153,7 @@ static struct sk_buff *ocelot_rcv(struct sk_buff *skb,
 
 	dsa_default_offload_fwd_mark(skb);
 	skb->priority = qos_class;
+	OCELOT_SKB_CB(skb)->tstamp_lo = rew_val;
 
 	/* Ocelot switches copy frames unmodified to the CPU. However, it is
 	 * possible for the user to request a VLAN modification through
@@ -137,7 +187,7 @@ static struct sk_buff *ocelot_rcv(struct sk_buff *skb,
 }
 
 static const struct dsa_device_ops ocelot_netdev_ops = {
-	.name			= "ocelot",
+	.name			= OCELOT_NAME,
 	.proto			= DSA_TAG_PROTO_OCELOT,
 	.xmit			= ocelot_xmit,
 	.rcv			= ocelot_rcv,
@@ -146,10 +196,10 @@ static const struct dsa_device_ops ocelot_netdev_ops = {
 };
 
 DSA_TAG_DRIVER(ocelot_netdev_ops);
-MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_OCELOT);
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_OCELOT, OCELOT_NAME);
 
 static const struct dsa_device_ops seville_netdev_ops = {
-	.name			= "seville",
+	.name			= SEVILLE_NAME,
 	.proto			= DSA_TAG_PROTO_SEVILLE,
 	.xmit			= seville_xmit,
 	.rcv			= ocelot_rcv,
@@ -158,7 +208,7 @@ static const struct dsa_device_ops seville_netdev_ops = {
 };
 
 DSA_TAG_DRIVER(seville_netdev_ops);
-MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_SEVILLE);
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_SEVILLE, SEVILLE_NAME);
 
 static struct dsa_tag_driver *ocelot_tag_driver_array[] = {
 	&DSA_TAG_DRIVER_NAME(ocelot_netdev_ops),

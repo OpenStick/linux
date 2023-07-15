@@ -4,11 +4,27 @@
 #include "health.h"
 #include "en/ptp.h"
 #include "en/devlink.h"
+#include "lib/tout.h"
+
+/* Keep this string array consistent with the MLX5E_SQ_STATE_* enums in en.h */
+static const char * const sq_sw_state_type_name[] = {
+	[MLX5E_SQ_STATE_ENABLED] = "enabled",
+	[MLX5E_SQ_STATE_MPWQE] = "mpwqe",
+	[MLX5E_SQ_STATE_RECOVERING] = "recovering",
+	[MLX5E_SQ_STATE_IPSEC] = "ipsec",
+	[MLX5E_SQ_STATE_DIM] = "dim",
+	[MLX5E_SQ_STATE_VLAN_NEED_L2_INLINE] = "vlan_need_l2_inline",
+	[MLX5E_SQ_STATE_PENDING_XSK_TX] = "pending_xsk_tx",
+	[MLX5E_SQ_STATE_PENDING_TLS_RX_RESYNC] = "pending_tls_rx_resync",
+	[MLX5E_SQ_STATE_XDP_MULTIBUF] = "xdp_multibuf",
+};
 
 static int mlx5e_wait_for_sq_flush(struct mlx5e_txqsq *sq)
 {
-	unsigned long exp_time = jiffies +
-				 msecs_to_jiffies(MLX5E_REPORTER_FLUSH_TIMEOUT_MSEC);
+	struct mlx5_core_dev *dev = sq->mdev;
+	unsigned long exp_time;
+
+	exp_time = jiffies + msecs_to_jiffies(mlx5_tout_ms(dev, FLUSH_ON_ERROR));
 
 	while (time_before(jiffies, exp_time)) {
 		if (sq->cc == sq->pc)
@@ -32,6 +48,27 @@ static void mlx5e_reset_txqsq_cc_pc(struct mlx5e_txqsq *sq)
 	sq->cc = 0;
 	sq->dma_fifo_cc = 0;
 	sq->pc = 0;
+}
+
+static int mlx5e_health_sq_put_sw_state(struct devlink_fmsg *fmsg, struct mlx5e_txqsq *sq)
+{
+	int err;
+	int i;
+
+	BUILD_BUG_ON_MSG(ARRAY_SIZE(sq_sw_state_type_name) != MLX5E_NUM_SQ_STATES,
+			 "sq_sw_state_type_name string array must be consistent with MLX5E_SQ_STATE_* enum in en.h");
+	err = mlx5e_health_fmsg_named_obj_nest_start(fmsg, "SW State");
+	if (err)
+		return err;
+
+	for (i = 0; i < ARRAY_SIZE(sq_sw_state_type_name); ++i) {
+		err = devlink_fmsg_u32_pair_put(fmsg, sq_sw_state_type_name[i],
+						test_bit(i, &sq->state));
+		if (err)
+			return err;
+	}
+
+	return mlx5e_health_fmsg_named_obj_nest_end(fmsg);
 }
 
 static int mlx5e_tx_reporter_err_cqe_recover(void *ctx)
@@ -78,6 +115,10 @@ static int mlx5e_tx_reporter_err_cqe_recover(void *ctx)
 	sq->stats->recover++;
 	clear_bit(MLX5E_SQ_STATE_RECOVERING, &sq->state);
 	mlx5e_activate_txqsq(sq);
+	if (sq->channel)
+		mlx5e_trigger_napi_icosq(sq->channel);
+	else
+		mlx5e_trigger_napi_sched(sq->cq.napi);
 
 	return 0;
 out:
@@ -180,6 +221,10 @@ mlx5e_tx_reporter_build_diagnose_output_sq_common(struct devlink_fmsg *fmsg,
 		return err;
 
 	err = devlink_fmsg_u32_pair_put(fmsg, "pc", sq->pc);
+	if (err)
+		return err;
+
+	err = mlx5e_health_sq_put_sw_state(fmsg, sq);
 	if (err)
 		return err;
 
@@ -463,6 +508,14 @@ static int mlx5e_tx_reporter_dump_sq(struct mlx5e_priv *priv, struct devlink_fms
 	return mlx5e_health_fmsg_named_obj_nest_end(fmsg);
 }
 
+static int mlx5e_tx_reporter_timeout_dump(struct mlx5e_priv *priv, struct devlink_fmsg *fmsg,
+					  void *ctx)
+{
+	struct mlx5e_tx_timeout_ctx *to_ctx = ctx;
+
+	return mlx5e_tx_reporter_dump_sq(priv, fmsg, to_ctx->sq);
+}
+
 static int mlx5e_tx_reporter_dump_all_sqs(struct mlx5e_priv *priv,
 					  struct devlink_fmsg *fmsg)
 {
@@ -558,11 +611,11 @@ int mlx5e_reporter_tx_timeout(struct mlx5e_txqsq *sq)
 	to_ctx.sq = sq;
 	err_ctx.ctx = &to_ctx;
 	err_ctx.recover = mlx5e_tx_reporter_timeout_recover;
-	err_ctx.dump = mlx5e_tx_reporter_dump_sq;
+	err_ctx.dump = mlx5e_tx_reporter_timeout_dump;
 	snprintf(err_str, sizeof(err_str),
 		 "TX timeout on queue: %d, SQ: 0x%x, CQ: 0x%x, SQ Cons: 0x%x SQ Prod: 0x%x, usecs since last trans: %u",
 		 sq->ch_ix, sq->sqn, sq->cq.mcq.cqn, sq->cc, sq->pc,
-		 jiffies_to_usecs(jiffies - sq->txq->trans_start));
+		 jiffies_to_usecs(jiffies - READ_ONCE(sq->txq->trans_start)));
 
 	mlx5e_health_report(priv, priv->tx_reporter, err_str, &err_ctx);
 	return to_ctx.status;
@@ -579,10 +632,10 @@ static const struct devlink_health_reporter_ops mlx5_tx_reporter_ops = {
 
 void mlx5e_reporter_tx_create(struct mlx5e_priv *priv)
 {
-	struct devlink_port *dl_port = mlx5e_devlink_get_dl_port(priv);
 	struct devlink_health_reporter *reporter;
 
-	reporter = devlink_port_health_reporter_create(dl_port, &mlx5_tx_reporter_ops,
+	reporter = devlink_port_health_reporter_create(priv->netdev->devlink_port,
+						       &mlx5_tx_reporter_ops,
 						       MLX5_REPORTER_TX_GRACEFUL_PERIOD, priv);
 	if (IS_ERR(reporter)) {
 		netdev_warn(priv->netdev,
@@ -598,6 +651,6 @@ void mlx5e_reporter_tx_destroy(struct mlx5e_priv *priv)
 	if (!priv->tx_reporter)
 		return;
 
-	devlink_port_health_reporter_destroy(priv->tx_reporter);
+	devlink_health_reporter_destroy(priv->tx_reporter);
 	priv->tx_reporter = NULL;
 }

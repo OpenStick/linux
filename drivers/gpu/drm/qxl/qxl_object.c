@@ -23,7 +23,7 @@
  *          Alon Levy
  */
 
-#include <linux/dma-buf-map.h>
+#include <linux/iosys-map.h>
 #include <linux/io-mapping.h>
 
 #include "qxl_drv.h"
@@ -141,7 +141,7 @@ int qxl_bo_create(struct qxl_device *qdev, unsigned long size,
 	qxl_ttm_placement_from_domain(bo, domain);
 
 	bo->tbo.priority = priority;
-	r = ttm_bo_init_reserved(&qdev->mman.bdev, &bo->tbo, size, type,
+	r = ttm_bo_init_reserved(&qdev->mman.bdev, &bo->tbo, type,
 				 &bo->placement, 0, &ctx, NULL, NULL,
 				 &qxl_ttm_bo_destroy);
 	if (unlikely(r != 0)) {
@@ -158,7 +158,7 @@ int qxl_bo_create(struct qxl_device *qdev, unsigned long size,
 	return 0;
 }
 
-int qxl_bo_vmap_locked(struct qxl_bo *bo, struct dma_buf_map *map)
+int qxl_bo_vmap_locked(struct qxl_bo *bo, struct iosys_map *map)
 {
 	int r;
 
@@ -168,9 +168,16 @@ int qxl_bo_vmap_locked(struct qxl_bo *bo, struct dma_buf_map *map)
 		bo->map_count++;
 		goto out;
 	}
-	r = ttm_bo_vmap(&bo->tbo, &bo->map);
+
+	r = __qxl_bo_pin(bo);
 	if (r)
 		return r;
+
+	r = ttm_bo_vmap(&bo->tbo, &bo->map);
+	if (r) {
+		__qxl_bo_unpin(bo);
+		return r;
+	}
 	bo->map_count = 1;
 
 	/* TODO: Remove kptr in favor of map everywhere. */
@@ -184,19 +191,13 @@ out:
 	return 0;
 }
 
-int qxl_bo_vmap(struct qxl_bo *bo, struct dma_buf_map *map)
+int qxl_bo_vmap(struct qxl_bo *bo, struct iosys_map *map)
 {
 	int r;
 
 	r = qxl_bo_reserve(bo);
 	if (r)
 		return r;
-
-	r = __qxl_bo_pin(bo);
-	if (r) {
-		qxl_bo_unreserve(bo);
-		return r;
-	}
 
 	r = qxl_bo_vmap_locked(bo, map);
 	qxl_bo_unreserve(bo);
@@ -210,7 +211,7 @@ void *qxl_bo_kmap_atomic_page(struct qxl_device *qdev,
 	void *rptr;
 	int ret;
 	struct io_mapping *map;
-	struct dma_buf_map bo_map;
+	struct iosys_map bo_map;
 
 	if (bo->tbo.resource->mem_type == TTM_PL_VRAM)
 		map = qdev->vram_mapping;
@@ -247,6 +248,7 @@ void qxl_bo_vunmap_locked(struct qxl_bo *bo)
 		return;
 	bo->kptr = NULL;
 	ttm_bo_vunmap(&bo->tbo, &bo->map);
+	__qxl_bo_unpin(bo);
 }
 
 int qxl_bo_vunmap(struct qxl_bo *bo)
@@ -258,7 +260,6 @@ int qxl_bo_vunmap(struct qxl_bo *bo)
 		return r;
 
 	qxl_bo_vunmap_locked(bo);
-	__qxl_bo_unpin(bo);
 	qxl_bo_unreserve(bo);
 	return 0;
 }

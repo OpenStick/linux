@@ -34,6 +34,17 @@
 #define DP_BRANCH_DEVICE_ID_90CC24 0x90CC24
 #define DP_BRANCH_DEVICE_ID_00E04C 0x00E04C
 #define DP_BRANCH_DEVICE_ID_006037 0x006037
+#define DP_BRANCH_DEVICE_ID_001CF8 0x001CF8
+#define DP_BRANCH_DEVICE_ID_0060AD 0x0060AD
+#define DP_BRANCH_HW_REV_10 0x10
+#define DP_BRANCH_HW_REV_20 0x20
+
+#define DP_DEVICE_ID_38EC11 0x38EC11
+#define DP_FORCE_PSRSU_CAPABILITY 0x40F
+
+#define DP_SINK_PSR_ACTIVE_VTOTAL		0x373
+#define DP_SINK_PSR_ACTIVE_VTOTAL_CONTROL_MODE	0x375
+#define DP_SOURCE_PSR_ACTIVE_VTOTAL		0x376
 
 enum ddc_result {
 	DDC_RESULT_UNKNOWN = 0,
@@ -60,6 +71,7 @@ enum ddc_service_type {
 struct display_sink_capability {
 	/* dongle type (DP converter, CV smart dongle) */
 	enum display_dongle_type dongle_type;
+	bool is_dongle_type_one;
 
 	/**********************************************************
 	 capabilities going INTO SINK DEVICE (stream capabilities)

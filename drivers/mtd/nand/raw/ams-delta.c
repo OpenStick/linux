@@ -217,9 +217,8 @@ static int gpio_nand_setup_interface(struct nand_chip *this, int csline,
 
 static int gpio_nand_attach_chip(struct nand_chip *chip)
 {
-	chip->ecc.engine_type = NAND_ECC_ENGINE_TYPE_SOFT;
-
-	if (chip->ecc.algo == NAND_ECC_ALGO_UNKNOWN)
+	if (chip->ecc.engine_type == NAND_ECC_ENGINE_TYPE_SOFT &&
+	    chip->ecc.algo == NAND_ECC_ALGO_UNKNOWN)
 		chip->ecc.algo = NAND_ECC_ALGO_HAMMING;
 
 	return 0;
@@ -370,6 +369,13 @@ static int gpio_nand_probe(struct platform_device *pdev)
 	/* Release write protection */
 	gpiod_set_value(priv->gpiod_nwp, 0);
 
+	/*
+	 * This driver assumes that the default ECC engine should be TYPE_SOFT.
+	 * Set ->engine_type before registering the NAND devices in order to
+	 * provide a driver specific default value.
+	 */
+	this->ecc.engine_type = NAND_ECC_ENGINE_TYPE_SOFT;
+
 	/* Scan to find existence of the device */
 	err = nand_scan(this, 1);
 	if (err)
@@ -391,7 +397,7 @@ err_nand_cleanup:
 /*
  * Clean up routine
  */
-static int gpio_nand_remove(struct platform_device *pdev)
+static void gpio_nand_remove(struct platform_device *pdev)
 {
 	struct gpio_nand *priv = platform_get_drvdata(pdev);
 	struct mtd_info *mtd = nand_to_mtd(&priv->nand_chip);
@@ -404,8 +410,6 @@ static int gpio_nand_remove(struct platform_device *pdev)
 	ret = mtd_device_unregister(mtd);
 	WARN_ON(ret);
 	nand_cleanup(mtd_to_nand(mtd));
-
-	return 0;
 }
 
 #ifdef CONFIG_OF
@@ -428,7 +432,7 @@ MODULE_DEVICE_TABLE(platform, gpio_nand_plat_id_table);
 
 static struct platform_driver gpio_nand_driver = {
 	.probe		= gpio_nand_probe,
-	.remove		= gpio_nand_remove,
+	.remove_new	= gpio_nand_remove,
 	.id_table	= gpio_nand_plat_id_table,
 	.driver		= {
 		.name	= "ams-delta-nand",

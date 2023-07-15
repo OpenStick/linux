@@ -14,7 +14,6 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
-int _version SEC("version") = 1;
 char _license[] SEC("license") = "GPL";
 
 __u16 g_serv_port = 0;
@@ -67,7 +66,6 @@ static inline int is_allowed_peer_cg(struct __sk_buff *skb,
 SEC("cgroup_skb/ingress")
 int ingress_lookup(struct __sk_buff *skb)
 {
-	__u32 serv_port_key = 0;
 	struct ipv6hdr ip6h;
 	struct tcphdr tcph;
 

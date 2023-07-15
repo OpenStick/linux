@@ -324,6 +324,9 @@ static int isku_probe(struct hid_device *hdev,
 {
 	int retval;
 
+	if (!hid_is_usb(hdev))
+		return -EINVAL;
+
 	retval = hid_parse(hdev);
 	if (retval) {
 		hid_err(hdev, "parse failed\n");
@@ -432,7 +435,7 @@ static struct hid_driver isku_driver = {
 static int __init isku_init(void)
 {
 	int retval;
-	isku_class = class_create(THIS_MODULE, "isku");
+	isku_class = class_create("isku");
 	if (IS_ERR(isku_class))
 		return PTR_ERR(isku_class);
 	isku_class->dev_groups = isku_groups;

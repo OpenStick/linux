@@ -291,7 +291,6 @@ static int ads5121_chipselect_init(struct mtd_info *mtd)
 /* Control chips select signal on ADS5121 board */
 static void ads5121_select_chip(struct nand_chip *nand, int chip)
 {
-	struct mtd_info *mtd = nand_to_mtd(nand);
 	struct mpc5121_nfc_prv *prv = nand_get_controller_data(nand);
 	u8 v;
 
@@ -596,8 +595,7 @@ static void mpc5121_nfc_free(struct device *dev, struct mtd_info *mtd)
 	struct nand_chip *chip = mtd_to_nand(mtd);
 	struct mpc5121_nfc_prv *prv = nand_get_controller_data(chip);
 
-	if (prv->clk)
-		clk_disable_unprepare(prv->clk);
+	clk_disable_unprepare(prv->clk);
 
 	if (prv->csreg)
 		iounmap(prv->csreg);
@@ -605,9 +603,8 @@ static void mpc5121_nfc_free(struct device *dev, struct mtd_info *mtd)
 
 static int mpc5121_nfc_attach_chip(struct nand_chip *chip)
 {
-	chip->ecc.engine_type = NAND_ECC_ENGINE_TYPE_SOFT;
-
-	if (chip->ecc.algo == NAND_ECC_ALGO_UNKNOWN)
+	if (chip->ecc.engine_type == NAND_ECC_ENGINE_TYPE_SOFT &&
+	    chip->ecc.algo == NAND_ECC_ALGO_UNKNOWN)
 		chip->ecc.algo = NAND_ECC_ALGO_HAMMING;
 
 	return 0;
@@ -666,7 +663,7 @@ static int mpc5121_nfc_probe(struct platform_device *op)
 	}
 
 	prv->irq = irq_of_parse_and_map(dn, 0);
-	if (prv->irq == NO_IRQ) {
+	if (!prv->irq) {
 		dev_err(dev, "Error mapping IRQ!\n");
 		return -EINVAL;
 	}
@@ -772,6 +769,13 @@ static int mpc5121_nfc_probe(struct platform_device *op)
 		goto error;
 	}
 
+	/*
+	 * This driver assumes that the default ECC engine should be TYPE_SOFT.
+	 * Set ->engine_type before registering the NAND devices in order to
+	 * provide a driver specific default value.
+	 */
+	chip->ecc.engine_type = NAND_ECC_ENGINE_TYPE_SOFT;
+
 	/* Detect NAND chips */
 	retval = nand_scan(chip, be32_to_cpup(chips_no));
 	if (retval) {
@@ -818,7 +822,7 @@ error:
 	return retval;
 }
 
-static int mpc5121_nfc_remove(struct platform_device *op)
+static void mpc5121_nfc_remove(struct platform_device *op)
 {
 	struct device *dev = &op->dev;
 	struct mtd_info *mtd = dev_get_drvdata(dev);
@@ -828,8 +832,6 @@ static int mpc5121_nfc_remove(struct platform_device *op)
 	WARN_ON(ret);
 	nand_cleanup(mtd_to_nand(mtd));
 	mpc5121_nfc_free(dev, mtd);
-
-	return 0;
 }
 
 static const struct of_device_id mpc5121_nfc_match[] = {
@@ -840,7 +842,7 @@ MODULE_DEVICE_TABLE(of, mpc5121_nfc_match);
 
 static struct platform_driver mpc5121_nfc_driver = {
 	.probe		= mpc5121_nfc_probe,
-	.remove		= mpc5121_nfc_remove,
+	.remove_new	= mpc5121_nfc_remove,
 	.driver		= {
 		.name = DRV_NAME,
 		.of_match_table = mpc5121_nfc_match,

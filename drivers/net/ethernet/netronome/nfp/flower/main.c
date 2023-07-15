@@ -76,7 +76,9 @@ nfp_flower_get_internal_port_id(struct nfp_app *app, struct net_device *netdev)
 u32 nfp_flower_get_port_id_from_netdev(struct nfp_app *app,
 				       struct net_device *netdev)
 {
+	struct nfp_flower_priv *priv = app->priv;
 	int ext_port;
+	int gid;
 
 	if (nfp_netdev_is_nfp_repr(netdev)) {
 		return nfp_repr_get_port_id(netdev);
@@ -86,6 +88,13 @@ u32 nfp_flower_get_port_id_from_netdev(struct nfp_app *app,
 			return 0;
 
 		return nfp_flower_internal_port_get_port_id(ext_port);
+	} else if (netif_is_lag_master(netdev) &&
+		   priv->flower_ext_feats & NFP_FL_FEATS_TUNNEL_NEIGH_LAG) {
+		gid = nfp_flower_lag_get_output_id(app, netdev);
+		if (gid < 0)
+			return 0;
+
+		return (NFP_FL_LAG_OUT | gid);
 	}
 
 	return 0;
@@ -266,7 +275,7 @@ nfp_flower_reprs_reify(struct nfp_app *app, enum nfp_repr_type type,
 	int i, err, count = 0;
 
 	reprs = rcu_dereference_protected(app->reprs[type],
-					  lockdep_is_held(&app->pf->lock));
+					  nfp_app_is_locked(app));
 	if (!reprs)
 		return 0;
 
@@ -295,7 +304,7 @@ nfp_flower_wait_repr_reify(struct nfp_app *app, atomic_t *replies, int tot_repl)
 	if (!tot_repl)
 		return 0;
 
-	lockdep_assert_held(&app->pf->lock);
+	assert_nfp_app_locked(app);
 	if (!wait_event_timeout(priv->reify_wait_queue,
 				atomic_read(replies) >= tot_repl,
 				NFP_FL_REPLY_TIMEOUT)) {

@@ -436,23 +436,14 @@ static void tps65910_power_off(void)
 
 	tps65910 = dev_get_drvdata(&tps65910_i2c_client->dev);
 
-	/*
-	 * The PWR_OFF bit needs to be set separately, before transitioning
-	 * to the OFF state. It enables the "sequential" power-off mode on
-	 * TPS65911, it's a NO-OP on TPS65910.
-	 */
-	if (regmap_set_bits(tps65910->regmap, TPS65910_DEVCTRL,
-			    DEVCTRL_PWR_OFF_MASK) < 0)
-		return;
-
 	regmap_update_bits(tps65910->regmap, TPS65910_DEVCTRL,
 			   DEVCTRL_DEV_OFF_MASK | DEVCTRL_DEV_ON_MASK,
 			   DEVCTRL_DEV_OFF_MASK);
 }
 
-static int tps65910_i2c_probe(struct i2c_client *i2c,
-			      const struct i2c_device_id *id)
+static int tps65910_i2c_probe(struct i2c_client *i2c)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(i2c);
 	struct tps65910 *tps65910;
 	struct tps65910_board *pmic_plat_data;
 	struct tps65910_board *of_pmic_plat_data = NULL;
@@ -504,6 +495,19 @@ static int tps65910_i2c_probe(struct i2c_client *i2c,
 	tps65910_sleepinit(tps65910, pmic_plat_data);
 
 	if (pmic_plat_data->pm_off && !pm_power_off) {
+		/*
+		 * The PWR_OFF bit needs to be set separately, before
+		 * transitioning to the OFF state. It enables the "sequential"
+		 * power-off mode on TPS65911, it's a NO-OP on TPS65910.
+		 */
+		ret = regmap_set_bits(tps65910->regmap, TPS65910_DEVCTRL,
+				      DEVCTRL_PWR_OFF_MASK);
+		if (ret) {
+			dev_err(&i2c->dev, "failed to set power-off mode: %d\n",
+				ret);
+			return ret;
+		}
+
 		tps65910_i2c_client = i2c;
 		pm_power_off = tps65910_power_off;
 	}
@@ -531,7 +535,7 @@ static struct i2c_driver tps65910_i2c_driver = {
 		   .name = "tps65910",
 		   .of_match_table = of_match_ptr(tps65910_of_match),
 	},
-	.probe = tps65910_i2c_probe,
+	.probe_new = tps65910_i2c_probe,
 	.id_table = tps65910_i2c_id,
 };
 

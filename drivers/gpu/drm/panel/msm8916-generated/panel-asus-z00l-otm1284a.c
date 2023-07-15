@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2021 FIXME
+// Copyright (c) 2023 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -28,14 +28,6 @@ static inline struct otm1284a *to_otm1284a(struct drm_panel *panel)
 	return container_of(panel, struct otm1284a, panel);
 }
 
-#define dsi_generic_write_seq(dsi, seq...) do {				\
-		static const u8 d[] = { seq };				\
-		int ret;						\
-		ret = mipi_dsi_generic_write(dsi, d, ARRAY_SIZE(d));	\
-		if (ret < 0)						\
-			return ret;					\
-	} while (0)
-
 static void otm1284a_reset(struct otm1284a *ctx)
 {
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
@@ -52,16 +44,16 @@ static int otm1284a_on(struct otm1284a *ctx)
 	struct device *dev = &dsi->dev;
 	int ret;
 
-	dsi_generic_write_seq(dsi, 0x00, 0x00);
-	dsi_generic_write_seq(dsi, 0xff, 0x12, 0x84, 0x01);
-	dsi_generic_write_seq(dsi, 0x00, 0x80);
-	dsi_generic_write_seq(dsi, 0xff, 0x12, 0x84);
-	dsi_generic_write_seq(dsi, 0x00, 0xb1);
-	dsi_generic_write_seq(dsi, 0xc6, 0x02);
-	dsi_generic_write_seq(dsi, 0x00, 0xb4);
-	dsi_generic_write_seq(dsi, 0xc6, 0x10);
-	dsi_generic_write_seq(dsi, 0x00, 0x00);
-	dsi_generic_write_seq(dsi, 0xff, 0xff, 0xff, 0xff);
+	mipi_dsi_generic_write_seq(dsi, 0x00, 0x00);
+	mipi_dsi_generic_write_seq(dsi, 0xff, 0x12, 0x84, 0x01);
+	mipi_dsi_generic_write_seq(dsi, 0x00, 0x80);
+	mipi_dsi_generic_write_seq(dsi, 0xff, 0x12, 0x84);
+	mipi_dsi_generic_write_seq(dsi, 0x00, 0xb1);
+	mipi_dsi_generic_write_seq(dsi, 0xc6, 0x02);
+	mipi_dsi_generic_write_seq(dsi, 0x00, 0xb4);
+	mipi_dsi_generic_write_seq(dsi, 0xc6, 0x10);
+	mipi_dsi_generic_write_seq(dsi, 0x00, 0x00);
+	mipi_dsi_generic_write_seq(dsi, 0xff, 0xff, 0xff, 0xff);
 
 	ret = mipi_dsi_dcs_exit_sleep_mode(dsi);
 	if (ret < 0) {
@@ -77,8 +69,8 @@ static int otm1284a_on(struct otm1284a *ctx)
 	}
 	usleep_range(5000, 6000);
 
-	dsi_generic_write_seq(dsi, 0x53, 0x24);
-	dsi_generic_write_seq(dsi, 0x5e, 0x0d);
+	mipi_dsi_generic_write_seq(dsi, 0x53, 0x24);
+	mipi_dsi_generic_write_seq(dsi, 0x5e, 0x0d);
 
 	return 0;
 }
@@ -89,7 +81,7 @@ static int otm1284a_off(struct otm1284a *ctx)
 	struct device *dev = &dsi->dev;
 	int ret;
 
-	dsi_generic_write_seq(dsi, 0x53, 0x00);
+	mipi_dsi_generic_write_seq(dsi, 0x53, 0x00);
 
 	ret = mipi_dsi_dcs_set_display_off(dsi);
 	if (ret < 0) {
@@ -288,7 +280,7 @@ static int otm1284a_probe(struct mipi_dsi_device *dsi)
 	return 0;
 }
 
-static int otm1284a_remove(struct mipi_dsi_device *dsi)
+static void otm1284a_remove(struct mipi_dsi_device *dsi)
 {
 	struct otm1284a *ctx = mipi_dsi_get_drvdata(dsi);
 	int ret;
@@ -298,8 +290,6 @@ static int otm1284a_remove(struct mipi_dsi_device *dsi)
 		dev_err(&dsi->dev, "Failed to detach from DSI host: %d\n", ret);
 
 	drm_panel_remove(&ctx->panel);
-
-	return 0;
 }
 
 static const struct of_device_id otm1284a_of_match[] = {
@@ -320,4 +310,4 @@ module_mipi_dsi_driver(otm1284a_driver);
 
 MODULE_AUTHOR("linux-mdss-dsi-panel-driver-generator <fix@me>"); // FIXME
 MODULE_DESCRIPTION("DRM driver for otm1284a 720p video mode dsi panel");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

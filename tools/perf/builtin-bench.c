@@ -52,6 +52,9 @@ static struct bench sched_benchmarks[] = {
 
 static struct bench syscall_benchmarks[] = {
 	{ "basic",	"Benchmark for basic getppid(2) calls",		bench_syscall_basic	},
+	{ "getpgid",	"Benchmark for getpgid(2) calls",		bench_syscall_getpgid	},
+	{ "fork",	"Benchmark for fork(2) calls",			bench_syscall_fork	},
+	{ "execve",	"Benchmark for execve(2) calls",		bench_syscall_execve	},
 	{ "all",	"Run all syscall benchmarks",			NULL			},
 	{ NULL,		NULL,						NULL			},
 };
@@ -89,7 +92,15 @@ static struct bench internals_benchmarks[] = {
 	{ "kallsyms-parse", "Benchmark kallsyms parsing",	bench_kallsyms_parse	},
 	{ "inject-build-id", "Benchmark build-id injection",	bench_inject_build_id	},
 	{ "evlist-open-close", "Benchmark evlist open and close",	bench_evlist_open_close	},
+	{ "pmu-scan", "Benchmark sysfs PMU info scanning",	bench_pmu_scan		},
 	{ NULL,		NULL,					NULL			}
+};
+
+static struct bench breakpoint_benchmarks[] = {
+	{ "thread", "Benchmark thread start/finish with breakpoints", bench_breakpoint_thread},
+	{ "enable", "Benchmark breakpoint enable/disable", bench_breakpoint_enable},
+	{ "all", "Run all breakpoint benchmarks", NULL},
+	{ NULL,	NULL, NULL },
 };
 
 struct collection {
@@ -110,6 +121,7 @@ static struct collection collections[] = {
 	{"epoll",       "Epoll stressing benchmarks",                   epoll_benchmarks        },
 #endif
 	{ "internals",	"Perf-internals benchmarks",			internals_benchmarks	},
+	{ "breakpoint",	"Breakpoint benchmarks",			breakpoint_benchmarks	},
 	{ "all",	"All benchmarks",				NULL			},
 	{ NULL,		NULL,						NULL			}
 };
@@ -142,7 +154,7 @@ unsigned int bench_repeat = 10; /* default number of times to repeat the run */
 
 static const struct option bench_options[] = {
 	OPT_STRING('f', "format", &bench_format_str, "default|simple", "Specify the output formatting style"),
-	OPT_UINTEGER('r', "repeat",  &bench_repeat,   "Specify amount of times to repeat the run"),
+	OPT_UINTEGER('r', "repeat",  &bench_repeat,   "Specify number of times to repeat the run"),
 	OPT_END()
 };
 
@@ -226,7 +238,6 @@ static void run_collection(struct collection *coll)
 		if (!bench->fn)
 			break;
 		printf("# Running %s/%s benchmark...\n", coll->name, bench->name);
-		fflush(stdout);
 
 		argv[1] = bench->name;
 		run_bench(coll->name, bench->name, bench->fn, 1, argv);
@@ -246,6 +257,9 @@ int cmd_bench(int argc, const char **argv)
 {
 	struct collection *coll;
 	int ret = 0;
+
+	/* Unbuffered output */
+	setvbuf(stdout, NULL, _IONBF, 0);
 
 	if (argc < 2) {
 		/* No collection specified. */
@@ -300,7 +314,6 @@ int cmd_bench(int argc, const char **argv)
 
 			if (bench_format == BENCH_FORMAT_DEFAULT)
 				printf("# Running '%s/%s' benchmark:\n", coll->name, bench->name);
-			fflush(stdout);
 			ret = run_bench(coll->name, bench->name, bench->fn, argc-1, argv+1);
 			goto end;
 		}

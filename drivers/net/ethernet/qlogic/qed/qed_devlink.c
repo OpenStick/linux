@@ -162,10 +162,6 @@ static int qed_devlink_info_get(struct devlink *devlink,
 
 	dev_info = &cdev->common_dev_info;
 
-	err = devlink_info_driver_name_put(req, KBUILD_MODNAME);
-	if (err)
-		return err;
-
 	memcpy(buf, cdev->hwfns[0].hw_info.part_num, sizeof(cdev->hwfns[0].hw_info.part_num));
 	buf[sizeof(cdev->hwfns[0].hw_info.part_num)] = 0;
 
@@ -202,7 +198,6 @@ static const struct devlink_ops qed_dl_ops = {
 
 struct devlink *qed_devlink_register(struct qed_dev *cdev)
 {
-	union devlink_param_value value;
 	struct qed_devlink *qdevlink;
 	struct devlink *dl;
 	int rc;
@@ -215,31 +210,18 @@ struct devlink *qed_devlink_register(struct qed_dev *cdev)
 	qdevlink = devlink_priv(dl);
 	qdevlink->cdev = cdev;
 
-	rc = devlink_register(dl);
-	if (rc)
-		goto err_free;
-
 	rc = devlink_params_register(dl, qed_devlink_params,
 				     ARRAY_SIZE(qed_devlink_params));
 	if (rc)
 		goto err_unregister;
 
-	value.vbool = false;
-	devlink_param_driverinit_value_set(dl,
-					   QED_DEVLINK_PARAM_ID_IWARP_CMT,
-					   value);
-
-	devlink_params_publish(dl);
 	cdev->iwarp_cmt = false;
 
 	qed_fw_reporters_create(dl);
-
+	devlink_register(dl);
 	return dl;
 
 err_unregister:
-	devlink_unregister(dl);
-
-err_free:
 	devlink_free(dl);
 
 	return ERR_PTR(rc);
@@ -250,11 +232,11 @@ void qed_devlink_unregister(struct devlink *devlink)
 	if (!devlink)
 		return;
 
+	devlink_unregister(devlink);
 	qed_fw_reporters_destroy(devlink);
 
 	devlink_params_unregister(devlink, qed_devlink_params,
 				  ARRAY_SIZE(qed_devlink_params));
 
-	devlink_unregister(devlink);
 	devlink_free(devlink);
 }

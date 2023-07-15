@@ -7,6 +7,7 @@
 
 #include <linux/module.h>
 #include <linux/device.h>
+#include <linux/dma-fence.h>
 #include <linux/slab.h>
 
 #include <trace/events/host1x.h>
@@ -137,11 +138,20 @@ void host1x_syncpt_restore(struct host1x *host)
 	struct host1x_syncpt *sp_base = host->syncpt;
 	unsigned int i;
 
-	for (i = 0; i < host1x_syncpt_nb_pts(host); i++)
+	for (i = 0; i < host1x_syncpt_nb_pts(host); i++) {
+		/*
+		 * Unassign syncpt from channels for purposes of Tegra186
+		 * syncpoint protection. This prevents any channel from
+		 * accessing it until it is reassigned.
+		 */
+		host1x_hw_syncpt_assign_to_channel(host, sp_base + i, NULL);
 		host1x_hw_syncpt_restore(host, sp_base + i);
+	}
 
 	for (i = 0; i < host1x_syncpt_nb_bases(host); i++)
 		host1x_hw_syncpt_restore_wait_base(host, sp_base + i);
+
+	host1x_hw_syncpt_enable_protection(host);
 
 	wmb();
 }
@@ -200,17 +210,6 @@ int host1x_syncpt_incr(struct host1x_syncpt *sp)
 }
 EXPORT_SYMBOL(host1x_syncpt_incr);
 
-/*
- * Updated sync point form hardware, and returns true if syncpoint is expired,
- * false if we may need to wait
- */
-static bool syncpt_load_min_is_expired(struct host1x_syncpt *sp, u32 thresh)
-{
-	host1x_hw_syncpt_load(sp->host, sp);
-
-	return host1x_syncpt_is_expired(sp, thresh);
-}
-
 /**
  * host1x_syncpt_wait() - wait for a syncpoint to reach a given value
  * @sp: host1x syncpoint
@@ -221,99 +220,46 @@ static bool syncpt_load_min_is_expired(struct host1x_syncpt *sp, u32 thresh)
 int host1x_syncpt_wait(struct host1x_syncpt *sp, u32 thresh, long timeout,
 		       u32 *value)
 {
-	DECLARE_WAIT_QUEUE_HEAD_ONSTACK(wq);
-	void *ref;
-	struct host1x_waitlist *waiter;
-	int err = 0, check_count = 0;
-	u32 val;
+	struct dma_fence *fence;
+	long wait_err;
+
+	host1x_hw_syncpt_load(sp->host, sp);
 
 	if (value)
-		*value = 0;
+		*value = host1x_syncpt_load(sp);
 
-	/* first check cache */
-	if (host1x_syncpt_is_expired(sp, thresh)) {
-		if (value)
-			*value = host1x_syncpt_load(sp);
-
+	if (host1x_syncpt_is_expired(sp, thresh))
 		return 0;
-	}
 
-	/* try to read from register */
-	val = host1x_hw_syncpt_load(sp->host, sp);
-	if (host1x_syncpt_is_expired(sp, thresh)) {
-		if (value)
-			*value = val;
-
-		goto done;
-	}
-
-	if (!timeout) {
-		err = -EAGAIN;
-		goto done;
-	}
-
-	/* allocate a waiter */
-	waiter = kzalloc(sizeof(*waiter), GFP_KERNEL);
-	if (!waiter) {
-		err = -ENOMEM;
-		goto done;
-	}
-
-	/* schedule a wakeup when the syncpoint value is reached */
-	err = host1x_intr_add_action(sp->host, sp, thresh,
-				     HOST1X_INTR_ACTION_WAKEUP_INTERRUPTIBLE,
-				     &wq, waiter, &ref);
-	if (err)
-		goto done;
-
-	err = -EAGAIN;
-	/* Caller-specified timeout may be impractically low */
 	if (timeout < 0)
 		timeout = LONG_MAX;
+	else if (timeout == 0)
+		return -EAGAIN;
 
-	/* wait for the syncpoint, or timeout, or signal */
-	while (timeout) {
-		long check = min_t(long, SYNCPT_CHECK_PERIOD, timeout);
-		int remain;
+	fence = host1x_fence_create(sp, thresh, false);
+	if (IS_ERR(fence))
+		return PTR_ERR(fence);
 
-		remain = wait_event_interruptible_timeout(wq,
-				syncpt_load_min_is_expired(sp, thresh),
-				check);
-		if (remain > 0 || host1x_syncpt_is_expired(sp, thresh)) {
-			if (value)
-				*value = host1x_syncpt_load(sp);
+	wait_err = dma_fence_wait_timeout(fence, true, timeout);
+	if (wait_err == 0)
+		host1x_fence_cancel(fence);
+	dma_fence_put(fence);
 
-			err = 0;
+	if (value)
+		*value = host1x_syncpt_load(sp);
 
-			break;
-		}
-
-		if (remain < 0) {
-			err = remain;
-			break;
-		}
-
-		timeout -= check;
-
-		if (timeout && check_count <= MAX_STUCK_CHECK_COUNT) {
-			dev_warn(sp->host->dev,
-				"%s: syncpoint id %u (%s) stuck waiting %d, timeout=%ld\n",
-				 current->comm, sp->id, sp->name,
-				 thresh, timeout);
-
-			host1x_debug_dump_syncpts(sp->host);
-
-			if (check_count == MAX_STUCK_CHECK_COUNT)
-				host1x_debug_dump(sp->host);
-
-			check_count++;
-		}
-	}
-
-	host1x_intr_put_ref(sp->host, sp->id, ref, true);
-
-done:
-	return err;
+	/*
+	 * Don't rely on dma_fence_wait_timeout return value,
+	 * since it returns zero both on timeout and if the
+	 * wait completed with 0 jiffies left.
+	 */
+	host1x_hw_syncpt_load(sp->host, sp);
+	if (wait_err == 0 && !host1x_syncpt_is_expired(sp, thresh))
+		return -EAGAIN;
+	else if (wait_err < 0)
+		return wait_err;
+	else
+		return 0;
 }
 EXPORT_SYMBOL(host1x_syncpt_wait);
 
@@ -350,13 +296,6 @@ int host1x_syncpt_init(struct host1x *host)
 	for (i = 0; i < host->info->nb_pts; i++) {
 		syncpt[i].id = i;
 		syncpt[i].host = host;
-
-		/*
-		 * Unassign syncpt from channels for purposes of Tegra186
-		 * syncpoint protection. This prevents any channel from
-		 * accessing it until it is reassigned.
-		 */
-		host1x_hw_syncpt_assign_to_channel(host, &syncpt[i], NULL);
 	}
 
 	for (i = 0; i < host->info->nb_bases; i++)
@@ -365,9 +304,6 @@ int host1x_syncpt_init(struct host1x *host)
 	mutex_init(&host->syncpt_mutex);
 	host->syncpt = syncpt;
 	host->bases = bases;
-
-	host1x_syncpt_restore(host);
-	host1x_hw_syncpt_enable_protection(host);
 
 	/* Allocate sync point to use for clearing waits for expired fences */
 	host->nop_sp = host1x_syncpt_alloc(host, 0, "reserved-nop");

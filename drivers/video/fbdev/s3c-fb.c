@@ -489,7 +489,7 @@ static int s3c_fb_set_par(struct fb_info *info)
 	struct s3c_fb_win *win = info->par;
 	struct s3c_fb *sfb = win->parent;
 	void __iomem *regs = sfb->regs;
-	void __iomem *buf = regs;
+	void __iomem *buf;
 	int win_no = win->index;
 	u32 alpha = 0;
 	u32 data;
@@ -1360,7 +1360,6 @@ static int s3c_fb_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct s3c_fb_platdata *pd;
 	struct s3c_fb *sfb;
-	struct resource *res;
 	int win;
 	int ret = 0;
 	u32 reg;
@@ -1392,18 +1391,17 @@ static int s3c_fb_probe(struct platform_device *pdev)
 	spin_lock_init(&sfb->slock);
 
 	sfb->bus_clk = devm_clk_get(dev, "lcd");
-	if (IS_ERR(sfb->bus_clk)) {
-		dev_err(dev, "failed to get bus clock\n");
-		return PTR_ERR(sfb->bus_clk);
-	}
+	if (IS_ERR(sfb->bus_clk))
+		return dev_err_probe(dev, PTR_ERR(sfb->bus_clk),
+				     "failed to get bus clock\n");
 
 	clk_prepare_enable(sfb->bus_clk);
 
 	if (!sfb->variant.has_clksel) {
 		sfb->lcd_clk = devm_clk_get(dev, "sclk_fimd");
 		if (IS_ERR(sfb->lcd_clk)) {
-			dev_err(dev, "failed to get lcd clock\n");
-			ret = PTR_ERR(sfb->lcd_clk);
+			ret = dev_err_probe(dev, PTR_ERR(sfb->lcd_clk),
+					    "failed to get lcd clock\n");
 			goto err_bus_clk;
 		}
 
@@ -1418,13 +1416,12 @@ static int s3c_fb_probe(struct platform_device *pdev)
 		goto err_lcd_clk;
 	}
 
-	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
-	if (!res) {
-		dev_err(dev, "failed to acquire irq resource\n");
+	sfb->irq_no = platform_get_irq(pdev, 0);
+	if (sfb->irq_no < 0) {
 		ret = -ENOENT;
 		goto err_lcd_clk;
 	}
-	sfb->irq_no = res->start;
+
 	ret = devm_request_irq(dev, sfb->irq_no, s3c_fb_irq,
 			  0, "s3c_fb", sfb);
 	if (ret) {
@@ -1510,7 +1507,7 @@ err_bus_clk:
  * Shutdown and then release all the resources that the driver allocated
  * on initialisation.
  */
-static int s3c_fb_remove(struct platform_device *pdev)
+static void s3c_fb_remove(struct platform_device *pdev)
 {
 	struct s3c_fb *sfb = platform_get_drvdata(pdev);
 	int win;
@@ -1528,8 +1525,6 @@ static int s3c_fb_remove(struct platform_device *pdev)
 
 	pm_runtime_put_sync(sfb->dev);
 	pm_runtime_disable(sfb->dev);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -1797,7 +1792,7 @@ static const struct dev_pm_ops s3cfb_pm_ops = {
 
 static struct platform_driver s3c_fb_driver = {
 	.probe		= s3c_fb_probe,
-	.remove		= s3c_fb_remove,
+	.remove_new	= s3c_fb_remove,
 	.id_table	= s3c_fb_driver_ids,
 	.driver		= {
 		.name	= "s3c-fb",
@@ -1810,4 +1805,3 @@ module_platform_driver(s3c_fb_driver);
 MODULE_AUTHOR("Ben Dooks <ben@simtec.co.uk>");
 MODULE_DESCRIPTION("Samsung S3C SoC Framebuffer driver");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("platform:s3c-fb");

@@ -7,6 +7,7 @@
 
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
 #include <dt-bindings/pinctrl/qcom,pmic-mpp.h>
 
 / {
@@ -62,11 +63,35 @@
 
 		label = "GPIO Buttons";
 
-		volume-up {
+		button-volume-up {
 			label = "Volume Up";
 			gpios = <&msmgpio 107 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEUP>;
 		};
+	};
+
+	gpio-leds {
+		compatible = "gpio-leds";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&gpio_leds_default>;
+
+		led-0 {
+			gpios = <&msmgpio 32 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "torch";
+			function = LED_FUNCTION_TORCH;
+		};
+	};
+
+	reg_headphones_avdd: regulator-headphones-avdd {
+		compatible = "regulator-fixed";
+		regulator-name = "headphones_avdd";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		gpio = <&msmgpio 121 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		pinctrl-names = "default";
+		pinctrl-0 = <&headphones_avdd_default>;
 	};
 
 	usb_id: usb-id {
@@ -93,9 +118,6 @@
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&smb_int_default>;
-
-		/* Set by bootloader */
-		status = "disabled";
 		qcom,otp-rslow-config = /bits/ 8 <0x0 0x0 0x0 0x0>;
 
 		qcom,float-voltage-mv = <4350>;
@@ -127,6 +149,9 @@
 		qcom,fg-reset-at-pon;
 		qcom,fg-reset-threshold-mv = <200>;
 
+		/* Set by bootloader */
+		status = "disabled";
+
 		usb_otg_vbus: usb-otg-vbus {
 			regulator-max-microamp = <1500000>;
 		};
@@ -135,6 +160,17 @@
 
 &blsp_i2c3 {
 	status = "okay";
+
+	headphones: audio-codec@10 {
+		compatible = "asahi-kasei,ak4375";
+		reg = <0x10>;
+		avdd-supply = <&reg_headphones_avdd>;
+		tvdd-supply = <&pm8916_l6>;
+		pdn-gpios = <&msmgpio 114 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&headphones_pdn_default>;
+		#sound-dai-cells = <0>;
+	};
 
 	speaker_codec_top: audio-codec@34 {
 		compatible = "nxp,tfa9897";
@@ -252,7 +288,32 @@
 	};
 };
 
+&blsp_i2c6 {
+	status = "okay";
+
+	led-controller@68 {
+		compatible = "si-en,sn3190";
+		reg = <0x68>;
+		shutdown-gpios = <&msmgpio 89 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&led_enable_default &led_shutdown_default>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		led@1 {
+			reg = <1>;
+			led-max-microamp = <5000>;
+			function = LED_FUNCTION_INDICATOR;
+			color = <LED_COLOR_ID_WHITE>;
+		};
+	};
+};
+
 &dsi0 {
+	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&mdss_active>;
+	pinctrl-1 = <&mdss_suspend>;
+
 	panel@0 {
 		compatible = "alcatel,idol347-panel";
 		reg = <0>;
@@ -300,8 +361,16 @@
 	status = "okay";
 };
 
-&pronto {
-	status = "okay";
+&q6afedai {
+	dai@18 {
+		reg = <SECONDARY_MI2S_RX>;
+		qcom,sd-lines = <0>;
+	};
+
+	dai@22 {
+		reg = <QUATERNARY_MI2S_RX>;
+		qcom,sd-lines = <0>;
+	};
 };
 
 &q6afedai {
@@ -333,18 +402,26 @@
 	status = "okay";
 
 	model = "alcatel-idol3";
+	widgets =
+		"Speaker", "Speaker Top",
+		"Speaker", "Speaker Bottom";
+	pin-switches = "Speaker Top", "Speaker Bottom";
 	audio-routing =
+		"Speaker Top", "Speaker Top OUT",
+		"Speaker Bottom", "Speaker Bottom OUT",
 		"AMIC1", "MIC BIAS External1",
 		"AMIC2", "MIC BIAS Internal2",
 		"AMIC3", "MIC BIAS External1";
 
 	pinctrl-names = "default", "sleep";
-	pinctrl-0 = <&cdc_pdm_lines_act &ext_sec_tlmm_lines_act>;
-	pinctrl-1 = <&cdc_pdm_lines_sus &ext_sec_tlmm_lines_sus>;
+	pinctrl-0 = <&cdc_pdm_lines_act &ext_pri_tlmm_lines_act &ext_pri_ws_act>,
+		    <&ext_sec_tlmm_lines_act>;
+	pinctrl-1 = <&cdc_pdm_lines_sus &ext_pri_tlmm_lines_sus &ext_pri_ws_sus>,
+		    <&ext_sec_tlmm_lines_sus>;
 };
 
 &sound_dai_primary {
-	/* unused primary link is kept so we can use same UCM with modem */
+	status = "disabled";
 };
 
 &sound_dai_quaternary {
@@ -352,6 +429,14 @@
 
 	codec {
 		sound-dai = <&speaker_codec_top>, <&speaker_codec_bottom>;
+	};
+};
+
+&sound_dai_secondary {
+	status = "okay";
+
+	codec {
+		sound-dai = <&headphones>;
 	};
 };
 
@@ -371,6 +456,14 @@
 	qcom,mbhc-vthreshold-low = <75 100 120 180 500>;
 	qcom,mbhc-vthreshold-high = <75 100 120 180 500>;
 	qcom,hphl-jack-type-normally-open;
+};
+
+&wcnss {
+	status = "okay";
+};
+
+&wcnss_iris {
+	compatible = "qcom,wcn3620";
 };
 
 &smd_rpm_regulators {
@@ -476,8 +569,16 @@
 	};
 };
 
+/* Only some of the pins are used */
+&ext_pri_tlmm_lines_act {
+	pins = "gpio113", "gpio115";
+};
+&ext_pri_tlmm_lines_sus {
+	pins = "gpio113", "gpio115";
+};
+
 &msmgpio {
-	accel_int_default: accel-int-default {
+	accel_int_default: accel-int-default-state {
 		pins = "gpio31";
 		function = "gpio";
 
@@ -485,7 +586,7 @@
 		bias-disable;
 	};
 
-	gpio_keys_default: gpio-keys-default {
+	gpio_keys_default: gpio-keys-default-state {
 		pins = "gpio107";
 		function = "gpio";
 
@@ -493,7 +594,15 @@
 		bias-pull-up;
 	};
 
-	gyro_int_default: gyro-int-default {
+	gpio_leds_default: gpio-leds-default-state {
+		pins = "gpio32";
+		function = "gpio";
+
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	gyro_int_default: gyro-int-default-state {
 		pins = "gpio97", "gpio98";
 		function = "gpio";
 
@@ -501,7 +610,46 @@
 		bias-disable;
 	};
 
-	mag_reset_default: mag-reset-default {
+	headphones_avdd_default: headphones-avdd-default-state {
+		pins = "gpio121";
+		function = "gpio";
+
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	headphones_pdn_default: headphones-pdn-default-state {
+		pins = "gpio114";
+		function = "gpio";
+
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	/*
+	 * The OEM wired an additional GPIO to be asserted so that
+	 * the si-en,sn3190 LED IC works. Since this GPIO is not
+	 * part of the IC datasheet nor supported by the driver,
+	 * force it asserted here.
+	 */
+	led_enable_default: led-enable-default-state {
+		pins = "gpio102";
+		function = "gpio";
+
+		drive-strength = <2>;
+		bias-disable;
+		output-high;
+	};
+
+	led_shutdown_default: led-shutdown-default-state {
+		pins = "gpio89";
+		function = "gpio";
+
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	mag_reset_default: mag-reset-default-state {
 		pins = "gpio8";
 		function = "gpio";
 
@@ -509,24 +657,23 @@
 		bias-disable;
 	};
 
-	mdss {
-		mdss_active: mdss-active {
-			pins = "gpio25";
-			function = "gpio";
+	mdss_active: mdss-active-state {
+		pins = "gpio25";
+		function = "gpio";
 
-			drive-strength = <8>;
-			bias-disable;
-		};
-		mdss_suspend: mdss-suspend {
-			pins = "gpio25";
-			function = "gpio";
-
-			drive-strength = <2>;
-			bias-pull-down;
-		};
+		drive-strength = <8>;
+		bias-disable;
 	};
 
-	proximity_int_default: proximity-int-default {
+	mdss_suspend: mdss-suspend-state {
+		pins = "gpio25";
+		function = "gpio";
+
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	proximity_int_default: proximity-int-default-state {
 		pins = "gpio12";
 		function = "gpio";
 
@@ -534,7 +681,7 @@
 		bias-pull-up;
 	};
 
-	smb_int_default: smb_int_default {
+	smb_int_default: smb-int-default-state {
 		pins = "gpio9";
 		function = "gpio";
 
@@ -542,7 +689,7 @@
 		bias-pull-up;
 	};
 
-	speaker_bottom_default: speaker-bottom-default {
+	speaker_bottom_default: speaker-bottom-default-state {
 		pins = "gpio111";
 		function = "gpio";
 
@@ -550,7 +697,7 @@
 		bias-disable;
 	};
 
-	speaker_top_default: speaker-top-default {
+	speaker_top_default: speaker-top-default-state {
 		pins = "gpio50";
 		function = "gpio";
 
@@ -558,7 +705,7 @@
 		bias-disable;
 	};
 
-	tps65132_en_default: tps65132-en-default {
+	tps65132_en_default: tps65132-en-default-state {
 		pins = "gpio2", "gpio33";
 		function = "gpio";
 
@@ -566,7 +713,7 @@
 		bias-disable;
 	};
 
-	ts_int_reset_default: ts-int-reset-default {
+	ts_int_reset_default: ts-int-reset-default-state {
 		pins = "gpio13", "gpio100";
 		function = "gpio";
 
@@ -574,7 +721,7 @@
 		bias-disable;
 	};
 
-	usb_id_default: usb-id-default {
+	usb_id_default: usb-id-default-state {
 		pins = "gpio69";
 		function = "gpio";
 
@@ -584,12 +731,11 @@
 };
 
 &pm8916_mpps {
-	pwm_out: mpp4 {
+	pwm_out: mpp4-state {
 		pins = "mpp4";
 		function = "digital";
-
+		power-source = <PM8916_MPP_L5>;
 		output-low;
 		qcom,dtest = <1>;
-		power-source = <PM8916_MPP_L5>;
 	};
 };

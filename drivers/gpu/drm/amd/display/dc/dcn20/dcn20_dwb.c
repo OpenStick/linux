@@ -101,8 +101,8 @@ static bool dwb2_enable(struct dwbc *dwbc, struct dc_dwb_params *params)
 	struct dcn20_dwbc *dwbc20 = TO_DCN20_DWBC(dwbc);
 
 	/* Only chroma scaling (sub-sampling) is supported in DCN2 */
-if ((params->cnv_params.src_width  != params->dest_width) ||
-		(params->cnv_params.src_height != params->dest_height)) {
+	if ((params->cnv_params.src_width  != params->dest_width) ||
+	    (params->cnv_params.src_height != params->dest_height)) {
 
 		DC_LOG_DWB("%s inst = %d, FAILED!LUMA SCALING NOT SUPPORTED", __func__, dwbc20->base.inst);
 		return false;
@@ -301,7 +301,7 @@ void dwb2_set_scaler(struct dwbc *dwbc, struct dc_dwb_params *params)
 
 }
 
-const struct dwbc_funcs dcn20_dwbc_funcs = {
+static const struct dwbc_funcs dcn20_dwbc_funcs = {
 	.get_caps		= dwb2_get_caps,
 	.enable			= dwb2_enable,
 	.disable		= dwb2_disable,

@@ -1325,7 +1325,9 @@ void cx23885_free_buffer(struct cx23885_dev *dev, struct cx23885_buffer *buf)
 {
 	struct cx23885_riscmem *risc = &buf->risc;
 
-	dma_free_coherent(&dev->pci->dev, risc->size, risc->cpu, risc->dma);
+	if (risc->cpu)
+		dma_free_coherent(&dev->pci->dev, risc->size, risc->cpu, risc->dma);
+	memset(risc, 0, sizeof(*risc));
 }
 
 static void cx23885_tsport_reg_dump(struct cx23885_tsport *port)
@@ -2086,6 +2088,9 @@ static struct {
 	/* 0x1419 is the PCI ID for the IOMMU found on 15h (Models 10h-1fh) family
 	 */
 	{ PCI_VENDOR_ID_AMD, 0x1419 },
+	/* 0x1631 is the PCI ID for the IOMMU found on Renoir/Cezanne
+	 */
+	{ PCI_VENDOR_ID_AMD, 0x1631 },
 	/* 0x5a23 is the PCI ID for the IOMMU found on RD890S/RD990
 	 */
 	{ PCI_VENDOR_ID_ATI, 0x5a23 },
@@ -2165,7 +2170,7 @@ static int cx23885_initdev(struct pci_dev *pci_dev,
 	err = dma_set_mask(&pci_dev->dev, 0xffffffff);
 	if (err) {
 		pr_err("%s/0: Oops: no 32bit PCI DMA ???\n", dev->name);
-		goto fail_ctrl;
+		goto fail_dma_set_mask;
 	}
 
 	err = request_irq(pci_dev->irq, cx23885_irq,
@@ -2173,7 +2178,7 @@ static int cx23885_initdev(struct pci_dev *pci_dev,
 	if (err < 0) {
 		pr_err("%s: can't get IRQ %d\n",
 		       dev->name, pci_dev->irq);
-		goto fail_irq;
+		goto fail_dma_set_mask;
 	}
 
 	switch (dev->board) {
@@ -2195,7 +2200,7 @@ static int cx23885_initdev(struct pci_dev *pci_dev,
 
 	return 0;
 
-fail_irq:
+fail_dma_set_mask:
 	cx23885_dev_unregister(dev);
 fail_ctrl:
 	v4l2_ctrl_handler_free(hdl);

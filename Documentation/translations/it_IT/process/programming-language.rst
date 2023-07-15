@@ -10,17 +10,13 @@ Linguaggio di programmazione
 
 Il kernel è scritto nel linguaggio di programmazione C [it-c-language]_.
 Più precisamente, il kernel viene compilato con ``gcc`` [it-gcc]_ usando
-l'opzione ``-std=gnu89`` [it-gcc-c-dialect-options]_: il dialetto GNU
-dello standard ISO C90 (con l'aggiunta di alcune funzionalità da C99).
+l'opzione ``-std=gnu11`` [it-gcc-c-dialect-options]_: il dialetto GNU
+dello standard ISO C11.
 Linux supporta anche ``clang`` [it-clang]_, leggete la documentazione
 :ref:`Building Linux with Clang/LLVM <kbuild_llvm>`.
 
 Questo dialetto contiene diverse estensioni al linguaggio [it-gnu-extensions]_,
 e molte di queste vengono usate sistematicamente dal kernel.
-
-Il kernel offre un certo livello di supporto per la compilazione con
-``icc`` [it-icc]_ su diverse architetture, tuttavia in questo momento
-il supporto non è completo e richiede delle patch aggiuntive.
 
 Attributi
 ---------
@@ -43,11 +39,30 @@ possono usare e/o per accorciare il codice.
 Per maggiori informazioni consultate il file d'intestazione
 ``include/linux/compiler_attributes.h``.
 
+Rust
+----
+
+Il kernel supporta sperimentalmente il linguaggio di programmazione Rust
+[it-rust-language]_ abilitando l'opzione di configurazione ``CONFIG_RUST``. Il
+codice verrà compilato usando ``rustc`` [it-rustc]_ con l'opzione
+``--edition=2021`` [it-rust-editions]_. Le edizioni Rust sono un modo per
+introdurre piccole modifiche senza compatibilità all'indietro._
+
+In aggiunta, nel kernel vengono utilizzate alcune funzionalità considerate
+instabili [it-rust-unstable-features]_. Queste funzionalità potrebbero cambiare
+in futuro, dunque è un'obiettivo importante è quello di far uso solo di
+funzionalità stabili.
+
+Per maggiori informazioni fate riferimento a Documentation/rust/index.rst .
+
 .. [it-c-language] http://www.open-std.org/jtc1/sc22/wg14/www/standards
 .. [it-gcc] https://gcc.gnu.org
 .. [it-clang] https://clang.llvm.org
-.. [it-icc] https://software.intel.com/en-us/c-compilers
 .. [it-gcc-c-dialect-options] https://gcc.gnu.org/onlinedocs/gcc/C-Dialect-Options.html
 .. [it-gnu-extensions] https://gcc.gnu.org/onlinedocs/gcc/C-Extensions.html
 .. [it-gcc-attribute-syntax] https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html
 .. [it-n2049] http://www.open-std.org/jtc1/sc22/wg14/www/docs/n2049.pdf
+.. [it-rust-language] https://www.rust-lang.org
+.. [it-rustc] https://doc.rust-lang.org/rustc/
+.. [it-rust-editions] https://doc.rust-lang.org/edition-guide/editions/
+.. [it-rust-unstable-features] https://github.com/Rust-for-Linux/linux/issues/2

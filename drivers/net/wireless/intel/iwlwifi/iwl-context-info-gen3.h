@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
- * Copyright (C) 2018, 2020-2021 Intel Corporation
+ * Copyright (C) 2018, 2020-2022 Intel Corporation
  */
 #ifndef __iwl_context_info_file_gen3_h__
 #define __iwl_context_info_file_gen3_h__
@@ -34,6 +34,7 @@ enum iwl_prph_scratch_mtr_format {
 
 /**
  * enum iwl_prph_scratch_flags - PRPH scratch control flags
+ * @IWL_PRPH_SCRATCH_IMR_DEBUG_EN: IMR support for debug
  * @IWL_PRPH_SCRATCH_EARLY_DEBUG_EN: enable early debug conf
  * @IWL_PRPH_SCRATCH_EDBG_DEST_DRAM: use DRAM, with size allocated
  *	in hwm config.
@@ -55,6 +56,7 @@ enum iwl_prph_scratch_mtr_format {
  * @IWL_PRPH_SCRATCH_RB_SIZE_EXT_16K: 16kB RB size
  */
 enum iwl_prph_scratch_flags {
+	IWL_PRPH_SCRATCH_IMR_DEBUG_EN		= BIT(1),
 	IWL_PRPH_SCRATCH_EARLY_DEBUG_EN		= BIT(4),
 	IWL_PRPH_SCRATCH_EDBG_DEST_DRAM		= BIT(8),
 	IWL_PRPH_SCRATCH_EDBG_DEST_INTERNAL	= BIT(9),
@@ -109,12 +111,12 @@ struct iwl_prph_scratch_pnvm_cfg {
  * struct iwl_prph_scratch_hwm_cfg - hwm config
  * @hwm_base_addr: hwm start address
  * @hwm_size: hwm size in DWs
- * @reserved: reserved
+ * @debug_token_config: debug preset
  */
 struct iwl_prph_scratch_hwm_cfg {
 	__le64 hwm_base_addr;
 	__le32 hwm_size;
-	__le32 reserved;
+	__le32 debug_token_config;
 } __packed; /* PERIPH_SCRATCH_HWM_CFG_S */
 
 /*
@@ -139,12 +141,27 @@ struct iwl_prph_scratch_uefi_cfg {
 } __packed; /* PERIPH_SCRATCH_UEFI_CFG_S */
 
 /*
+ * struct iwl_prph_scratch_step_cfg - prph scratch step configuration
+ * @mbx_addr_0: [0:7] revision,
+ *		[8:15] cnvi_to_cnvr length,
+ *		[16:23] cnvr_to_cnvi channel length,
+ *		[24:31] radio1 reserved
+ * @mbx_addr_1: [0:7] radio2 reserved
+ */
+
+struct iwl_prph_scratch_step_cfg {
+	__le32 mbx_addr_0;
+	__le32 mbx_addr_1;
+} __packed;
+
+/*
  * struct iwl_prph_scratch_ctrl_cfg - prph scratch ctrl and config
  * @version: version information of context info and HW
  * @control: control flags of FH configurations
  * @pnvm_cfg: ror configuration
  * @hwm_cfg: hwm configuration
  * @rbd_cfg: default RX queue configuration
+ * @step_cfg: step configuration
  */
 struct iwl_prph_scratch_ctrl_cfg {
 	struct iwl_prph_scratch_version version;
@@ -153,6 +170,7 @@ struct iwl_prph_scratch_ctrl_cfg {
 	struct iwl_prph_scratch_hwm_cfg hwm_cfg;
 	struct iwl_prph_scratch_rbd_cfg rbd_cfg;
 	struct iwl_prph_scratch_uefi_cfg reduce_power_cfg;
+	struct iwl_prph_scratch_step_cfg step_cfg;
 } __packed; /* PERIPH_SCRATCH_CTRL_CFG_S */
 
 /*
@@ -163,7 +181,7 @@ struct iwl_prph_scratch_ctrl_cfg {
  */
 struct iwl_prph_scratch {
 	struct iwl_prph_scratch_ctrl_cfg ctrl_cfg;
-	__le32 reserved[12];
+	__le32 reserved[10];
 	struct iwl_context_info_dram dram;
 } __packed; /* PERIPH_SCRATCH_S */
 
@@ -263,5 +281,6 @@ int iwl_trans_pcie_ctx_info_gen3_set_pnvm(struct iwl_trans *trans,
 					  const void *data, u32 len);
 int iwl_trans_pcie_ctx_info_gen3_set_reduce_power(struct iwl_trans *trans,
 						  const void *data, u32 len);
-
+int iwl_trans_pcie_ctx_info_gen3_set_step(struct iwl_trans *trans,
+					  u32 mbx_addr_0_step, u32 mbx_addr_1_step);
 #endif /* __iwl_context_info_file_gen3_h__ */

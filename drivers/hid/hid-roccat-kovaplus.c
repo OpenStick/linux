@@ -501,6 +501,9 @@ static int kovaplus_probe(struct hid_device *hdev,
 {
 	int retval;
 
+	if (!hid_is_usb(hdev))
+		return -EINVAL;
+
 	retval = hid_parse(hdev);
 	if (retval) {
 		hid_err(hdev, "parse failed\n");
@@ -635,7 +638,7 @@ static int __init kovaplus_init(void)
 {
 	int retval;
 
-	kovaplus_class = class_create(THIS_MODULE, "kovaplus");
+	kovaplus_class = class_create("kovaplus");
 	if (IS_ERR(kovaplus_class))
 		return PTR_ERR(kovaplus_class);
 	kovaplus_class->dev_groups = kovaplus_groups;

@@ -66,6 +66,9 @@ hypertas_fw_features_table[] = {
 	{FW_FEATURE_BLOCK_REMOVE,	"hcall-block-remove"},
 	{FW_FEATURE_PAPR_SCM,		"hcall-scm"},
 	{FW_FEATURE_RPT_INVALIDATE,	"hcall-rpt-invalidate"},
+	{FW_FEATURE_ENERGY_SCALE_INFO,	"hcall-energy-scale-info"},
+	{FW_FEATURE_WATCHDOG,		"hcall-watchdog"},
+	{FW_FEATURE_PLPKS,		"hcall-pks"},
 };
 
 /* Build up the firmware features bitmask using the contents of

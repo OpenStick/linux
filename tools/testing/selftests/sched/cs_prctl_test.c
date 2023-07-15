@@ -27,6 +27,7 @@
 #include <sys/prctl.h>
 #include <unistd.h>
 #include <time.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,6 +63,17 @@ enum pid_type {PIDTYPE_PID = 0, PIDTYPE_TGID, PIDTYPE_PGID};
 
 const int THREAD_CLONE_FLAGS = CLONE_THREAD | CLONE_SIGHAND | CLONE_FS | CLONE_VM | CLONE_FILES;
 
+struct child_args {
+	int num_threads;
+	int pfd[2];
+	int cpid;
+	int thr_tids[MAX_THREADS];
+};
+
+static struct child_args procs[MAX_PROCESSES];
+static int num_processes = 2;
+static int need_cleanup = 0;
+
 static int _prctl(int option, unsigned long arg2, unsigned long arg3, unsigned long arg4,
 		  unsigned long arg5)
 {
@@ -78,8 +90,14 @@ static int _prctl(int option, unsigned long arg2, unsigned long arg3, unsigned l
 #define handle_error(msg) __handle_error(__FILE__, __LINE__, msg)
 static void __handle_error(char *fn, int ln, char *msg)
 {
+	int pidx;
 	printf("(%s:%d) - ", fn, ln);
 	perror(msg);
+	if (need_cleanup) {
+		for (pidx = 0; pidx < num_processes; ++pidx)
+			kill(procs[pidx].cpid, 15);
+		need_cleanup = 0;
+	}
 	exit(EXIT_FAILURE);
 }
 
@@ -105,13 +123,6 @@ static unsigned long get_cs_cookie(int pid)
 
 	return cookie;
 }
-
-struct child_args {
-	int num_threads;
-	int pfd[2];
-	int cpid;
-	int thr_tids[MAX_THREADS];
-};
 
 static int child_func_thread(void __attribute__((unused))*arg)
 {
@@ -141,12 +152,17 @@ static void create_threads(int num_threads, int thr_tids[])
 static int child_func_process(void *arg)
 {
 	struct child_args *ca = (struct child_args *)arg;
+	int ret;
 
 	close(ca->pfd[0]);
 
 	create_threads(ca->num_threads, ca->thr_tids);
 
-	write(ca->pfd[1], &ca->thr_tids, sizeof(int) * ca->num_threads);
+	ret = write(ca->pfd[1], &ca->thr_tids, sizeof(int) * ca->num_threads);
+	if (ret == -1)
+		printf("write failed on pfd[%d] - error (%s)\n",
+			ca->pfd[1], strerror(errno));
+
 	close(ca->pfd[1]);
 
 	while (1)
@@ -159,7 +175,7 @@ static unsigned char child_func_process_stack[STACK_SIZE];
 void create_processes(int num_processes, int num_threads, struct child_args proc[])
 {
 	pid_t cpid;
-	int i;
+	int i, ret;
 
 	for (i = 0; i < num_processes; ++i) {
 		proc[i].num_threads = num_threads;
@@ -174,7 +190,10 @@ void create_processes(int num_processes, int num_threads, struct child_args proc
 	}
 
 	for (i = 0; i < num_processes; ++i) {
-		read(proc[i].pfd[0], &proc[i].thr_tids, sizeof(int) * proc[i].num_threads);
+		ret = read(proc[i].pfd[0], &proc[i].thr_tids, sizeof(int) * proc[i].num_threads);
+		if (ret == -1)
+			printf("read failed on proc[%d].pfd[0] error (%s)\n",
+				i, strerror(errno));
 		close(proc[i].pfd[0]);
 	}
 }
@@ -212,10 +231,7 @@ void _validate(int line, int val, char *msg)
 
 int main(int argc, char *argv[])
 {
-	struct child_args procs[MAX_PROCESSES];
-
 	int keypress = 0;
-	int num_processes = 2;
 	int num_threads = 3;
 	int delay = 0;
 	int res = 0;
@@ -262,6 +278,7 @@ int main(int argc, char *argv[])
 
 	printf("\n## Create a thread/process/process group hiearchy\n");
 	create_processes(num_processes, num_threads, procs);
+	need_cleanup = 1;
 	disp_processes(num_processes, procs);
 	validate(get_cs_cookie(0) == 0);
 
@@ -316,6 +333,12 @@ int main(int argc, char *argv[])
 	validate(get_cs_cookie(0) == get_cs_cookie(pid));
 	validate(get_cs_cookie(pid) != 0);
 	validate(get_cs_cookie(pid) == get_cs_cookie(procs[pidx].thr_tids[0]));
+
+	validate(_prctl(PR_SCHED_CORE, PR_SCHED_CORE_MAX, 0, PIDTYPE_PGID, 0) < 0
+		&& errno == EINVAL);
+
+	validate(_prctl(PR_SCHED_CORE, PR_SCHED_CORE_SHARE_TO, 0, PIDTYPE_PGID, 1) < 0
+		&& errno == EINVAL);
 
 	if (errors) {
 		printf("TESTS FAILED. errors: %d\n", errors);

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2021 FIXME
+// Copyright (c) 2023 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -29,14 +29,6 @@ static inline struct r69339 *to_r69339(struct drm_panel *panel)
 	return container_of(panel, struct r69339, panel);
 }
 
-#define dsi_dcs_write_seq(dsi, seq...) do {				\
-		static const u8 d[] = { seq };				\
-		int ret;						\
-		ret = mipi_dsi_dcs_write_buffer(dsi, d, ARRAY_SIZE(d));	\
-		if (ret < 0)						\
-			return ret;					\
-	} while (0)
-
 static void r69339_reset(struct r69339 *ctx)
 {
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
@@ -59,8 +51,8 @@ static int r69339_on(struct r69339 *ctx)
 		return ret;
 	}
 
-	dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x24);
-	dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_POWER_SAVE, 0x00);
+	mipi_dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x24);
+	mipi_dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_POWER_SAVE, 0x00);
 
 	ret = mipi_dsi_dcs_set_display_on(dsi);
 	if (ret < 0) {
@@ -299,7 +291,7 @@ static int r69339_probe(struct mipi_dsi_device *dsi)
 	return 0;
 }
 
-static int r69339_remove(struct mipi_dsi_device *dsi)
+static void r69339_remove(struct mipi_dsi_device *dsi)
 {
 	struct r69339 *ctx = mipi_dsi_get_drvdata(dsi);
 	int ret;
@@ -309,8 +301,6 @@ static int r69339_remove(struct mipi_dsi_device *dsi)
 		dev_err(&dsi->dev, "Failed to detach from DSI host: %d\n", ret);
 
 	drm_panel_remove(&ctx->panel);
-
-	return 0;
 }
 
 static const struct of_device_id r69339_of_match[] = {
@@ -331,4 +321,4 @@ module_mipi_dsi_driver(r69339_driver);
 
 MODULE_AUTHOR("linux-mdss-dsi-panel-driver-generator <fix@me>"); // FIXME
 MODULE_DESCRIPTION("DRM driver for sharp 720p video mode dsi panel");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

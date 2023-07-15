@@ -25,6 +25,39 @@ typedef enum {
 	H = 2,
 } e3_t;
 
+/* ----- START-EXPECTED-OUTPUT ----- */
+/*
+ *enum e_byte {
+ *	EBYTE_1 = 0,
+ *	EBYTE_2 = 1,
+ *} __attribute__((mode(byte)));
+ *
+ */
+/* ----- END-EXPECTED-OUTPUT ----- */
+enum e_byte {
+	EBYTE_1,
+	EBYTE_2,
+} __attribute__((mode(byte)));
+
+/* ----- START-EXPECTED-OUTPUT ----- */
+/*
+ *enum e_word {
+ *	EWORD_1 = 0LL,
+ *	EWORD_2 = 1LL,
+ *} __attribute__((mode(word)));
+ *
+ */
+/* ----- END-EXPECTED-OUTPUT ----- */
+enum e_word {
+	EWORD_1,
+	EWORD_2,
+} __attribute__((mode(word))); /* force to use 8-byte backing for this enum */
+
+/* ----- START-EXPECTED-OUTPUT ----- */
+enum e_big {
+	EBIG_1 = 1000000000000ULL,
+};
+
 typedef int int_t;
 
 typedef volatile const int * volatile const crazy_ptr_t;
@@ -51,7 +84,7 @@ typedef void (*printf_fn_t)(const char *, ...);
  *	typedef int (*fn_t)(int);
  *	typedef char * const * (*fn_ptr2_t)(s_t, fn_t);
  *
- * - `fn_complext_t`: pointer to a function returning struct and accepting
+ * - `fn_complex_t`: pointer to a function returning struct and accepting
  *   union and struct. All structs and enum are anonymous and defined inline.
  *
  * - `signal_t: pointer to a function accepting a pointer to a function as an
@@ -94,7 +127,7 @@ typedef void (* (*signal_t)(int, void (*)(int)))(int);
 
 typedef char * (*fn_ptr_arr1_t[10])(int **);
 
-typedef char * (* const (* const fn_ptr_arr2_t[5])())(char * (*)(int));
+typedef char * (* (* const fn_ptr_arr2_t[5])())(char * (*)(int));
 
 struct struct_w_typedefs {
 	int_t a;
@@ -189,7 +222,7 @@ struct struct_with_embedded_stuff {
 			const char *d;
 		} e;
 		union {
-			volatile long int f;
+			volatile long f;
 			void * restrict g;
 		};
 	};
@@ -224,6 +257,9 @@ struct root_struct {
 	enum e2 _2;
 	e2_t _2_1;
 	e3_t _2_2;
+	enum e_byte _100;
+	enum e_word _101;
+	enum e_big _102;
 	struct struct_w_typedefs _3;
 	anon_struct_t _7;
 	struct struct_fwd *_8;

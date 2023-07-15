@@ -5,7 +5,7 @@
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
 
-#include "mana.h"
+#include <net/mana/mana.h>
 
 static const struct {
 	char name[ETH_GSTRING_LEN];
@@ -13,6 +13,15 @@ static const struct {
 } mana_eth_stats[] = {
 	{"stop_queue", offsetof(struct mana_ethtool_stats, stop_queue)},
 	{"wake_queue", offsetof(struct mana_ethtool_stats, wake_queue)},
+	{"tx_cqes", offsetof(struct mana_ethtool_stats, tx_cqes)},
+	{"tx_cq_err", offsetof(struct mana_ethtool_stats, tx_cqe_err)},
+	{"tx_cqe_unknown_type", offsetof(struct mana_ethtool_stats,
+					tx_cqe_unknown_type)},
+	{"rx_cqes", offsetof(struct mana_ethtool_stats, rx_cqes)},
+	{"rx_coalesced_err", offsetof(struct mana_ethtool_stats,
+					rx_coalesced_err)},
+	{"rx_cqe_unknown_type", offsetof(struct mana_ethtool_stats,
+					rx_cqe_unknown_type)},
 };
 
 static int mana_get_sset_count(struct net_device *ndev, int stringset)
@@ -23,7 +32,8 @@ static int mana_get_sset_count(struct net_device *ndev, int stringset)
 	if (stringset != ETH_SS_STATS)
 		return -EINVAL;
 
-	return ARRAY_SIZE(mana_eth_stats) + num_queues * 4;
+	return ARRAY_SIZE(mana_eth_stats) + num_queues *
+				(MANA_STATS_RX_COUNT + MANA_STATS_TX_COUNT);
 }
 
 static void mana_get_strings(struct net_device *ndev, u32 stringset, u8 *data)
@@ -46,12 +56,36 @@ static void mana_get_strings(struct net_device *ndev, u32 stringset, u8 *data)
 		p += ETH_GSTRING_LEN;
 		sprintf(p, "rx_%d_bytes", i);
 		p += ETH_GSTRING_LEN;
+		sprintf(p, "rx_%d_xdp_drop", i);
+		p += ETH_GSTRING_LEN;
+		sprintf(p, "rx_%d_xdp_tx", i);
+		p += ETH_GSTRING_LEN;
+		sprintf(p, "rx_%d_xdp_redirect", i);
+		p += ETH_GSTRING_LEN;
 	}
 
 	for (i = 0; i < num_queues; i++) {
 		sprintf(p, "tx_%d_packets", i);
 		p += ETH_GSTRING_LEN;
 		sprintf(p, "tx_%d_bytes", i);
+		p += ETH_GSTRING_LEN;
+		sprintf(p, "tx_%d_xdp_xmit", i);
+		p += ETH_GSTRING_LEN;
+		sprintf(p, "tx_%d_tso_packets", i);
+		p += ETH_GSTRING_LEN;
+		sprintf(p, "tx_%d_tso_bytes", i);
+		p += ETH_GSTRING_LEN;
+		sprintf(p, "tx_%d_tso_inner_packets", i);
+		p += ETH_GSTRING_LEN;
+		sprintf(p, "tx_%d_tso_inner_bytes", i);
+		p += ETH_GSTRING_LEN;
+		sprintf(p, "tx_%d_long_pkt_fmt", i);
+		p += ETH_GSTRING_LEN;
+		sprintf(p, "tx_%d_short_pkt_fmt", i);
+		p += ETH_GSTRING_LEN;
+		sprintf(p, "tx_%d_csum_partial", i);
+		p += ETH_GSTRING_LEN;
+		sprintf(p, "tx_%d_mana_map_err", i);
 		p += ETH_GSTRING_LEN;
 	}
 }
@@ -62,9 +96,22 @@ static void mana_get_ethtool_stats(struct net_device *ndev,
 	struct mana_port_context *apc = netdev_priv(ndev);
 	unsigned int num_queues = apc->num_queues;
 	void *eth_stats = &apc->eth_stats;
-	struct mana_stats *stats;
+	struct mana_stats_rx *rx_stats;
+	struct mana_stats_tx *tx_stats;
 	unsigned int start;
 	u64 packets, bytes;
+	u64 xdp_redirect;
+	u64 xdp_xmit;
+	u64 xdp_drop;
+	u64 xdp_tx;
+	u64 tso_packets;
+	u64 tso_bytes;
+	u64 tso_inner_packets;
+	u64 tso_inner_bytes;
+	u64 long_pkt_fmt;
+	u64 short_pkt_fmt;
+	u64 csum_partial;
+	u64 mana_map_err;
 	int q, i = 0;
 
 	if (!apc->port_is_up)
@@ -74,29 +121,53 @@ static void mana_get_ethtool_stats(struct net_device *ndev,
 		data[i++] = *(u64 *)(eth_stats + mana_eth_stats[q].offset);
 
 	for (q = 0; q < num_queues; q++) {
-		stats = &apc->rxqs[q]->stats;
+		rx_stats = &apc->rxqs[q]->stats;
 
 		do {
-			start = u64_stats_fetch_begin_irq(&stats->syncp);
-			packets = stats->packets;
-			bytes = stats->bytes;
-		} while (u64_stats_fetch_retry_irq(&stats->syncp, start));
+			start = u64_stats_fetch_begin(&rx_stats->syncp);
+			packets = rx_stats->packets;
+			bytes = rx_stats->bytes;
+			xdp_drop = rx_stats->xdp_drop;
+			xdp_tx = rx_stats->xdp_tx;
+			xdp_redirect = rx_stats->xdp_redirect;
+		} while (u64_stats_fetch_retry(&rx_stats->syncp, start));
 
 		data[i++] = packets;
 		data[i++] = bytes;
+		data[i++] = xdp_drop;
+		data[i++] = xdp_tx;
+		data[i++] = xdp_redirect;
 	}
 
 	for (q = 0; q < num_queues; q++) {
-		stats = &apc->tx_qp[q].txq.stats;
+		tx_stats = &apc->tx_qp[q].txq.stats;
 
 		do {
-			start = u64_stats_fetch_begin_irq(&stats->syncp);
-			packets = stats->packets;
-			bytes = stats->bytes;
-		} while (u64_stats_fetch_retry_irq(&stats->syncp, start));
+			start = u64_stats_fetch_begin(&tx_stats->syncp);
+			packets = tx_stats->packets;
+			bytes = tx_stats->bytes;
+			xdp_xmit = tx_stats->xdp_xmit;
+			tso_packets = tx_stats->tso_packets;
+			tso_bytes = tx_stats->tso_bytes;
+			tso_inner_packets = tx_stats->tso_inner_packets;
+			tso_inner_bytes = tx_stats->tso_inner_bytes;
+			long_pkt_fmt = tx_stats->long_pkt_fmt;
+			short_pkt_fmt = tx_stats->short_pkt_fmt;
+			csum_partial = tx_stats->csum_partial;
+			mana_map_err = tx_stats->mana_map_err;
+		} while (u64_stats_fetch_retry(&tx_stats->syncp, start));
 
 		data[i++] = packets;
 		data[i++] = bytes;
+		data[i++] = xdp_xmit;
+		data[i++] = tso_packets;
+		data[i++] = tso_bytes;
+		data[i++] = tso_inner_packets;
+		data[i++] = tso_inner_bytes;
+		data[i++] = long_pkt_fmt;
+		data[i++] = short_pkt_fmt;
+		data[i++] = csum_partial;
+		data[i++] = mana_map_err;
 	}
 }
 
@@ -210,9 +281,6 @@ static int mana_set_channels(struct net_device *ndev,
 	unsigned int new_count = channels->combined_count;
 	unsigned int old_count = apc->num_queues;
 	int err, err2;
-
-	if (!apc->port_is_up)
-		return -EOPNOTSUPP;
 
 	err = mana_detach(ndev, false);
 	if (err) {

@@ -5,6 +5,7 @@
 :翻译:
 
  司延腾 Yanteng Si <siyanteng@loongson.cn>
+ 周彬彬 Binbin Zhou <zhoubinbin@loongson.cn>
 
 .. _cn_kernel-api.rst:
 
@@ -46,6 +47,8 @@ lib/string_helpers.c
 ----------
 
 该API在以下内核代码中:
+
+include/linux/fortify-string.h
 
 lib/string.c
 
@@ -118,6 +121,12 @@ include/linux/textsearch.h
 Linux中的CRC和数学函数
 ======================
 
+算术溢出检查
+------------
+
+该API在以下内核代码中:
+
+include/linux/overflow.h
 
 CRC函数
 -------
@@ -164,8 +173,6 @@ lib/math/int_sqrt.c
 include/asm-generic/div64.h
 
 include/linux/math64.h
-
-lib/math/div64.c
 
 lib/math/gcd.c
 
@@ -219,12 +226,12 @@ kernel/relay.c
 
 该API在以下内核代码中:
 
-kernel/kmod.c
+kernel/module/kmod.c
 
 模块接口支持
 ------------
 
-更多信息请参考文件kernel/module.c。
+更多信息请参阅kernel/module/目录下的文件。
 
 硬件接口
 ========
@@ -282,6 +289,8 @@ kernel/acct.c
 
 该API在以下内核代码中:
 
+include/linux/bio.h
+
 block/blk-core.c
 
 block/blk-core.c
@@ -291,8 +300,6 @@ block/blk-map.c
 block/blk-sysfs.c
 
 block/blk-settings.c
-
-block/blk-exec.c
 
 block/blk-flush.c
 

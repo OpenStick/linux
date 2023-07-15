@@ -67,7 +67,7 @@
 	status = "okay";
 };
 
-&pronto {
+&wcnss {
 	status = "okay";
 };
 

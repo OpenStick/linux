@@ -45,7 +45,7 @@ struct pm8916_bms_vm_battery {
 	struct device *dev;
 	struct power_supply_desc desc;
 	struct power_supply *battery;
-	struct power_supply_battery_info info;
+	struct power_supply_battery_info *info;
 	struct regmap *regmap;
 	unsigned int reg;
 	unsigned int boot_ocv;
@@ -59,7 +59,7 @@ static int pm8916_bms_vm_battery_get_property(struct power_supply *psy,
 					      union power_supply_propval *val)
 {
 	struct pm8916_bms_vm_battery *bat = power_supply_get_drvdata(psy);
-	struct power_supply_battery_info *info = &bat->info;
+	struct power_supply_battery_info *info = bat->info;
 	int supplied;
 
 	switch (psp) {
@@ -131,7 +131,7 @@ static enum power_supply_property pm8916_bms_vm_battery_properties[] = {
 static irqreturn_t pm8916_bms_vm_fifo_update_done_irq(int irq, void *data)
 {
 	struct pm8916_bms_vm_battery *bat = data;
-	struct power_supply_battery_info *info = &bat->info;
+	struct power_supply_battery_info *info = bat->info;
 	u16 vbat_data[PM8916_BMS_VM_FIFO_COUNT];
 	int i, ret, delta = 0, loc_delta;
 	unsigned int tmp = 0;

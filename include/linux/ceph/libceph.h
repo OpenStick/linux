@@ -35,6 +35,7 @@
 #define CEPH_OPT_TCP_NODELAY      (1<<4) /* TCP_NODELAY on TCP sockets */
 #define CEPH_OPT_NOMSGSIGN        (1<<5) /* don't sign msgs (msgr1) */
 #define CEPH_OPT_ABORT_ON_FULL    (1<<6) /* abort w/ ENOSPC when full */
+#define CEPH_OPT_RXBOUNCE         (1<<7) /* double-buffer read data */
 
 #define CEPH_OPT_DEFAULT   (CEPH_OPT_TCP_NODELAY)
 
@@ -97,16 +98,6 @@ struct ceph_options {
 #define CEPH_MSG_MAX_DATA_LEN	(64*1024*1024)
 
 #define CEPH_AUTH_NAME_DEFAULT   "guest"
-
-/* mount state */
-enum {
-	CEPH_MOUNT_MOUNTING,
-	CEPH_MOUNT_MOUNTED,
-	CEPH_MOUNT_UNMOUNTING,
-	CEPH_MOUNT_UNMOUNTED,
-	CEPH_MOUNT_SHUTDOWN,
-	CEPH_MOUNT_RECOVER,
-};
 
 static inline unsigned long ceph_timeout_jiffies(unsigned long timeout)
 {
@@ -283,6 +274,7 @@ DEFINE_RB_LOOKUP_FUNC(name, type, keyfld, nodefld)
 
 extern struct kmem_cache *ceph_inode_cachep;
 extern struct kmem_cache *ceph_cap_cachep;
+extern struct kmem_cache *ceph_cap_snap_cachep;
 extern struct kmem_cache *ceph_cap_flush_cachep;
 extern struct kmem_cache *ceph_dentry_cachep;
 extern struct kmem_cache *ceph_file_cachep;
@@ -295,13 +287,13 @@ extern bool libceph_compatible(void *data);
 
 extern const char *ceph_msg_type_name(int type);
 extern int ceph_check_fsid(struct ceph_client *client, struct ceph_fsid *fsid);
-extern void *ceph_kvmalloc(size_t size, gfp_t flags);
+extern int ceph_parse_fsid(const char *str, struct ceph_fsid *fsid);
 
 struct fs_parameter;
 struct fc_log;
 struct ceph_options *ceph_alloc_options(void);
 int ceph_parse_mon_ips(const char *buf, size_t len, struct ceph_options *opt,
-		       struct fc_log *l);
+		       struct fc_log *l, char delim);
 int ceph_parse_param(struct fs_parameter *param, struct ceph_options *opt,
 		     struct fc_log *l);
 int ceph_print_client_options(struct seq_file *m, struct ceph_client *client,

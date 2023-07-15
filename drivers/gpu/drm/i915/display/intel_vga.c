@@ -6,9 +6,12 @@
 #include <linux/pci.h>
 #include <linux/vgaarb.h>
 
-#include <drm/i915_drm.h>
+#include <video/vga.h>
+
+#include "soc/intel_gmch.h"
 
 #include "i915_drv.h"
+#include "i915_reg.h"
 #include "intel_de.h"
 #include "intel_vga.h"
 
@@ -34,9 +37,9 @@ void intel_vga_disable(struct drm_i915_private *dev_priv)
 
 	/* WaEnableVGAAccessThroughIOPort:ctg,elk,ilk,snb,ivb,vlv,hsw */
 	vga_get_uninterruptible(pdev, VGA_RSRC_LEGACY_IO);
-	outb(SR01, VGA_SR_INDEX);
-	sr1 = inb(VGA_SR_DATA);
-	outb(sr1 | 1 << 5, VGA_SR_DATA);
+	outb(0x01, VGA_SEQ_I);
+	sr1 = inb(VGA_SEQ_D);
+	outb(sr1 | VGA_SR01_SCREEN_OFF, VGA_SEQ_D);
 	vga_put(pdev, VGA_RSRC_LEGACY_IO);
 	udelay(300);
 
@@ -92,35 +95,8 @@ void intel_vga_reset_io_mem(struct drm_i915_private *i915)
 	 * and error messages.
 	 */
 	vga_get_uninterruptible(pdev, VGA_RSRC_LEGACY_IO);
-	outb(inb(VGA_MSR_READ), VGA_MSR_WRITE);
+	outb(inb(VGA_MIS_R), VGA_MIS_W);
 	vga_put(pdev, VGA_RSRC_LEGACY_IO);
-}
-
-static int
-intel_vga_set_state(struct drm_i915_private *i915, bool enable_decode)
-{
-	unsigned int reg = DISPLAY_VER(i915) >= 6 ? SNB_GMCH_CTRL : INTEL_GMCH_CTRL;
-	u16 gmch_ctrl;
-
-	if (pci_read_config_word(i915->bridge_dev, reg, &gmch_ctrl)) {
-		drm_err(&i915->drm, "failed to read control word\n");
-		return -EIO;
-	}
-
-	if (!!(gmch_ctrl & INTEL_GMCH_VGA_DISABLE) == !enable_decode)
-		return 0;
-
-	if (enable_decode)
-		gmch_ctrl &= ~INTEL_GMCH_VGA_DISABLE;
-	else
-		gmch_ctrl |= INTEL_GMCH_VGA_DISABLE;
-
-	if (pci_write_config_word(i915->bridge_dev, reg, gmch_ctrl)) {
-		drm_err(&i915->drm, "failed to write control word\n");
-		return -EIO;
-	}
-
-	return 0;
 }
 
 static unsigned int
@@ -128,7 +104,7 @@ intel_vga_set_decode(struct pci_dev *pdev, bool enable_decode)
 {
 	struct drm_i915_private *i915 = pdev_to_i915(pdev);
 
-	intel_vga_set_state(i915, enable_decode);
+	intel_gmch_vga_set_state(i915, enable_decode);
 
 	if (enable_decode)
 		return VGA_RSRC_LEGACY_IO | VGA_RSRC_LEGACY_MEM |

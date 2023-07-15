@@ -1,7 +1,7 @@
 /*******************************************************************
  * This file is part of the Emulex Linux Device Driver for         *
  * Fibre Channel Host Bus Adapters.                                *
- * Copyright (C) 2017-2021 Broadcom. All Rights Reserved. The term *
+ * Copyright (C) 2017-2023 Broadcom. All Rights Reserved. The term *
  * “Broadcom” refers to Broadcom Inc. and/or its subsidiaries.     *
  * Copyright (C) 2009-2016 Emulex.  All rights reserved.           *
  * EMULEX and SLI are trademarks of Emulex.                        *
@@ -291,8 +291,9 @@ struct lpfc_sli4_link {
 	uint8_t type;
 	uint8_t number;
 	uint8_t fault;
-	uint32_t logical_speed;
+	uint8_t link_status;
 	uint16_t topology;
+	uint32_t logical_speed;
 };
 
 struct lpfc_fcf_rec {
@@ -489,7 +490,7 @@ struct lpfc_hba;
 #define LPFC_SLI4_HANDLER_NAME_SZ	16
 struct lpfc_hba_eq_hdl {
 	uint32_t idx;
-	uint16_t irq;
+	int irq;
 	char handler_name[LPFC_SLI4_HANDLER_NAME_SZ];
 	struct lpfc_hba *phba;
 	struct lpfc_queue *eq;
@@ -556,6 +557,7 @@ struct lpfc_pc_sli4_params {
 #define LPFC_MIB3_SUPPORT	3
 	uint16_t mi_value;
 #define LPFC_DFLT_MIB_VAL	2
+	uint8_t mi_cap;
 	uint8_t mib_bde_cnt;
 	uint8_t cmf;
 	uint8_t cqv;
@@ -610,6 +612,8 @@ struct lpfc_vector_map_info {
 #define LPFC_CPU_FIRST_IRQ	0x4
 };
 #define LPFC_VECTOR_MAP_EMPTY	0xffff
+
+#define LPFC_IRQ_EMPTY 0xffffffff
 
 /* Multi-XRI pool */
 #define XRI_BATCH               8
@@ -981,6 +985,9 @@ struct lpfc_sli4_hba {
 #define lpfc_conf_trunk_port3_nd_MASK	0x1
 	uint8_t flash_id;
 	uint8_t asic_rev;
+	uint16_t fawwpn_flag;	/* FA-WWPN support state */
+#define LPFC_FAWWPN_CONFIG	0x1 /* FA-PWWN is configured */
+#define LPFC_FAWWPN_FABRIC	0x2 /* FA-PWWN success with Fabric */
 };
 
 enum lpfc_sge_type {
@@ -1116,6 +1123,8 @@ void lpfc_sli4_fcf_redisc_event_proc(struct lpfc_hba *);
 int lpfc_sli4_resume_rpi(struct lpfc_nodelist *,
 			void (*)(struct lpfc_hba *, LPFC_MBOXQ_t *), void *);
 void lpfc_sli4_els_xri_abort_event_proc(struct lpfc_hba *phba);
+void lpfc_sli4_nvme_pci_offline_aborted(struct lpfc_hba *phba,
+					struct lpfc_io_buf *lpfc_ncmd);
 void lpfc_sli4_nvme_xri_aborted(struct lpfc_hba *phba,
 				struct sli4_wcqe_xri_aborted *axri,
 				struct lpfc_io_buf *lpfc_ncmd);
@@ -1170,4 +1179,23 @@ static inline void *lpfc_sli4_qe(struct lpfc_queue *q, uint16_t idx)
 {
 	return q->q_pgs[idx / q->entry_cnt_per_pg] +
 		(q->entry_size * (idx % q->entry_cnt_per_pg));
+}
+
+/**
+ * lpfc_sli4_unrecoverable_port - Check ERR and RN bits in portstat_reg
+ * @portstat_reg: portstat_reg pointer containing portstat_reg contents
+ *
+ * Description:
+ * Use only for SLI4 interface type-2 or later.  If ERR is set && RN is 0, then
+ * port is deemed unrecoverable.
+ *
+ * Returns:
+ * true		- ERR && !RN
+ * false	- otherwise
+ */
+static inline bool
+lpfc_sli4_unrecoverable_port(struct lpfc_register *portstat_reg)
+{
+	return bf_get(lpfc_sliport_status_err, portstat_reg) &&
+	       !bf_get(lpfc_sliport_status_rn, portstat_reg);
 }

@@ -21,6 +21,9 @@
  *
  */
 
+#ifndef AMDGPU_DOORBELL_H
+#define AMDGPU_DOORBELL_H
+
 /*
  * GPU doorbell structures, functions & helpers
  */
@@ -29,7 +32,9 @@ struct amdgpu_doorbell {
 	resource_size_t		base;
 	resource_size_t		size;
 	u32 __iomem		*ptr;
-	u32			num_doorbells;	/* Number of doorbells actually reserved for amdgpu. */
+
+	/* Number of doorbells reserved for amdgpu kernel driver */
+	u32 num_kernel_doorbells;
 };
 
 /* Reserved doorbells for amdgpu (including multimedia).
@@ -52,8 +57,11 @@ struct amdgpu_doorbell_index {
 	uint32_t userqueue_end;
 	uint32_t gfx_ring0;
 	uint32_t gfx_ring1;
+	uint32_t gfx_userqueue_start;
+	uint32_t gfx_userqueue_end;
 	uint32_t sdma_engine[8];
-	uint32_t mes_ring;
+	uint32_t mes_ring0;
+	uint32_t mes_ring1;
 	uint32_t ih;
 	union {
 		struct {
@@ -174,11 +182,15 @@ typedef enum _AMDGPU_NAVI10_DOORBELL_ASSIGNMENT
 	AMDGPU_NAVI10_DOORBELL_MEC_RING5		= 0x008,
 	AMDGPU_NAVI10_DOORBELL_MEC_RING6		= 0x009,
 	AMDGPU_NAVI10_DOORBELL_MEC_RING7		= 0x00A,
-	AMDGPU_NAVI10_DOORBELL_USERQUEUE_START		= 0x00B,
+	AMDGPU_NAVI10_DOORBELL_MES_RING0	        = 0x00B,
+	AMDGPU_NAVI10_DOORBELL_MES_RING1		= 0x00C,
+	AMDGPU_NAVI10_DOORBELL_USERQUEUE_START		= 0x00D,
 	AMDGPU_NAVI10_DOORBELL_USERQUEUE_END		= 0x08A,
 	AMDGPU_NAVI10_DOORBELL_GFX_RING0		= 0x08B,
 	AMDGPU_NAVI10_DOORBELL_GFX_RING1		= 0x08C,
-	AMDGPU_NAVI10_DOORBELL_MES_RING		        = 0x090,
+	AMDGPU_NAVI10_DOORBELL_GFX_USERQUEUE_START	= 0x08D,
+	AMDGPU_NAVI10_DOORBELL_GFX_USERQUEUE_END	= 0x0FF,
+
 	/* SDMA:256~335*/
 	AMDGPU_NAVI10_DOORBELL_sDMA_ENGINE0		= 0x100,
 	AMDGPU_NAVI10_DOORBELL_sDMA_ENGINE1		= 0x10A,
@@ -299,3 +311,4 @@ void amdgpu_mm_wdoorbell64(struct amdgpu_device *adev, u32 index, u64 v);
 #define RDOORBELL64(index) amdgpu_mm_rdoorbell64(adev, (index))
 #define WDOORBELL64(index, v) amdgpu_mm_wdoorbell64(adev, (index), (v))
 
+#endif

@@ -16,7 +16,6 @@
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fb_helper.h>
 #include <drm/drm_file.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_ioctl.h>
@@ -102,29 +101,19 @@ static const struct drm_ioctl_desc exynos_ioctls[] = {
 			DRM_RENDER_ALLOW),
 };
 
-static const struct file_operations exynos_drm_driver_fops = {
-	.owner		= THIS_MODULE,
-	.open		= drm_open,
-	.mmap		= exynos_drm_gem_mmap,
-	.poll		= drm_poll,
-	.read		= drm_read,
-	.unlocked_ioctl	= drm_ioctl,
-	.compat_ioctl = drm_compat_ioctl,
-	.release	= drm_release,
-};
+DEFINE_DRM_GEM_FOPS(exynos_drm_driver_fops);
 
 static const struct drm_driver exynos_drm_driver = {
 	.driver_features	= DRIVER_MODESET | DRIVER_GEM
 				  | DRIVER_ATOMIC | DRIVER_RENDER,
 	.open			= exynos_drm_open,
-	.lastclose		= drm_fb_helper_lastclose,
 	.postclose		= exynos_drm_postclose,
 	.dumb_create		= exynos_drm_gem_dumb_create,
 	.prime_handle_to_fd	= drm_gem_prime_handle_to_fd,
 	.prime_fd_to_handle	= drm_gem_prime_fd_to_handle,
 	.gem_prime_import	= exynos_drm_gem_prime_import,
 	.gem_prime_import_sg_table	= exynos_drm_gem_prime_import_sg_table,
-	.gem_prime_mmap		= exynos_drm_gem_prime_mmap,
+	.gem_prime_mmap		= drm_gem_prime_mmap,
 	.ioctls			= exynos_ioctls,
 	.num_ioctls		= ARRAY_SIZE(exynos_ioctls),
 	.fops			= &exynos_drm_driver_fops,
@@ -186,13 +175,13 @@ static struct exynos_drm_driver_info exynos_drm_drivers[] = {
 		DRV_PTR(mixer_driver, CONFIG_DRM_EXYNOS_MIXER),
 		DRM_COMPONENT_DRIVER
 	}, {
-		DRV_PTR(mic_driver, CONFIG_DRM_EXYNOS_MIC),
-		DRM_COMPONENT_DRIVER
-	}, {
 		DRV_PTR(dp_driver, CONFIG_DRM_EXYNOS_DP),
 		DRM_COMPONENT_DRIVER
 	}, {
 		DRV_PTR(dsi_driver, CONFIG_DRM_EXYNOS_DSI),
+		DRM_COMPONENT_DRIVER
+	}, {
+		DRV_PTR(mic_driver, CONFIG_DRM_EXYNOS_MIC),
 		DRM_COMPONENT_DRIVER
 	}, {
 		DRV_PTR(hdmi_driver, CONFIG_DRM_EXYNOS_HDMI),
@@ -221,11 +210,6 @@ static struct exynos_drm_driver_info exynos_drm_drivers[] = {
 	}
 };
 
-static int compare_dev(struct device *dev, void *data)
-{
-	return dev == (struct device *)data;
-}
-
 static struct component_match *exynos_drm_match_add(struct device *dev)
 {
 	struct component_match *match = NULL;
@@ -243,8 +227,7 @@ static struct component_match *exynos_drm_match_add(struct device *dev)
 
 			if (!(info->flags & DRM_FIMC_DEVICE) ||
 			    exynos_drm_check_fimc_device(d) == 0)
-				component_match_add(dev, &match,
-						    compare_dev, d);
+				component_match_add(dev, &match, component_compare_dev, d);
 			p = d;
 		}
 		put_device(p);
@@ -303,19 +286,15 @@ static int exynos_drm_bind(struct device *dev)
 	/* init kms poll for handling hpd */
 	drm_kms_helper_poll_init(drm);
 
-	ret = exynos_drm_fbdev_init(drm);
-	if (ret)
-		goto err_cleanup_poll;
-
 	/* register the DRM device */
 	ret = drm_dev_register(drm, 0);
 	if (ret < 0)
-		goto err_cleanup_fbdev;
+		goto err_cleanup_poll;
+
+	exynos_drm_fbdev_setup(drm);
 
 	return 0;
 
-err_cleanup_fbdev:
-	exynos_drm_fbdev_fini(drm);
 err_cleanup_poll:
 	drm_kms_helper_poll_fini(drm);
 err_unbind_all:
@@ -336,7 +315,6 @@ static void exynos_drm_unbind(struct device *dev)
 
 	drm_dev_unregister(drm);
 
-	exynos_drm_fbdev_fini(drm);
 	drm_kms_helper_poll_fini(drm);
 
 	component_unbind_all(drm->dev, drm);
@@ -463,6 +441,9 @@ fail:
 static int exynos_drm_init(void)
 {
 	int ret;
+
+	if (drm_firmware_drivers_only())
+		return -ENODEV;
 
 	ret = exynos_drm_register_devices();
 	if (ret)

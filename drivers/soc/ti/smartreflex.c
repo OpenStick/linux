@@ -198,7 +198,6 @@ static void sr_stop_vddautocomp(struct omap_sr *sr)
  */
 static int sr_late_init(struct omap_sr *sr_info)
 {
-	struct omap_sr_data *pdata = sr_info->pdev->dev.platform_data;
 	int ret = 0;
 
 	if (sr_class->notify && sr_class->notify_flags && sr_info->irq) {
@@ -208,9 +207,6 @@ static int sr_late_init(struct omap_sr *sr_info)
 			goto error;
 		disable_irq(sr_info->irq);
 	}
-
-	if (pdata && pdata->enable_on_init)
-		sr_start_vddautocomp(sr_info);
 
 	return ret;
 
@@ -819,7 +815,7 @@ static int omap_sr_probe(struct platform_device *pdev)
 {
 	struct omap_sr *sr_info;
 	struct omap_sr_data *pdata = pdev->dev.platform_data;
-	struct resource *mem, *irq;
+	struct resource *mem;
 	struct dentry *nvalue_dir;
 	int i, ret = 0;
 
@@ -844,7 +840,11 @@ static int omap_sr_probe(struct platform_device *pdev)
 	if (IS_ERR(sr_info->base))
 		return PTR_ERR(sr_info->base);
 
-	irq = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+	ret = platform_get_irq_optional(pdev, 0);
+	if (ret < 0 && ret != -ENXIO)
+		return dev_err_probe(&pdev->dev, ret, "failed to get IRQ resource\n");
+	if (ret > 0)
+		sr_info->irq = ret;
 
 	sr_info->fck = devm_clk_get(pdev->dev.parent, "fck");
 	if (IS_ERR(sr_info->fck))
@@ -869,9 +869,6 @@ static int omap_sr_probe(struct platform_device *pdev)
 	sr_info->senp_avgweight = pdata->senp_avgweight;
 	sr_info->autocomp_active = false;
 	sr_info->ip_type = pdata->ip_type;
-
-	if (irq)
-		sr_info->irq = irq->start;
 
 	sr_set_clk_length(sr_info);
 
@@ -926,11 +923,12 @@ static int omap_sr_probe(struct platform_device *pdev)
 
 	}
 
-	return ret;
+	return 0;
 
 err_debugfs:
 	debugfs_remove_recursive(sr_info->dbg_dir);
 err_list_del:
+	pm_runtime_disable(&pdev->dev);
 	list_del(&sr_info->node);
 	clk_unprepare(sr_info->fck);
 
@@ -939,21 +937,8 @@ err_list_del:
 
 static int omap_sr_remove(struct platform_device *pdev)
 {
-	struct omap_sr_data *pdata = pdev->dev.platform_data;
 	struct device *dev = &pdev->dev;
-	struct omap_sr *sr_info;
-
-	if (!pdata) {
-		dev_err(&pdev->dev, "%s: platform data missing\n", __func__);
-		return -EINVAL;
-	}
-
-	sr_info = _sr_lookup(pdata->voltdm);
-	if (IS_ERR(sr_info)) {
-		dev_warn(&pdev->dev, "%s: omap_sr struct not found\n",
-			__func__);
-		return PTR_ERR(sr_info);
-	}
+	struct omap_sr *sr_info = platform_get_drvdata(pdev);
 
 	if (sr_info->autocomp_active)
 		sr_stop_vddautocomp(sr_info);
@@ -967,20 +952,7 @@ static int omap_sr_remove(struct platform_device *pdev)
 
 static void omap_sr_shutdown(struct platform_device *pdev)
 {
-	struct omap_sr_data *pdata = pdev->dev.platform_data;
-	struct omap_sr *sr_info;
-
-	if (!pdata) {
-		dev_err(&pdev->dev, "%s: platform data missing\n", __func__);
-		return;
-	}
-
-	sr_info = _sr_lookup(pdata->voltdm);
-	if (IS_ERR(sr_info)) {
-		dev_warn(&pdev->dev, "%s: omap_sr struct not found\n",
-			__func__);
-		return;
-	}
+	struct omap_sr *sr_info = platform_get_drvdata(pdev);
 
 	if (sr_info->autocomp_active)
 		sr_stop_vddautocomp(sr_info);

@@ -72,7 +72,7 @@ properties:
     description:
       Specifies the battery profile to use.
       0 is for profile A, 1 is for profile B.
-    enum: [0,1]
+    enum: [0, 1]
 
   qcom,fg-batt-capacity-mah:
     $ref: /schemas/types.yaml#/definitions/uint32

@@ -292,10 +292,13 @@ static ssize_t actual_brightness_show(struct device *dev,
 	struct backlight_device *bd = to_backlight_device(dev);
 
 	mutex_lock(&bd->ops_lock);
-	if (bd->ops && bd->ops->get_brightness)
-		rc = sprintf(buf, "%d\n", bd->ops->get_brightness(bd));
-	else
+	if (bd->ops && bd->ops->get_brightness) {
+		rc = bd->ops->get_brightness(bd);
+		if (rc >= 0)
+			rc = sprintf(buf, "%d\n", rc);
+	} else {
 		rc = sprintf(buf, "%d\n", bd->props.brightness);
+	}
 	mutex_unlock(&bd->ops_lock);
 
 	return rc;
@@ -381,9 +384,18 @@ ATTRIBUTE_GROUPS(bl_device);
 void backlight_force_update(struct backlight_device *bd,
 			    enum backlight_update_reason reason)
 {
+	int brightness;
+
 	mutex_lock(&bd->ops_lock);
-	if (bd->ops && bd->ops->get_brightness)
-		bd->props.brightness = bd->ops->get_brightness(bd);
+	if (bd->ops && bd->ops->get_brightness) {
+		brightness = bd->ops->get_brightness(bd);
+		if (brightness >= 0)
+			bd->props.brightness = brightness;
+		else
+			dev_err(&bd->dev,
+				"Could not update brightness from device: %pe\n",
+				ERR_PTR(brightness));
+	}
 	mutex_unlock(&bd->ops_lock);
 	backlight_generate_event(bd, reason);
 }
@@ -489,7 +501,7 @@ EXPORT_SYMBOL(backlight_device_get_by_type);
  *
  * This function looks up a backlight device by its name. It obtains a reference
  * on the backlight device and it is the caller's responsibility to drop the
- * reference by calling backlight_put().
+ * reference by calling put_device().
  *
  * Returns:
  * A pointer to the backlight device if found, otherwise NULL.
@@ -688,12 +700,6 @@ static struct backlight_device *of_find_backlight(struct device *dev)
 			of_node_put(np);
 			if (!bd)
 				return ERR_PTR(-EPROBE_DEFER);
-			/*
-			 * Note: gpio_backlight uses brightness as
-			 * power state during probe
-			 */
-			if (!bd->props.brightness)
-				bd->props.brightness = bd->props.max_brightness;
 		}
 	}
 
@@ -704,8 +710,7 @@ static void devm_backlight_release(void *data)
 {
 	struct backlight_device *bd = data;
 
-	if (bd)
-		put_device(&bd->dev);
+	put_device(&bd->dev);
 }
 
 /**
@@ -731,11 +736,10 @@ struct backlight_device *devm_of_find_backlight(struct device *dev)
 	bd = of_find_backlight(dev);
 	if (IS_ERR_OR_NULL(bd))
 		return bd;
-	ret = devm_add_action(dev, devm_backlight_release, bd);
-	if (ret) {
-		put_device(&bd->dev);
+	ret = devm_add_action_or_reset(dev, devm_backlight_release, bd);
+	if (ret)
 		return ERR_PTR(ret);
-	}
+
 	return bd;
 }
 EXPORT_SYMBOL(devm_of_find_backlight);
@@ -747,7 +751,7 @@ static void __exit backlight_class_exit(void)
 
 static int __init backlight_class_init(void)
 {
-	backlight_class = class_create(THIS_MODULE, "backlight");
+	backlight_class = class_create("backlight");
 	if (IS_ERR(backlight_class)) {
 		pr_warn("Unable to create backlight class; errno = %ld\n",
 			PTR_ERR(backlight_class));

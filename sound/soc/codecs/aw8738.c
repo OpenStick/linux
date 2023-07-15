@@ -6,30 +6,29 @@
 #include <sound/soc.h>
 
 struct aw8738_priv {
-	struct gpio_desc *enable_gpio;
+	struct gpio_desc *gpiod_mode;
 	unsigned int mode;
 };
 
 static int aw8738_drv_event(struct snd_soc_dapm_widget *w,
 			    struct snd_kcontrol *kcontrol, int event)
 {
-	struct snd_soc_component *comp = snd_soc_dapm_to_component(w->dapm);
-	struct aw8738_priv *aw8738 = snd_soc_component_get_drvdata(comp);
+	struct snd_soc_component *c = snd_soc_dapm_to_component(w->dapm);
+	struct aw8738_priv *aw = snd_soc_component_get_drvdata(c);
 	int i;
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
-		for (i = 0; i < aw8738->mode; i++) {
-			gpiod_set_value_cansleep(aw8738->enable_gpio, 0);
+		for (i = 0; i < aw->mode; i++) {
+			gpiod_set_value_cansleep(aw->gpiod_mode, 0);
 			udelay(2);
-			gpiod_set_value_cansleep(aw8738->enable_gpio, 1);
+			gpiod_set_value_cansleep(aw->gpiod_mode, 1);
 			udelay(2);
 		}
-
 		msleep(40);
 		break;
 	case SND_SOC_DAPM_PRE_PMD:
-		gpiod_set_value_cansleep(aw8738->enable_gpio, 0);
+		gpiod_set_value_cansleep(aw->gpiod_mode, 0);
 		usleep_range(1000, 2000);
 		break;
 	default:
@@ -42,8 +41,7 @@ static int aw8738_drv_event(struct snd_soc_dapm_widget *w,
 
 static const struct snd_soc_dapm_widget aw8738_dapm_widgets[] = {
 	SND_SOC_DAPM_INPUT("IN"),
-	SND_SOC_DAPM_OUT_DRV_E("DRV", SND_SOC_NOPM, 0, 0, NULL, 0,
-			       aw8738_drv_event,
+	SND_SOC_DAPM_OUT_DRV_E("DRV", SND_SOC_NOPM, 0, 0, NULL, 0, aw8738_drv_event,
 			       SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_PRE_PMD),
 	SND_SOC_DAPM_OUTPUT("OUT"),
 };
@@ -62,22 +60,23 @@ static const struct snd_soc_component_driver aw8738_component_driver = {
 
 static int aw8738_probe(struct platform_device *pdev)
 {
-	struct aw8738_priv *aw8738;
+	struct device *dev = &pdev->dev;
+	struct aw8738_priv *aw;
 	int ret;
 
-	aw8738 = devm_kzalloc(&pdev->dev, sizeof(*aw8738), GFP_KERNEL);
-	if (!aw8738)
+	aw = devm_kzalloc(dev, sizeof(*aw), GFP_KERNEL);
+	if (!aw)
 		return -ENOMEM;
+	platform_set_drvdata(pdev, aw);
 
-	aw8738->enable_gpio = devm_gpiod_get(&pdev->dev, "enable", GPIOD_OUT_LOW);
-	if (IS_ERR(aw8738->enable_gpio))
-		return PTR_ERR(aw8738->enable_gpio);
+	aw->gpiod_mode = devm_gpiod_get(dev, "mode", GPIOD_OUT_LOW);
+	if (IS_ERR(aw->gpiod_mode))
+		return dev_err_probe(dev, PTR_ERR(aw->gpiod_mode),
+				     "Failed to get 'mode' gpio");
 
-	ret = device_property_read_u32(&pdev->dev, "aw8738,mode", &aw8738->mode);
+	ret = device_property_read_u32(dev, "awinic,mode", &aw->mode);
 	if (ret)
 		return -EINVAL;
-
-	dev_set_drvdata(&pdev->dev, aw8738);
 
 	return devm_snd_soc_register_component(&pdev->dev,
 					       &aw8738_component_driver,
@@ -85,19 +84,19 @@ static int aw8738_probe(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_OF
-static const struct of_device_id aw8738_device_id[] = {
+static const struct of_device_id aw8738_of_match[] = {
 	{ .compatible = "awinic,aw8738" },
 	{ }
 };
-MODULE_DEVICE_TABLE(of, aw8738_device_id);
+MODULE_DEVICE_TABLE(of, aw8738_of_match);
 #endif
 
 static struct platform_driver aw8738_driver = {
+	.probe	= aw8738_probe,
 	.driver = {
 		.name = "aw8738",
-		.of_match_table = of_match_ptr(aw8738_device_id),
+		.of_match_table = of_match_ptr(aw8738_of_match),
 	},
-	.probe	= aw8738_probe,
 };
 module_platform_driver(aw8738_driver);
 

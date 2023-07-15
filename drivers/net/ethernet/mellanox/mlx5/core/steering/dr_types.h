@@ -4,27 +4,32 @@
 #ifndef	_DR_TYPES_
 #define	_DR_TYPES_
 
-#include <linux/mlx5/driver.h>
+#include <linux/mlx5/vport.h>
 #include <linux/refcount.h>
 #include "fs_core.h"
 #include "wq.h"
 #include "lib/mlx5.h"
 #include "mlx5_ifc_dr.h"
 #include "mlx5dr.h"
+#include "dr_dbg.h"
 
 #define DR_RULE_MAX_STES 18
 #define DR_ACTION_MAX_STES 5
-#define WIRE_PORT 0xFFFF
 #define DR_STE_SVLAN 0x1
 #define DR_STE_CVLAN 0x2
 #define DR_SZ_MATCH_PARAM (MLX5_ST_SZ_DW_MATCH_PARAM * 4)
 #define DR_NUM_OF_FLEX_PARSERS 8
 #define DR_STE_MAX_FLEX_0_ID 3
 #define DR_STE_MAX_FLEX_1_ID 7
+#define DR_ACTION_CACHE_LINE_SIZE 64
 
 #define mlx5dr_err(dmn, arg...) mlx5_core_err((dmn)->mdev, ##arg)
 #define mlx5dr_info(dmn, arg...) mlx5_core_info((dmn)->mdev, ##arg)
 #define mlx5dr_dbg(dmn, arg...) mlx5_core_dbg((dmn)->mdev, ##arg)
+
+struct mlx5dr_ptrn_mgr;
+struct mlx5dr_arg_mgr;
+struct mlx5dr_arg_obj;
 
 static inline bool dr_is_flex_parser_0_id(u8 parser_id)
 {
@@ -66,6 +71,8 @@ enum mlx5dr_icm_chunk_size {
 enum mlx5dr_icm_type {
 	DR_ICM_TYPE_STE,
 	DR_ICM_TYPE_MODIFY_ACTION,
+	DR_ICM_TYPE_MODIFY_HDR_PTRN,
+	DR_ICM_TYPE_MAX,
 };
 
 static inline enum mlx5dr_icm_chunk_size
@@ -81,6 +88,7 @@ mlx5dr_icm_next_higher_chunk(enum mlx5dr_icm_chunk_size chunk)
 enum {
 	DR_STE_SIZE = 64,
 	DR_STE_SIZE_CTRL = 32,
+	DR_STE_SIZE_MATCH_TAG = 32,
 	DR_STE_SIZE_TAG = 16,
 	DR_STE_SIZE_MASK = 16,
 	DR_STE_SIZE_REDUCED = DR_STE_SIZE - DR_STE_SIZE_MASK,
@@ -91,6 +99,7 @@ enum mlx5dr_ste_ctx_action_cap {
 	DR_STE_CTX_ACTION_CAP_TX_POP   = 1 << 0,
 	DR_STE_CTX_ACTION_CAP_RX_PUSH  = 1 << 1,
 	DR_STE_CTX_ACTION_CAP_RX_ENCAP = 1 << 2,
+	DR_STE_CTX_ACTION_CAP_POP_MDFY = 1 << 3,
 };
 
 enum {
@@ -105,7 +114,8 @@ enum mlx5dr_matcher_criteria {
 	DR_MATCHER_CRITERIA_MISC2 = 1 << 3,
 	DR_MATCHER_CRITERIA_MISC3 = 1 << 4,
 	DR_MATCHER_CRITERIA_MISC4 = 1 << 5,
-	DR_MATCHER_CRITERIA_MAX = 1 << 6,
+	DR_MATCHER_CRITERIA_MISC5 = 1 << 6,
+	DR_MATCHER_CRITERIA_MAX = 1 << 7,
 };
 
 enum mlx5dr_action_type {
@@ -125,6 +135,8 @@ enum mlx5dr_action_type {
 	DR_ACTION_TYP_INSERT_HDR,
 	DR_ACTION_TYP_REMOVE_HDR,
 	DR_ACTION_TYP_SAMPLER,
+	DR_ACTION_TYP_ASO_FLOW_METER,
+	DR_ACTION_TYP_RANGE,
 	DR_ACTION_TYP_MAX,
 };
 
@@ -143,11 +155,15 @@ struct mlx5dr_cmd_caps;
 struct mlx5dr_rule_rx_tx;
 struct mlx5dr_matcher_rx_tx;
 struct mlx5dr_ste_ctx;
+struct mlx5dr_send_info_pool;
+struct mlx5dr_icm_hot_chunk;
 
 struct mlx5dr_ste {
-	u8 *hw_ste;
 	/* refcount: indicates the num of rules that using this ste */
 	u32 refcount;
+
+	/* this ste is part of a rule, located in ste's chain */
+	u8 ste_chain_location;
 
 	/* attached to the miss_list head at each htbl entry */
 	struct list_head miss_list_node;
@@ -159,9 +175,6 @@ struct mlx5dr_ste {
 
 	/* The rule this STE belongs to */
 	struct mlx5dr_rule_rx_tx *rule_rx_tx;
-
-	/* this ste is part of a rule, located in ste's chain */
-	u8 ste_chain_location;
 };
 
 struct mlx5dr_ste_htbl_ctrl {
@@ -179,14 +192,7 @@ struct mlx5dr_ste_htbl {
 	u16 byte_mask;
 	u32 refcount;
 	struct mlx5dr_icm_chunk *chunk;
-	struct mlx5dr_ste *ste_arr;
-	u8 *hw_ste_arr;
-
-	struct list_head *miss_list;
-
-	enum mlx5dr_icm_chunk_size chunk_size;
 	struct mlx5dr_ste *pointing_ste;
-
 	struct mlx5dr_ste_htbl_ctrl ctrl;
 };
 
@@ -240,6 +246,7 @@ static inline void mlx5dr_htbl_get(struct mlx5dr_ste_htbl *htbl)
 
 /* STE utils */
 u32 mlx5dr_ste_calc_hash_index(u8 *hw_ste_p, struct mlx5dr_ste_htbl *htbl);
+bool mlx5dr_ste_is_miss_addr_set(struct mlx5dr_ste_ctx *ste_ctx, u8 *hw_ste_p);
 void mlx5dr_ste_set_miss_addr(struct mlx5dr_ste_ctx *ste_ctx,
 			      u8 *hw_ste, u64 miss_addr);
 void mlx5dr_ste_set_hit_addr(struct mlx5dr_ste_ctx *ste_ctx,
@@ -255,11 +262,15 @@ u64 mlx5dr_ste_get_mr_addr(struct mlx5dr_ste *ste);
 struct list_head *mlx5dr_ste_get_miss_list(struct mlx5dr_ste *ste);
 
 #define MLX5DR_MAX_VLANS 2
+#define MLX5DR_INVALID_PATTERN_INDEX 0xffffffff
 
 struct mlx5dr_ste_actions_attr {
 	u32	modify_index;
+	u32	modify_pat_idx;
 	u16	modify_actions;
+	u8	*single_modify_action;
 	u32	decap_index;
+	u32	decap_pat_idx;
 	u16	decap_actions;
 	u8	decap_with_vlan:1;
 	u64	final_icm_addr;
@@ -277,6 +288,20 @@ struct mlx5dr_ste_actions_attr {
 		int	count;
 		u32	headers[MLX5DR_MAX_VLANS];
 	} vlans;
+
+	struct {
+		u32 obj_id;
+		u32 offset;
+		u8 dest_reg_id;
+		u8 init_color;
+	} aso_flow_meter;
+
+	struct {
+		u64	miss_icm_addr;
+		u32	definer_id;
+		u32	min;
+		u32	max;
+	} range;
 };
 
 void mlx5dr_ste_set_actions_rx(struct mlx5dr_ste_ctx *ste_ctx,
@@ -317,6 +342,8 @@ int mlx5dr_ste_set_action_decap_l3_list(struct mlx5dr_ste_ctx *ste_ctx,
 					u8 *hw_action,
 					u32 hw_action_sz,
 					u16 *used_hw_action_num);
+int mlx5dr_ste_alloc_modify_hdr(struct mlx5dr_action *action);
+void mlx5dr_ste_free_modify_hdr(struct mlx5dr_action *action);
 
 const struct mlx5dr_ste_action_modify_field *
 mlx5dr_ste_conv_modify_hdr_sw_field(struct mlx5dr_ste_ctx *ste_ctx, u16 sw_field);
@@ -441,6 +468,11 @@ void mlx5dr_ste_build_tnl_geneve_tlv_opt(struct mlx5dr_ste_ctx *ste_ctx,
 					 struct mlx5dr_match_param *mask,
 					 struct mlx5dr_cmd_caps *caps,
 					 bool inner, bool rx);
+void mlx5dr_ste_build_tnl_geneve_tlv_opt_exist(struct mlx5dr_ste_ctx *ste_ctx,
+					       struct mlx5dr_ste_build *sb,
+					       struct mlx5dr_match_param *mask,
+					       struct mlx5dr_cmd_caps *caps,
+					       bool inner, bool rx);
 void mlx5dr_ste_build_tnl_gtpu(struct mlx5dr_ste_ctx *ste_ctx,
 			       struct mlx5dr_ste_build *sb,
 			       struct mlx5dr_match_param *mask,
@@ -455,6 +487,10 @@ void mlx5dr_ste_build_tnl_gtpu_flex_parser_1(struct mlx5dr_ste_ctx *ste_ctx,
 					     struct mlx5dr_match_param *mask,
 					     struct mlx5dr_cmd_caps *caps,
 					     bool inner, bool rx);
+void mlx5dr_ste_build_tnl_header_0_1(struct mlx5dr_ste_ctx *ste_ctx,
+				     struct mlx5dr_ste_build *sb,
+				     struct mlx5dr_match_param *mask,
+				     bool inner, bool rx);
 void mlx5dr_ste_build_general_purpose(struct mlx5dr_ste_ctx *ste_ctx,
 				      struct mlx5dr_ste_build *sb,
 				      struct mlx5dr_match_param *mask,
@@ -495,57 +531,66 @@ struct mlx5dr_match_spec {
 	/* Incoming packet Ethertype - this is the Ethertype
 	 * following the last VLAN tag of the packet
 	 */
-	u32 ethertype:16;
 	u32 smac_15_0:16;	/* Source MAC address of incoming packet */
+	u32 ethertype:16;
+
 	u32 dmac_47_16;		/* Destination MAC address of incoming packet */
-	/* VLAN ID of first VLAN tag in the incoming packet.
-	 * Valid only when cvlan_tag==1 or svlan_tag==1
-	 */
-	u32 first_vid:12;
-	/* CFI bit of first VLAN tag in the incoming packet.
-	 * Valid only when cvlan_tag==1 or svlan_tag==1
-	 */
-	u32 first_cfi:1;
+
+	u32 dmac_15_0:16;	/* Destination MAC address of incoming packet */
 	/* Priority of first VLAN tag in the incoming packet.
 	 * Valid only when cvlan_tag==1 or svlan_tag==1
 	 */
 	u32 first_prio:3;
-	u32 dmac_15_0:16;	/* Destination MAC address of incoming packet */
-	/* TCP flags. ;Bit 0: FIN;Bit 1: SYN;Bit 2: RST;Bit 3: PSH;Bit 4: ACK;
-	 *             Bit 5: URG;Bit 6: ECE;Bit 7: CWR;Bit 8: NS
+	/* CFI bit of first VLAN tag in the incoming packet.
+	 * Valid only when cvlan_tag==1 or svlan_tag==1
 	 */
-	u32 tcp_flags:9;
-	u32 ip_version:4;	/* IP version */
-	u32 frag:1;		/* Packet is an IP fragment */
-	/* The first vlan in the packet is s-vlan (0x8a88).
-	 * cvlan_tag and svlan_tag cannot be set together
+	u32 first_cfi:1;
+	/* VLAN ID of first VLAN tag in the incoming packet.
+	 * Valid only when cvlan_tag==1 or svlan_tag==1
 	 */
-	u32 svlan_tag:1;
-	/* The first vlan in the packet is c-vlan (0x8100).
-	 * cvlan_tag and svlan_tag cannot be set together
-	 */
-	u32 cvlan_tag:1;
-	/* Explicit Congestion Notification derived from
-	 * Traffic Class/TOS field of IPv6/v4
-	 */
-	u32 ip_ecn:2;
+	u32 first_vid:12;
+
+	u32 ip_protocol:8;	/* IP protocol */
 	/* Differentiated Services Code Point derived from
 	 * Traffic Class/TOS field of IPv6/v4
 	 */
 	u32 ip_dscp:6;
-	u32 ip_protocol:8;	/* IP protocol */
+	/* Explicit Congestion Notification derived from
+	 * Traffic Class/TOS field of IPv6/v4
+	 */
+	u32 ip_ecn:2;
+	/* The first vlan in the packet is c-vlan (0x8100).
+	 * cvlan_tag and svlan_tag cannot be set together
+	 */
+	u32 cvlan_tag:1;
+	/* The first vlan in the packet is s-vlan (0x8a88).
+	 * cvlan_tag and svlan_tag cannot be set together
+	 */
+	u32 svlan_tag:1;
+	u32 frag:1;		/* Packet is an IP fragment */
+	u32 ip_version:4;	/* IP version */
+	/* TCP flags. ;Bit 0: FIN;Bit 1: SYN;Bit 2: RST;Bit 3: PSH;Bit 4: ACK;
+	 *             Bit 5: URG;Bit 6: ECE;Bit 7: CWR;Bit 8: NS
+	 */
+	u32 tcp_flags:9;
+
+	/* TCP source port.;tcp and udp sport/dport are mutually exclusive */
+	u32 tcp_sport:16;
 	/* TCP destination port.
 	 * tcp and udp sport/dport are mutually exclusive
 	 */
 	u32 tcp_dport:16;
-	/* TCP source port.;tcp and udp sport/dport are mutually exclusive */
-	u32 tcp_sport:16;
+
+	u32 reserved_auto1:16;
+	u32 ipv4_ihl:4;
+	u32 reserved_auto2:4;
 	u32 ttl_hoplimit:8;
-	u32 reserved:24;
-	/* UDP destination port.;tcp and udp sport/dport are mutually exclusive */
-	u32 udp_dport:16;
+
 	/* UDP source port.;tcp and udp sport/dport are mutually exclusive */
 	u32 udp_sport:16;
+	/* UDP destination port.;tcp and udp sport/dport are mutually exclusive */
+	u32 udp_dport:16;
+
 	/* IPv6 source address of incoming packets
 	 * For IPv4 address use bits 31:0 (rest of the bits are reserved)
 	 * This field should be qualified by an appropriate ethertype
@@ -589,96 +634,114 @@ struct mlx5dr_match_spec {
 };
 
 struct mlx5dr_match_misc {
-	u32 source_sqn:24;		/* Source SQN */
-	u32 source_vhca_port:4;
-	/* used with GRE, sequence number exist when gre_s_present == 1 */
-	u32 gre_s_present:1;
-	/* used with GRE, key exist when gre_k_present == 1 */
-	u32 gre_k_present:1;
-	u32 reserved_auto1:1;
 	/* used with GRE, checksum exist when gre_c_present == 1 */
 	u32 gre_c_present:1;
+	u32 reserved_auto1:1;
+	/* used with GRE, key exist when gre_k_present == 1 */
+	u32 gre_k_present:1;
+	/* used with GRE, sequence number exist when gre_s_present == 1 */
+	u32 gre_s_present:1;
+	u32 source_vhca_port:4;
+	u32 source_sqn:24;		/* Source SQN */
+
+	u32 source_eswitch_owner_vhca_id:16;
 	/* Source port.;0xffff determines wire port */
 	u32 source_port:16;
-	u32 source_eswitch_owner_vhca_id:16;
-	/* VLAN ID of first VLAN tag the inner header of the incoming packet.
-	 * Valid only when inner_second_cvlan_tag ==1 or inner_second_svlan_tag ==1
-	 */
-	u32 inner_second_vid:12;
-	/* CFI bit of first VLAN tag in the inner header of the incoming packet.
-	 * Valid only when inner_second_cvlan_tag ==1 or inner_second_svlan_tag ==1
-	 */
-	u32 inner_second_cfi:1;
-	/* Priority of second VLAN tag in the inner header of the incoming packet.
-	 * Valid only when inner_second_cvlan_tag ==1 or inner_second_svlan_tag ==1
-	 */
-	u32 inner_second_prio:3;
-	/* VLAN ID of first VLAN tag the outer header of the incoming packet.
-	 * Valid only when outer_second_cvlan_tag ==1 or outer_second_svlan_tag ==1
-	 */
-	u32 outer_second_vid:12;
-	/* CFI bit of first VLAN tag in the outer header of the incoming packet.
-	 * Valid only when outer_second_cvlan_tag ==1 or outer_second_svlan_tag ==1
-	 */
-	u32 outer_second_cfi:1;
+
 	/* Priority of second VLAN tag in the outer header of the incoming packet.
 	 * Valid only when outer_second_cvlan_tag ==1 or outer_second_svlan_tag ==1
 	 */
 	u32 outer_second_prio:3;
-	u32 gre_protocol:16;		/* GRE Protocol (outer) */
-	u32 reserved_auto3:12;
-	/* The second vlan in the inner header of the packet is s-vlan (0x8a88).
-	 * inner_second_cvlan_tag and inner_second_svlan_tag cannot be set together
+	/* CFI bit of first VLAN tag in the outer header of the incoming packet.
+	 * Valid only when outer_second_cvlan_tag ==1 or outer_second_svlan_tag ==1
 	 */
-	u32 inner_second_svlan_tag:1;
-	/* The second vlan in the outer header of the packet is s-vlan (0x8a88).
+	u32 outer_second_cfi:1;
+	/* VLAN ID of first VLAN tag the outer header of the incoming packet.
+	 * Valid only when outer_second_cvlan_tag ==1 or outer_second_svlan_tag ==1
+	 */
+	u32 outer_second_vid:12;
+	/* Priority of second VLAN tag in the inner header of the incoming packet.
+	 * Valid only when inner_second_cvlan_tag ==1 or inner_second_svlan_tag ==1
+	 */
+	u32 inner_second_prio:3;
+	/* CFI bit of first VLAN tag in the inner header of the incoming packet.
+	 * Valid only when inner_second_cvlan_tag ==1 or inner_second_svlan_tag ==1
+	 */
+	u32 inner_second_cfi:1;
+	/* VLAN ID of first VLAN tag the inner header of the incoming packet.
+	 * Valid only when inner_second_cvlan_tag ==1 or inner_second_svlan_tag ==1
+	 */
+	u32 inner_second_vid:12;
+
+	u32 outer_second_cvlan_tag:1;
+	u32 inner_second_cvlan_tag:1;
+	/* The second vlan in the outer header of the packet is c-vlan (0x8100).
 	 * outer_second_cvlan_tag and outer_second_svlan_tag cannot be set together
 	 */
 	u32 outer_second_svlan_tag:1;
 	/* The second vlan in the inner header of the packet is c-vlan (0x8100).
 	 * inner_second_cvlan_tag and inner_second_svlan_tag cannot be set together
 	 */
-	u32 inner_second_cvlan_tag:1;
-	/* The second vlan in the outer header of the packet is c-vlan (0x8100).
+	u32 inner_second_svlan_tag:1;
+	/* The second vlan in the outer header of the packet is s-vlan (0x8a88).
 	 * outer_second_cvlan_tag and outer_second_svlan_tag cannot be set together
 	 */
-	u32 outer_second_cvlan_tag:1;
-	u32 gre_key_l:8;		/* GRE Key [7:0] (outer) */
+	u32 reserved_auto2:12;
+	/* The second vlan in the inner header of the packet is s-vlan (0x8a88).
+	 * inner_second_cvlan_tag and inner_second_svlan_tag cannot be set together
+	 */
+	u32 gre_protocol:16;		/* GRE Protocol (outer) */
+
 	u32 gre_key_h:24;		/* GRE Key[31:8] (outer) */
-	u32 reserved_auto4:8;
+	u32 gre_key_l:8;		/* GRE Key [7:0] (outer) */
+
 	u32 vxlan_vni:24;		/* VXLAN VNI (outer) */
-	u32 geneve_oam:1;		/* GENEVE OAM field (outer) */
-	u32 reserved_auto5:7;
+	u32 reserved_auto3:8;
+
 	u32 geneve_vni:24;		/* GENEVE VNI field (outer) */
+	u32 reserved_auto4:6;
+	u32 geneve_tlv_option_0_exist:1;
+	u32 geneve_oam:1;		/* GENEVE OAM field (outer) */
+
+	u32 reserved_auto5:12;
 	u32 outer_ipv6_flow_label:20;	/* Flow label of incoming IPv6 packet (outer) */
+
 	u32 reserved_auto6:12;
 	u32 inner_ipv6_flow_label:20;	/* Flow label of incoming IPv6 packet (inner) */
-	u32 reserved_auto7:12;
-	u32 geneve_protocol_type:16;	/* GENEVE protocol type (outer) */
+
+	u32 reserved_auto7:10;
 	u32 geneve_opt_len:6;		/* GENEVE OptLen (outer) */
-	u32 reserved_auto8:10;
+	u32 geneve_protocol_type:16;	/* GENEVE protocol type (outer) */
+
+	u32 reserved_auto8:8;
 	u32 bth_dst_qp:24;		/* Destination QP in BTH header */
-	u32 reserved_auto9:8;
-	u8 reserved_auto10[20];
+
+	u32 reserved_auto9;
+	u32 outer_esp_spi;
+	u32 reserved_auto10[3];
 };
 
 struct mlx5dr_match_misc2 {
-	u32 outer_first_mpls_ttl:8;		/* First MPLS TTL (outer) */
-	u32 outer_first_mpls_s_bos:1;		/* First MPLS S_BOS (outer) */
-	u32 outer_first_mpls_exp:3;		/* First MPLS EXP (outer) */
 	u32 outer_first_mpls_label:20;		/* First MPLS LABEL (outer) */
-	u32 inner_first_mpls_ttl:8;		/* First MPLS TTL (inner) */
-	u32 inner_first_mpls_s_bos:1;		/* First MPLS S_BOS (inner) */
-	u32 inner_first_mpls_exp:3;		/* First MPLS EXP (inner) */
+	u32 outer_first_mpls_exp:3;		/* First MPLS EXP (outer) */
+	u32 outer_first_mpls_s_bos:1;		/* First MPLS S_BOS (outer) */
+	u32 outer_first_mpls_ttl:8;		/* First MPLS TTL (outer) */
+
 	u32 inner_first_mpls_label:20;		/* First MPLS LABEL (inner) */
-	u32 outer_first_mpls_over_gre_ttl:8;	/* last MPLS TTL (outer) */
-	u32 outer_first_mpls_over_gre_s_bos:1;	/* last MPLS S_BOS (outer) */
-	u32 outer_first_mpls_over_gre_exp:3;	/* last MPLS EXP (outer) */
+	u32 inner_first_mpls_exp:3;		/* First MPLS EXP (inner) */
+	u32 inner_first_mpls_s_bos:1;		/* First MPLS S_BOS (inner) */
+	u32 inner_first_mpls_ttl:8;		/* First MPLS TTL (inner) */
+
 	u32 outer_first_mpls_over_gre_label:20;	/* last MPLS LABEL (outer) */
-	u32 outer_first_mpls_over_udp_ttl:8;	/* last MPLS TTL (outer) */
-	u32 outer_first_mpls_over_udp_s_bos:1;	/* last MPLS S_BOS (outer) */
-	u32 outer_first_mpls_over_udp_exp:3;	/* last MPLS EXP (outer) */
+	u32 outer_first_mpls_over_gre_exp:3;	/* last MPLS EXP (outer) */
+	u32 outer_first_mpls_over_gre_s_bos:1;	/* last MPLS S_BOS (outer) */
+	u32 outer_first_mpls_over_gre_ttl:8;	/* last MPLS TTL (outer) */
+
 	u32 outer_first_mpls_over_udp_label:20;	/* last MPLS LABEL (outer) */
+	u32 outer_first_mpls_over_udp_exp:3;	/* last MPLS EXP (outer) */
+	u32 outer_first_mpls_over_udp_s_bos:1;	/* last MPLS S_BOS (outer) */
+	u32 outer_first_mpls_over_udp_ttl:8;	/* last MPLS TTL (outer) */
+
 	u32 metadata_reg_c_7;			/* metadata_reg_c_7 */
 	u32 metadata_reg_c_6;			/* metadata_reg_c_6 */
 	u32 metadata_reg_c_5;			/* metadata_reg_c_5 */
@@ -688,7 +751,7 @@ struct mlx5dr_match_misc2 {
 	u32 metadata_reg_c_1;			/* metadata_reg_c_1 */
 	u32 metadata_reg_c_0;			/* metadata_reg_c_0 */
 	u32 metadata_reg_a;			/* metadata_reg_a */
-	u8 reserved_auto2[12];
+	u32 reserved_auto1[3];
 };
 
 struct mlx5dr_match_misc3 {
@@ -696,24 +759,34 @@ struct mlx5dr_match_misc3 {
 	u32 outer_tcp_seq_num;
 	u32 inner_tcp_ack_num;
 	u32 outer_tcp_ack_num;
-	u32 outer_vxlan_gpe_vni:24;
+
 	u32 reserved_auto1:8;
-	u32 reserved_auto2:16;
-	u32 outer_vxlan_gpe_flags:8;
+	u32 outer_vxlan_gpe_vni:24;
+
 	u32 outer_vxlan_gpe_next_protocol:8;
+	u32 outer_vxlan_gpe_flags:8;
+	u32 reserved_auto2:16;
+
 	u32 icmpv4_header_data;
 	u32 icmpv6_header_data;
-	u8 icmpv6_code;
-	u8 icmpv6_type;
-	u8 icmpv4_code;
+
 	u8 icmpv4_type;
+	u8 icmpv4_code;
+	u8 icmpv6_type;
+	u8 icmpv6_code;
+
 	u32 geneve_tlv_option_0_data;
-	u8 gtpu_msg_flags;
-	u8 gtpu_msg_type;
+
 	u32 gtpu_teid;
+
+	u8 gtpu_msg_type;
+	u8 gtpu_msg_flags;
+	u32 reserved_auto3:16;
+
 	u32 gtpu_dw_2;
 	u32 gtpu_first_ext_dw_0;
 	u32 gtpu_dw_0;
+	u32 reserved_auto4;
 };
 
 struct mlx5dr_match_misc4 {
@@ -725,6 +798,18 @@ struct mlx5dr_match_misc4 {
 	u32 prog_sample_field_id_2;
 	u32 prog_sample_field_value_3;
 	u32 prog_sample_field_id_3;
+	u32 reserved_auto1[8];
+};
+
+struct mlx5dr_match_misc5 {
+	u32 macsec_tag_0;
+	u32 macsec_tag_1;
+	u32 macsec_tag_2;
+	u32 macsec_tag_3;
+	u32 tunnel_header_0;
+	u32 tunnel_header_1;
+	u32 tunnel_header_2;
+	u32 tunnel_header_3;
 };
 
 struct mlx5dr_match_param {
@@ -734,11 +819,22 @@ struct mlx5dr_match_param {
 	struct mlx5dr_match_misc2 misc2;
 	struct mlx5dr_match_misc3 misc3;
 	struct mlx5dr_match_misc4 misc4;
+	struct mlx5dr_match_misc5 misc5;
 };
 
 #define DR_MASK_IS_ICMPV4_SET(_misc3) ((_misc3)->icmpv4_type || \
 				       (_misc3)->icmpv4_code || \
 				       (_misc3)->icmpv4_header_data)
+
+#define DR_MASK_IS_SRC_IP_SET(_spec) ((_spec)->src_ip_127_96 || \
+				      (_spec)->src_ip_95_64  || \
+				      (_spec)->src_ip_63_32  || \
+				      (_spec)->src_ip_31_0)
+
+#define DR_MASK_IS_DST_IP_SET(_spec) ((_spec)->dst_ip_127_96 || \
+				      (_spec)->dst_ip_95_64  || \
+				      (_spec)->dst_ip_63_32  || \
+				      (_spec)->dst_ip_31_0)
 
 struct mlx5dr_esw_caps {
 	u64 drop_icm_address_rx;
@@ -752,15 +848,21 @@ struct mlx5dr_esw_caps {
 struct mlx5dr_cmd_vport_cap {
 	u16 vport_gvmi;
 	u16 vhca_gvmi;
+	u16 num;
 	u64 icm_address_rx;
 	u64 icm_address_tx;
-	u32 num;
 };
 
 struct mlx5dr_roce_cap {
 	u8 roce_en:1;
 	u8 fl_rc_qp_when_roce_disabled:1;
 	u8 fl_rc_qp_when_roce_enabled:1;
+};
+
+struct mlx5dr_vports {
+	struct mlx5dr_cmd_vport_cap esw_manager_caps;
+	struct mlx5dr_cmd_vport_cap uplink_caps;
+	struct xarray vports_caps_xa;
 };
 
 struct mlx5dr_cmd_caps {
@@ -772,6 +874,8 @@ struct mlx5dr_cmd_caps {
 	u64 esw_tx_drop_address;
 	u32 log_icm_size;
 	u64 hdr_modify_icm_addr;
+	u32 log_modify_pattern_icm_size;
+	u64 hdr_modify_pattern_icm_addr;
 	u32 flex_protocols;
 	u8 flex_parser_id_icmp_dw0;
 	u8 flex_parser_id_icmp_dw1;
@@ -784,9 +888,9 @@ struct mlx5dr_cmd_caps {
 	u8 flex_parser_id_gtpu_teid;
 	u8 flex_parser_id_gtpu_dw_2;
 	u8 flex_parser_id_gtpu_first_ext_dw_0;
+	u8 flex_parser_ok_bits_supp;
 	u8 max_ft_level;
 	u16 roce_min_src_udp;
-	u8 num_esw_ports;
 	u8 sw_format_ver;
 	bool eswitch_manager;
 	bool rx_sw_owner;
@@ -795,11 +899,14 @@ struct mlx5dr_cmd_caps {
 	u8 rx_sw_owner_v2:1;
 	u8 tx_sw_owner_v2:1;
 	u8 fdb_sw_owner_v2:1;
-	u32 num_vports;
 	struct mlx5dr_esw_caps esw_caps;
-	struct mlx5dr_cmd_vport_cap *vports_caps;
+	struct mlx5dr_vports vports;
 	bool prio_tag_required;
 	struct mlx5dr_roce_cap roce_caps;
+	u16 log_header_modify_argument_granularity;
+	u16 log_header_modify_argument_max_alloc;
+	bool support_modify_argument;
+	u8 is_ecpf:1;
 	u8 isolate_vl_tc:1;
 };
 
@@ -821,13 +928,10 @@ struct mlx5dr_domain_info {
 	u32 max_send_wr;
 	u32 max_log_sw_icm_sz;
 	u32 max_log_action_icm_sz;
+	u32 max_log_modify_hdr_pattern_icm_sz;
 	struct mlx5dr_domain_rx_tx rx;
 	struct mlx5dr_domain_rx_tx tx;
 	struct mlx5dr_cmd_caps caps;
-};
-
-struct mlx5dr_domain_cache {
-	struct mlx5dr_fw_recalc_cs_ft **recalc_cs_ft;
 };
 
 struct mlx5dr_domain {
@@ -839,16 +943,28 @@ struct mlx5dr_domain {
 	refcount_t refcount;
 	struct mlx5dr_icm_pool *ste_icm_pool;
 	struct mlx5dr_icm_pool *action_icm_pool;
+	struct mlx5dr_send_info_pool *send_info_pool_rx;
+	struct mlx5dr_send_info_pool *send_info_pool_tx;
+	struct kmem_cache *chunks_kmem_cache;
+	struct kmem_cache *htbls_kmem_cache;
+	struct mlx5dr_ptrn_mgr *ptrn_mgr;
+	struct mlx5dr_arg_mgr *arg_mgr;
 	struct mlx5dr_send_ring *send_ring;
 	struct mlx5dr_domain_info info;
-	struct mlx5dr_domain_cache cache;
+	struct xarray csum_fts_xa;
 	struct mlx5dr_ste_ctx *ste_ctx;
+	struct list_head dbg_tbl_list;
+	struct mlx5dr_dbg_dump_info dump_info;
+	struct xarray definers_xa;
+	/* memory management statistics */
+	u32 num_buddies[DR_ICM_TYPE_MAX];
 };
 
 struct mlx5dr_table_rx_tx {
 	struct mlx5dr_ste_htbl *s_anchor;
 	struct mlx5dr_domain_rx_tx *nic_dmn;
 	u64 default_icm_addr;
+	struct list_head nic_matcher_list;
 };
 
 struct mlx5dr_table {
@@ -862,6 +978,7 @@ struct mlx5dr_table {
 	struct list_head matcher_list;
 	struct mlx5dr_action *miss_action;
 	refcount_t refcount;
+	struct list_head dbg_node;
 };
 
 struct mlx5dr_matcher_rx_tx {
@@ -875,18 +992,21 @@ struct mlx5dr_matcher_rx_tx {
 	u8 num_of_builders_arr[DR_RULE_IPV_MAX][DR_RULE_IPV_MAX];
 	u64 default_icm_addr;
 	struct mlx5dr_table_rx_tx *nic_tbl;
+	u32 prio;
+	struct list_head list_node;
+	u32 rules;
 };
 
 struct mlx5dr_matcher {
 	struct mlx5dr_table *tbl;
 	struct mlx5dr_matcher_rx_tx rx;
 	struct mlx5dr_matcher_rx_tx tx;
-	struct list_head matcher_list;
+	struct list_head list_node; /* Used for both matchers and dbg managing */
 	u32 prio;
 	struct mlx5dr_match_param mask;
 	u8 match_criteria;
 	refcount_t refcount;
-	struct mlx5dv_flow_matcher *dv_matcher;
+	struct list_head dbg_rule_list;
 };
 
 struct mlx5dr_ste_action_modify_field {
@@ -897,15 +1017,34 @@ struct mlx5dr_ste_action_modify_field {
 	u8 l4_type;
 };
 
+struct mlx5dr_ptrn_obj {
+	struct mlx5dr_icm_chunk *chunk;
+	u8 *data;
+	u16 num_of_actions;
+	u32 index;
+	refcount_t refcount;
+	struct list_head list;
+};
+
+struct mlx5dr_arg_obj {
+	u32 obj_id;
+	u32 obj_offset;
+	struct list_head list_node;
+	u32 log_chunk_size;
+};
+
 struct mlx5dr_action_rewrite {
 	struct mlx5dr_domain *dmn;
 	struct mlx5dr_icm_chunk *chunk;
 	u8 *data;
 	u16 num_of_actions;
 	u32 index;
+	u8 single_action_opt:1;
 	u8 allow_rx:1;
 	u8 allow_tx:1;
 	u8 modify_ttl:1;
+	struct mlx5dr_ptrn_obj *ptrn;
+	struct mlx5dr_arg_obj *arg;
 };
 
 struct mlx5dr_action_reformat {
@@ -940,9 +1079,18 @@ struct mlx5dr_action_dest_tbl {
 	};
 };
 
+struct mlx5dr_action_range {
+	struct mlx5dr_domain *dmn;
+	struct mlx5dr_action *hit_tbl_action;
+	struct mlx5dr_action *miss_tbl_action;
+	u32 definer_id;
+	u32 min;
+	u32 max;
+};
+
 struct mlx5dr_action_ctr {
 	u32 ctr_id;
-	u32 offeset;
+	u32 offset;
 };
 
 struct mlx5dr_action_vport {
@@ -956,6 +1104,19 @@ struct mlx5dr_action_push_vlan {
 
 struct mlx5dr_action_flow_tag {
 	u32 flow_tag;
+};
+
+struct mlx5dr_rule_action_member {
+	struct mlx5dr_action *action;
+	struct list_head list;
+};
+
+struct mlx5dr_action_aso_flow_meter {
+	struct mlx5dr_domain *dmn;
+	u32 obj_id;
+	u32 offset;
+	u8 dest_reg_id;
+	u8 init_color;
 };
 
 struct mlx5dr_action {
@@ -972,6 +1133,8 @@ struct mlx5dr_action {
 		struct mlx5dr_action_vport *vport;
 		struct mlx5dr_action_push_vlan *push_vlan;
 		struct mlx5dr_action_flow_tag *flow_tag;
+		struct mlx5dr_action_aso_flow_meter *aso;
+		struct mlx5dr_action_range *range;
 	};
 };
 
@@ -998,6 +1161,7 @@ struct mlx5dr_rule {
 	struct mlx5dr_rule_rx_tx rx;
 	struct mlx5dr_rule_rx_tx tx;
 	struct list_head rule_actions_list;
+	struct list_head dbg_node;
 	u32 flow_source;
 };
 
@@ -1010,17 +1174,12 @@ int mlx5dr_rule_get_reverse_rule_members(struct mlx5dr_ste **ste_arr,
 
 struct mlx5dr_icm_chunk {
 	struct mlx5dr_icm_buddy_mem *buddy_mem;
-	struct list_head chunk_list;
-	u32 rkey;
-	u32 num_of_entries;
-	u32 byte_size;
-	u64 icm_addr;
-	u64 mr_addr;
 
 	/* indicates the index of this chunk in the whole memory,
 	 * used for deleting the chunk from the buddy
 	 */
 	unsigned int seg;
+	enum mlx5dr_icm_chunk_size size;
 
 	/* Memory optimisation */
 	struct mlx5dr_ste *ste_arr;
@@ -1050,10 +1209,25 @@ static inline void mlx5dr_domain_unlock(struct mlx5dr_domain *dmn)
 	mlx5dr_domain_nic_unlock(&dmn->info.rx);
 }
 
+int mlx5dr_matcher_add_to_tbl_nic(struct mlx5dr_domain *dmn,
+				  struct mlx5dr_matcher_rx_tx *nic_matcher);
+int mlx5dr_matcher_remove_from_tbl_nic(struct mlx5dr_domain *dmn,
+				       struct mlx5dr_matcher_rx_tx *nic_matcher);
+
 int mlx5dr_matcher_select_builders(struct mlx5dr_matcher *matcher,
 				   struct mlx5dr_matcher_rx_tx *nic_matcher,
 				   enum mlx5dr_ipv outer_ipv,
 				   enum mlx5dr_ipv inner_ipv);
+
+u64 mlx5dr_icm_pool_get_chunk_mr_addr(struct mlx5dr_icm_chunk *chunk);
+u32 mlx5dr_icm_pool_get_chunk_rkey(struct mlx5dr_icm_chunk *chunk);
+u64 mlx5dr_icm_pool_get_chunk_icm_addr(struct mlx5dr_icm_chunk *chunk);
+u32 mlx5dr_icm_pool_get_chunk_num_of_entries(struct mlx5dr_icm_chunk *chunk);
+u32 mlx5dr_icm_pool_get_chunk_byte_size(struct mlx5dr_icm_chunk *chunk);
+u8 *mlx5dr_ste_get_hw_ste(struct mlx5dr_ste *ste);
+
+struct mlx5dr_ste_htbl *mlx5dr_icm_pool_alloc_htbl(struct mlx5dr_icm_pool *pool);
+void mlx5dr_icm_pool_free_htbl(struct mlx5dr_icm_pool *pool, struct mlx5dr_ste_htbl *htbl);
 
 static inline int
 mlx5dr_icm_pool_dm_type_to_entry_size(enum mlx5dr_icm_type icm_type)
@@ -1087,7 +1261,7 @@ static inline int
 mlx5dr_ste_htbl_increase_threshold(struct mlx5dr_ste_htbl *htbl)
 {
 	int num_of_entries =
-		mlx5dr_icm_pool_chunk_size_to_entries(htbl->chunk_size);
+		mlx5dr_icm_pool_chunk_size_to_entries(htbl->chunk->size);
 
 	/* Threshold is 50%, one is added to table of size 1 */
 	return (num_of_entries + 1) / 2;
@@ -1096,24 +1270,14 @@ mlx5dr_ste_htbl_increase_threshold(struct mlx5dr_ste_htbl *htbl)
 static inline bool
 mlx5dr_ste_htbl_may_grow(struct mlx5dr_ste_htbl *htbl)
 {
-	if (htbl->chunk_size == DR_CHUNK_SIZE_MAX - 1 || !htbl->byte_mask)
+	if (htbl->chunk->size == DR_CHUNK_SIZE_MAX - 1 || !htbl->byte_mask)
 		return false;
 
 	return true;
 }
 
-static inline struct mlx5dr_cmd_vport_cap *
-mlx5dr_get_vport_cap(struct mlx5dr_cmd_caps *caps, u32 vport)
-{
-	if (!caps->vports_caps ||
-	    (vport >= caps->num_vports && vport != WIRE_PORT))
-		return NULL;
-
-	if (vport == WIRE_PORT)
-		vport = caps->num_vports;
-
-	return &caps->vports_caps[vport];
-}
+struct mlx5dr_cmd_vport_cap *
+mlx5dr_domain_get_vport_cap(struct mlx5dr_domain *dmn, u16 vport);
 
 struct mlx5dr_cmd_query_flow_table_details {
 	u8 status;
@@ -1124,6 +1288,7 @@ struct mlx5dr_cmd_query_flow_table_details {
 
 struct mlx5dr_cmd_create_flow_table_attr {
 	u32 table_type;
+	u16 uid;
 	u64 icm_addr_rx;
 	u64 icm_addr_tx;
 	u8 level;
@@ -1154,7 +1319,7 @@ int mlx5dr_cmd_set_fte_modify_and_vport(struct mlx5_core_dev *mdev,
 					u32 table_id,
 					u32 group_id,
 					u32 modify_header_id,
-					u32 vport_id);
+					u16 vport_id);
 int mlx5dr_cmd_del_flow_table_entry(struct mlx5_core_dev *mdev,
 				    u32 table_type,
 				    u32 table_id);
@@ -1193,6 +1358,14 @@ int mlx5dr_cmd_create_reformat_ctx(struct mlx5_core_dev *mdev,
 				   u32 *reformat_id);
 void mlx5dr_cmd_destroy_reformat_ctx(struct mlx5_core_dev *mdev,
 				     u32 reformat_id);
+int mlx5dr_cmd_create_definer(struct mlx5_core_dev *mdev,
+			      u16 format_id,
+			      u8 *dw_selectors,
+			      u8 *byte_selectors,
+			      u8 *match_mask,
+			      u32 *definer_id);
+void mlx5dr_cmd_destroy_definer(struct mlx5_core_dev *mdev,
+				u32 definer_id);
 
 struct mlx5dr_cmd_gid_attr {
 	u8 gid[16];
@@ -1200,22 +1373,14 @@ struct mlx5dr_cmd_gid_attr {
 	u32 roce_ver;
 };
 
-struct mlx5dr_cmd_qp_create_attr {
-	u32 page_id;
-	u32 pdn;
-	u32 cqn;
-	u32 pm_state;
-	u32 service_type;
-	u32 buff_umem_id;
-	u32 db_umem_id;
-	u32 sq_wqe_cnt;
-	u32 rq_wqe_cnt;
-	u32 rq_wqe_shift;
-	u8 isolate_vl_tc:1;
-};
-
 int mlx5dr_cmd_query_gid(struct mlx5_core_dev *mdev, u8 vhca_port_num,
 			 u16 index, struct mlx5dr_cmd_gid_attr *attr);
+
+int mlx5dr_cmd_create_modify_header_arg(struct mlx5_core_dev *dev,
+					u16 log_obj_range, u32 pd,
+					u32 *obj_id);
+void mlx5dr_cmd_destroy_modify_header_arg(struct mlx5_core_dev *dev,
+					  u32 obj_id);
 
 struct mlx5dr_icm_pool *mlx5dr_icm_pool_create(struct mlx5dr_domain *dmn,
 					       enum mlx5dr_icm_type icm_type);
@@ -1241,7 +1406,8 @@ void mlx5dr_ste_set_formatted_ste(struct mlx5dr_ste_ctx *ste_ctx,
 				  struct mlx5dr_htbl_connect_info *connect_info);
 void mlx5dr_ste_copy_param(u8 match_criteria,
 			   struct mlx5dr_match_param *set_param,
-			   struct mlx5dr_match_parameters *mask);
+			   struct mlx5dr_match_parameters *mask,
+			   bool clear);
 
 struct mlx5dr_qp {
 	struct mlx5_core_dev *mdev;
@@ -1250,6 +1416,7 @@ struct mlx5dr_qp {
 	struct mlx5_wq_ctrl wq_ctrl;
 	u32 qpn;
 	struct {
+		unsigned int head;
 		unsigned int pc;
 		unsigned int cc;
 		unsigned int size;
@@ -1275,14 +1442,11 @@ struct mlx5dr_cq {
 
 struct mlx5dr_mr {
 	struct mlx5_core_dev *mdev;
-	struct mlx5_core_mkey mkey;
+	u32 mkey;
 	dma_addr_t dma_addr;
 	void *addr;
 	size_t size;
 };
-
-#define MAX_SEND_CQE		64
-#define MIN_READ_SYNC		64
 
 struct mlx5dr_send_ring {
 	struct mlx5dr_cq *cq;
@@ -1298,7 +1462,7 @@ struct mlx5dr_send_ring {
 	u32 tx_head;
 	void *buf;
 	u32 buf_size;
-	u8 sync_buff[MIN_READ_SYNC];
+	u8 *sync_buff;
 	struct mlx5dr_mr *sync_mr;
 	spinlock_t lock; /* Protect the data path of the send ring */
 	bool err_state; /* send_ring is not usable in err state */
@@ -1322,6 +1486,18 @@ int mlx5dr_send_postsend_formatted_htbl(struct mlx5dr_domain *dmn,
 					bool update_hw_ste);
 int mlx5dr_send_postsend_action(struct mlx5dr_domain *dmn,
 				struct mlx5dr_action *action);
+int mlx5dr_send_postsend_pattern(struct mlx5dr_domain *dmn,
+				 struct mlx5dr_icm_chunk *chunk,
+				 u16 num_of_actions,
+				 u8 *data);
+int mlx5dr_send_postsend_args(struct mlx5dr_domain *dmn, u64 arg_id,
+			      u16 num_of_actions, u8 *actions_data);
+
+int mlx5dr_send_info_pool_create(struct mlx5dr_domain *dmn);
+void mlx5dr_send_info_pool_destroy(struct mlx5dr_domain *dmn);
+struct mlx5dr_ste_send_info *mlx5dr_send_info_alloc(struct mlx5dr_domain *dmn,
+						    enum mlx5dr_domain_nic_type nic_type);
+void mlx5dr_send_info_free(struct mlx5dr_ste_send_info *ste_send_info);
 
 struct mlx5dr_cmd_ft_info {
 	u32 id;
@@ -1372,19 +1548,50 @@ struct mlx5dr_fw_recalc_cs_ft {
 };
 
 struct mlx5dr_fw_recalc_cs_ft *
-mlx5dr_fw_create_recalc_cs_ft(struct mlx5dr_domain *dmn, u32 vport_num);
+mlx5dr_fw_create_recalc_cs_ft(struct mlx5dr_domain *dmn, u16 vport_num);
 void mlx5dr_fw_destroy_recalc_cs_ft(struct mlx5dr_domain *dmn,
 				    struct mlx5dr_fw_recalc_cs_ft *recalc_cs_ft);
-int mlx5dr_domain_cache_get_recalc_cs_ft_addr(struct mlx5dr_domain *dmn,
-					      u32 vport_num,
-					      u64 *rx_icm_addr);
+int mlx5dr_domain_get_recalc_cs_ft_addr(struct mlx5dr_domain *dmn,
+					u16 vport_num,
+					u64 *rx_icm_addr);
 int mlx5dr_fw_create_md_tbl(struct mlx5dr_domain *dmn,
 			    struct mlx5dr_cmd_flow_destination_hw_info *dest,
 			    int num_dest,
 			    bool reformat_req,
 			    u32 *tbl_id,
 			    u32 *group_id,
-			    bool ignore_flow_level);
+			    bool ignore_flow_level,
+			    u32 flow_source);
 void mlx5dr_fw_destroy_md_tbl(struct mlx5dr_domain *dmn, u32 tbl_id,
 			      u32 group_id);
+
+static inline bool mlx5dr_is_fw_table(struct mlx5_flow_table *ft)
+{
+	return !ft->fs_dr_table.dr_table;
+}
+
+static inline bool mlx5dr_supp_match_ranges(struct mlx5_core_dev *dev)
+{
+	return (MLX5_CAP_GEN(dev, steering_format_version) >=
+		MLX5_STEERING_FORMAT_CONNECTX_6DX) &&
+	       (MLX5_CAP_GEN_64(dev, match_definer_format_supported) &
+			(1ULL << MLX5_IFC_DEFINER_FORMAT_ID_SELECT));
+}
+
+bool mlx5dr_domain_is_support_ptrn_arg(struct mlx5dr_domain *dmn);
+struct mlx5dr_ptrn_mgr *mlx5dr_ptrn_mgr_create(struct mlx5dr_domain *dmn);
+void mlx5dr_ptrn_mgr_destroy(struct mlx5dr_ptrn_mgr *mgr);
+struct mlx5dr_ptrn_obj *mlx5dr_ptrn_cache_get_pattern(struct mlx5dr_ptrn_mgr *mgr,
+						      u16 num_of_actions, u8 *data);
+void mlx5dr_ptrn_cache_put_pattern(struct mlx5dr_ptrn_mgr *mgr,
+				   struct mlx5dr_ptrn_obj *pattern);
+struct mlx5dr_arg_mgr *mlx5dr_arg_mgr_create(struct mlx5dr_domain *dmn);
+void mlx5dr_arg_mgr_destroy(struct mlx5dr_arg_mgr *mgr);
+struct mlx5dr_arg_obj *mlx5dr_arg_get_obj(struct mlx5dr_arg_mgr *mgr,
+					  u16 num_of_actions,
+					  u8 *data);
+void mlx5dr_arg_put_obj(struct mlx5dr_arg_mgr *mgr,
+			struct mlx5dr_arg_obj *arg_obj);
+u32 mlx5dr_arg_get_obj_id(struct mlx5dr_arg_obj *arg_obj);
+
 #endif  /* _DR_TYPES_H_ */

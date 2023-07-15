@@ -18,19 +18,23 @@
 #define UNCORE_DISCOVERY_BIR_BASE		0x10
 /* Discovery table BAR step */
 #define UNCORE_DISCOVERY_BIR_STEP		0x4
-/* Mask of the discovery table offset */
-#define UNCORE_DISCOVERY_MASK			0xf
 /* Global discovery table size */
 #define UNCORE_DISCOVERY_GLOBAL_MAP_SIZE	0x20
 
-#define UNCORE_DISCOVERY_PCI_DOMAIN(data)	((data >> 28) & 0x7)
-#define UNCORE_DISCOVERY_PCI_BUS(data)		((data >> 20) & 0xff)
-#define UNCORE_DISCOVERY_PCI_DEVFN(data)	((data >> 12) & 0xff)
+#define UNCORE_DISCOVERY_PCI_DOMAIN_OFFSET	28
+#define UNCORE_DISCOVERY_PCI_DOMAIN(data)			\
+		((data >> UNCORE_DISCOVERY_PCI_DOMAIN_OFFSET) & 0x7)
+#define UNCORE_DISCOVERY_PCI_BUS_OFFSET		20
+#define UNCORE_DISCOVERY_PCI_BUS(data)				\
+		((data >> UNCORE_DISCOVERY_PCI_BUS_OFFSET) & 0xff)
+#define UNCORE_DISCOVERY_PCI_DEVFN_OFFSET	12
+#define UNCORE_DISCOVERY_PCI_DEVFN(data)			\
+		((data >> UNCORE_DISCOVERY_PCI_DEVFN_OFFSET) & 0xff)
 #define UNCORE_DISCOVERY_PCI_BOX_CTRL(data)	(data & 0xfff)
 
 
 #define uncore_discovery_invalid_unit(unit)			\
-	(!unit.table1 || !unit.ctl || !unit.table3 ||	\
+	(!unit.table1 || !unit.ctl || \
 	 unit.table1 == -1ULL || unit.ctl == -1ULL ||	\
 	 unit.table3 == -1ULL)
 
@@ -124,7 +128,7 @@ struct intel_uncore_discovery_type {
 	unsigned int	*box_offset;	/* Box offset */
 };
 
-bool intel_uncore_has_discovery_tables(void);
+bool intel_uncore_has_discovery_tables(int *ignore);
 void intel_uncore_clear_discovery_tables(void);
 void intel_uncore_generic_uncore_cpu_init(void);
 int intel_uncore_generic_uncore_pci_init(void);
@@ -139,6 +143,8 @@ void intel_generic_uncore_mmio_disable_box(struct intel_uncore_box *box);
 void intel_generic_uncore_mmio_enable_box(struct intel_uncore_box *box);
 void intel_generic_uncore_mmio_disable_event(struct intel_uncore_box *box,
 					     struct perf_event *event);
+void intel_generic_uncore_mmio_enable_event(struct intel_uncore_box *box,
+					    struct perf_event *event);
 
 void intel_generic_uncore_pci_init_box(struct intel_uncore_box *box);
 void intel_generic_uncore_pci_disable_box(struct intel_uncore_box *box);

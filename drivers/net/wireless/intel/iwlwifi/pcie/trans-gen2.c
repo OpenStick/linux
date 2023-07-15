@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
  * Copyright (C) 2017 Intel Deutschland GmbH
- * Copyright (C) 2018-2021 Intel Corporation
+ * Copyright (C) 2018-2022 Intel Corporation
  */
 #include "iwl-trans.h"
 #include "iwl-prph.h"
@@ -47,7 +47,7 @@ int iwl_pcie_gen2_apm_init(struct iwl_trans *trans)
 
 	iwl_pcie_apm_config(trans);
 
-	ret = iwl_finish_nic_init(trans, trans->trans_cfg);
+	ret = iwl_finish_nic_init(trans);
 	if (ret)
 		return ret;
 
@@ -81,7 +81,7 @@ static void iwl_pcie_gen2_apm_stop(struct iwl_trans *trans, bool op_mode_leave)
 	/* Stop device's DMA activity */
 	iwl_pcie_apm_stop_master(trans);
 
-	iwl_trans_sw_reset(trans);
+	iwl_trans_sw_reset(trans, false);
 
 	/*
 	 * Clear "initialization complete" bit to move adapter from
@@ -105,9 +105,12 @@ static void iwl_trans_pcie_fw_reset_handshake(struct iwl_trans *trans)
 	if (trans->trans_cfg->device_family < IWL_DEVICE_FAMILY_AX210)
 		iwl_write_umac_prph(trans, UREG_NIC_SET_NMI_DRIVER,
 				    UREG_NIC_SET_NMI_DRIVER_RESET_HANDSHAKE);
-	else
+	else if (trans->trans_cfg->device_family == IWL_DEVICE_FAMILY_AX210)
 		iwl_write_umac_prph(trans, UREG_DOORBELL_TO_ISR6,
 				    UREG_DOORBELL_TO_ISR6_RESET_HANDSHAKE);
+	else
+		iwl_write32(trans, CSR_DOORBELL_VECTOR,
+			    UREG_DOORBELL_TO_ISR6_RESET_HANDSHAKE);
 
 	/* wait 200ms */
 	ret = wait_event_timeout(trans_pcie->fw_reset_waitq,
@@ -131,21 +134,9 @@ void _iwl_trans_pcie_gen2_stop_device(struct iwl_trans *trans)
 	if (trans_pcie->is_down)
 		return;
 
-	if (trans->state >= IWL_TRANS_FW_STARTED) {
-		if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_BZ) {
-			iwl_set_bit(trans, CSR_GP_CNTRL,
-				    CSR_GP_CNTRL_REG_FLAG_BUS_MASTER_DISABLE_REQ);
-			iwl_poll_bit(trans, CSR_GP_CNTRL,
-				     CSR_GP_CNTRL_REG_FLAG_BUS_MASTER_DISABLE_STATUS,
-				     CSR_GP_CNTRL_REG_FLAG_BUS_MASTER_DISABLE_STATUS,
-				     5000);
-			msleep(100);
-			iwl_set_bit(trans, CSR_GP_CNTRL,
-				    CSR_GP_CNTRL_REG_FLAG_SW_RESET);
-		} else if (trans_pcie->fw_reset_handshake) {
+	if (trans->state >= IWL_TRANS_FW_STARTED)
+		if (trans_pcie->fw_reset_handshake)
 			iwl_trans_pcie_fw_reset_handshake(trans);
-		}
-	}
 
 	trans_pcie->is_down = true;
 
@@ -165,6 +156,7 @@ void _iwl_trans_pcie_gen2_stop_device(struct iwl_trans *trans)
 	if (test_and_clear_bit(STATUS_DEVICE_ENABLED, &trans->status)) {
 		IWL_DEBUG_INFO(trans,
 			       "DEVICE_ENABLED bit was set and is now cleared\n");
+		iwl_pcie_rx_napi_sync(trans);
 		iwl_txq_gen2_tx_free(trans);
 		iwl_pcie_rx_stop(trans);
 	}
@@ -175,22 +167,11 @@ void _iwl_trans_pcie_gen2_stop_device(struct iwl_trans *trans)
 	else
 		iwl_pcie_ctxt_info_free(trans);
 
-	/* Make sure (redundant) we've released our request to stay awake */
-	if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_BZ)
-		iwl_clear_bit(trans, CSR_GP_CNTRL,
-			      CSR_GP_CNTRL_REG_FLAG_BZ_MAC_ACCESS_REQ);
-	else
-		iwl_clear_bit(trans, CSR_GP_CNTRL,
-			      CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
-
-	if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_BZ) {
-		iwl_set_bit(trans, CSR_GP_CNTRL,
-			    CSR_GP_CNTRL_REG_FLAG_SW_RESET);
-	}
 	/* Stop the device, and put it in low power state */
 	iwl_pcie_gen2_apm_stop(trans, false);
 
-	iwl_trans_sw_reset(trans);
+	/* re-take ownership to prevent other users from stealing the device */
+	iwl_trans_sw_reset(trans, true);
 
 	/*
 	 * Upon stop, the IVAR table gets erased, so msi-x won't
@@ -220,9 +201,6 @@ void _iwl_trans_pcie_gen2_stop_device(struct iwl_trans *trans)
 	 * interrupt
 	 */
 	iwl_enable_rfkill_int(trans);
-
-	/* re-take ownership to prevent other users from stealing the device */
-	iwl_pcie_prepare_card_hw(trans);
 }
 
 void iwl_trans_pcie_gen2_stop_device(struct iwl_trans *trans)
@@ -300,6 +278,9 @@ static void iwl_pcie_get_rf_name(struct iwl_trans *trans)
 	case CSR_HW_RFID_TYPE(CSR_HW_RF_ID_TYPE_HRCDB):
 		pos = scnprintf(buf, buflen, "HRCDB");
 		break;
+	case CSR_HW_RFID_TYPE(CSR_HW_RF_ID_TYPE_MS):
+		pos = scnprintf(buf, buflen, "MS");
+		break;
 	default:
 		return;
 	}
@@ -370,7 +351,7 @@ void iwl_trans_pcie_gen2_fw_alive(struct iwl_trans *trans, u32 scd_addr)
 	mutex_unlock(&trans_pcie->mutex);
 }
 
-static void iwl_pcie_set_ltr(struct iwl_trans *trans)
+static bool iwl_pcie_set_ltr(struct iwl_trans *trans)
 {
 	u32 ltr_val = CSR_LTR_LONG_VAL_AD_NO_SNOOP_REQ |
 		      u32_encode_bits(CSR_LTR_LONG_VAL_AD_SCALE_USEC,
@@ -391,25 +372,83 @@ static void iwl_pcie_set_ltr(struct iwl_trans *trans)
 	     trans->trans_cfg->device_family == IWL_DEVICE_FAMILY_22000) &&
 	    !trans->trans_cfg->integrated) {
 		iwl_write32(trans, CSR_LTR_LONG_VAL_AD, ltr_val);
-	} else if (trans->trans_cfg->integrated &&
-		   trans->trans_cfg->device_family == IWL_DEVICE_FAMILY_22000) {
+		return true;
+	}
+
+	if (trans->trans_cfg->integrated &&
+	    trans->trans_cfg->device_family == IWL_DEVICE_FAMILY_22000) {
 		iwl_write_prph(trans, HPM_MAC_LTR_CSR, HPM_MAC_LRT_ENABLE_ALL);
 		iwl_write_prph(trans, HPM_UMAC_LTR, ltr_val);
+		return true;
 	}
+
+	if (trans->trans_cfg->device_family == IWL_DEVICE_FAMILY_AX210) {
+		/* First clear the interrupt, just in case */
+		iwl_write32(trans, CSR_MSIX_HW_INT_CAUSES_AD,
+			    MSIX_HW_INT_CAUSES_REG_IML);
+		/* In this case, unfortunately the same ROM bug exists in the
+		 * device (not setting LTR correctly), but we don't have control
+		 * over the settings from the host due to some hardware security
+		 * features. The only workaround we've been able to come up with
+		 * so far is to try to keep the CPU and device busy by polling
+		 * it and the IML (image loader) completed interrupt.
+		 */
+		return false;
+	}
+
+	/* nothing needs to be done on other devices */
+	return true;
+}
+
+static void iwl_pcie_spin_for_iml(struct iwl_trans *trans)
+{
+/* in practice, this seems to complete in around 20-30ms at most, wait 100 */
+#define IML_WAIT_TIMEOUT	(HZ / 10)
+	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
+	unsigned long end_time = jiffies + IML_WAIT_TIMEOUT;
+	u32 value, loops = 0;
+	bool irq = false;
+
+	if (WARN_ON(!trans_pcie->iml))
+		return;
+
+	value = iwl_read32(trans, CSR_LTR_LAST_MSG);
+	IWL_DEBUG_INFO(trans, "Polling for IML load - CSR_LTR_LAST_MSG=0x%x\n",
+		       value);
+
+	while (time_before(jiffies, end_time)) {
+		if (iwl_read32(trans, CSR_MSIX_HW_INT_CAUSES_AD) &
+				MSIX_HW_INT_CAUSES_REG_IML) {
+			irq = true;
+			break;
+		}
+		/* Keep the CPU and device busy. */
+		value = iwl_read32(trans, CSR_LTR_LAST_MSG);
+		loops++;
+	}
+
+	IWL_DEBUG_INFO(trans,
+		       "Polled for IML load: irq=%d, loops=%d, CSR_LTR_LAST_MSG=0x%x\n",
+		       irq, loops, value);
+
+	/* We don't fail here even if we timed out - maybe we get lucky and the
+	 * interrupt comes in later (and we get alive from firmware) and then
+	 * we're all happy - but if not we'll fail on alive timeout or get some
+	 * other error out.
+	 */
 }
 
 int iwl_trans_pcie_gen2_start_fw(struct iwl_trans *trans,
 				 const struct fw_img *fw, bool run_in_rfkill)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
-	bool hw_rfkill;
+	bool hw_rfkill, keep_ram_busy;
 	int ret;
 
 	/* This may fail if AMT took ownership of the device */
 	if (iwl_pcie_prepare_card_hw(trans)) {
 		IWL_WARN(trans, "Exit HW not ready\n");
-		ret = -EIO;
-		goto out;
+		return -EIO;
 	}
 
 	iwl_enable_rfkill_int(trans);
@@ -464,15 +503,20 @@ int iwl_trans_pcie_gen2_start_fw(struct iwl_trans *trans,
 	if (ret)
 		goto out;
 
-	iwl_pcie_set_ltr(trans);
+	keep_ram_busy = !iwl_pcie_set_ltr(trans);
 
-	if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_BZ)
+	if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_BZ) {
+		iwl_write32(trans, CSR_FUNC_SCRATCH, CSR_FUNC_SCRATCH_INIT_VALUE);
 		iwl_set_bit(trans, CSR_GP_CNTRL,
 			    CSR_GP_CNTRL_REG_FLAG_ROM_START);
-	else if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_AX210)
+	} else if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_AX210) {
 		iwl_write_umac_prph(trans, UREG_CPU_INIT_RUN, 1);
-	else
+	} else {
 		iwl_write_prph(trans, UREG_CPU_INIT_RUN, 1);
+	}
+
+	if (keep_ram_busy)
+		iwl_pcie_spin_for_iml(trans);
 
 	/* re-check RF-Kill state since we may have missed the interrupt */
 	hw_rfkill = iwl_pcie_check_hw_rf_kill(trans);

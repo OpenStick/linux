@@ -92,6 +92,8 @@ struct dispc_features {
 	u8 mgr_height_start;
 	u16 mgr_width_max;
 	u16 mgr_height_max;
+	u16 ovl_width_max;
+	u16 ovl_height_max;
 	unsigned long max_lcd_pclk;
 	unsigned long max_tv_pclk;
 	unsigned int max_downscale;
@@ -853,11 +855,6 @@ struct csc_coef_yuv2rgb {
 	bool full_range;
 };
 
-struct csc_coef_rgb2yuv {
-	int yr, yg, yb, cbr, cbg, cbb, crr, crg, crb;
-	bool full_range;
-};
-
 static void dispc_ovl_write_color_conv_coef(struct dispc_device *dispc,
 					    enum omap_plane_id plane,
 					    const struct csc_coef_yuv2rgb *ct)
@@ -1279,8 +1276,8 @@ static u32 dispc_ovl_get_burst_size(struct dispc_device *dispc,
 	return dispc->feat->burst_size_unit * 8;
 }
 
-static bool dispc_ovl_color_mode_supported(struct dispc_device *dispc,
-					   enum omap_plane_id plane, u32 fourcc)
+bool dispc_ovl_color_mode_supported(struct dispc_device *dispc,
+				    enum omap_plane_id plane, u32 fourcc)
 {
 	const u32 *modes;
 	unsigned int i;
@@ -2449,7 +2446,7 @@ static int dispc_ovl_calc_scaling_44xx(struct dispc_device *dispc,
 
 	*decim_x = DIV_ROUND_UP(width, in_width_max);
 
-	*decim_x = *decim_x > decim_x_min ? *decim_x : decim_x_min;
+	*decim_x = max(*decim_x, decim_x_min);
 	if (*decim_x > *x_predecim)
 		return -EINVAL;
 
@@ -2485,6 +2482,11 @@ static int dispc_ovl_calc_scaling_44xx(struct dispc_device *dispc,
 	*core_clk = dispc->feat->calc_core_clk(pclk, in_width, in_height,
 				out_width, out_height, mem_to_mem);
 	return 0;
+}
+
+enum omap_overlay_caps dispc_ovl_get_caps(struct dispc_device *dispc, enum omap_plane_id plane)
+{
+	return dispc->feat->overlay_caps[plane];
 }
 
 #define DIV_FRAC(dividend, divisor) \
@@ -2597,6 +2599,12 @@ static int dispc_ovl_calc_scaling(struct dispc_device *dispc,
 	*x_predecim = decim_x;
 	*y_predecim = decim_y;
 	return 0;
+}
+
+void dispc_ovl_get_max_size(struct dispc_device *dispc, u16 *width, u16 *height)
+{
+	*width = dispc->feat->ovl_width_max;
+	*height = dispc->feat->ovl_height_max;
 }
 
 static int dispc_ovl_setup_common(struct dispc_device *dispc,
@@ -4240,6 +4248,8 @@ static const struct dispc_features omap24xx_dispc_feats = {
 	.mgr_height_start	=	26,
 	.mgr_width_max		=	2048,
 	.mgr_height_max		=	2048,
+	.ovl_width_max		=	2048,
+	.ovl_height_max		=	2048,
 	.max_lcd_pclk		=	66500000,
 	.max_downscale		=	2,
 	/*
@@ -4278,6 +4288,8 @@ static const struct dispc_features omap34xx_rev1_0_dispc_feats = {
 	.mgr_height_start	=	26,
 	.mgr_width_max		=	2048,
 	.mgr_height_max		=	2048,
+	.ovl_width_max		=	2048,
+	.ovl_height_max		=	2048,
 	.max_lcd_pclk		=	173000000,
 	.max_tv_pclk		=	59000000,
 	.max_downscale		=	4,
@@ -4313,6 +4325,8 @@ static const struct dispc_features omap34xx_rev3_0_dispc_feats = {
 	.mgr_height_start	=	26,
 	.mgr_width_max		=	2048,
 	.mgr_height_max		=	2048,
+	.ovl_width_max		=	2048,
+	.ovl_height_max		=	2048,
 	.max_lcd_pclk		=	173000000,
 	.max_tv_pclk		=	59000000,
 	.max_downscale		=	4,
@@ -4348,6 +4362,8 @@ static const struct dispc_features omap36xx_dispc_feats = {
 	.mgr_height_start	=	26,
 	.mgr_width_max		=	2048,
 	.mgr_height_max		=	2048,
+	.ovl_width_max		=	2048,
+	.ovl_height_max		=	2048,
 	.max_lcd_pclk		=	173000000,
 	.max_tv_pclk		=	59000000,
 	.max_downscale		=	4,
@@ -4383,6 +4399,8 @@ static const struct dispc_features am43xx_dispc_feats = {
 	.mgr_height_start	=	26,
 	.mgr_width_max		=	2048,
 	.mgr_height_max		=	2048,
+	.ovl_width_max		=	2048,
+	.ovl_height_max		=	2048,
 	.max_lcd_pclk		=	173000000,
 	.max_tv_pclk		=	59000000,
 	.max_downscale		=	4,
@@ -4418,6 +4436,8 @@ static const struct dispc_features omap44xx_dispc_feats = {
 	.mgr_height_start	=	26,
 	.mgr_width_max		=	2048,
 	.mgr_height_max		=	2048,
+	.ovl_width_max		=	2048,
+	.ovl_height_max		=	2048,
 	.max_lcd_pclk		=	170000000,
 	.max_tv_pclk		=	185625000,
 	.max_downscale		=	4,
@@ -4457,8 +4477,10 @@ static const struct dispc_features omap54xx_dispc_feats = {
 	.mgr_height_start	=	27,
 	.mgr_width_max		=	4096,
 	.mgr_height_max		=	4096,
+	.ovl_width_max		=	2048,
+	.ovl_height_max		=	4096,
 	.max_lcd_pclk		=	170000000,
-	.max_tv_pclk		=	186000000,
+	.max_tv_pclk		=	192000000,
 	.max_downscale		=	4,
 	.max_line_width		=	2048,
 	.min_pcd		=	1,
@@ -4725,7 +4747,6 @@ static int dispc_bind(struct device *dev, struct device *master, void *data)
 	struct dispc_device *dispc;
 	u32 rev;
 	int r = 0;
-	struct resource *dispc_mem;
 	struct device_node *np = pdev->dev.of_node;
 
 	dispc = kzalloc(sizeof(*dispc), GFP_KERNEL);
@@ -4750,8 +4771,7 @@ static int dispc_bind(struct device *dev, struct device *master, void *data)
 	if (r)
 		goto err_free;
 
-	dispc_mem = platform_get_resource(dispc->pdev, IORESOURCE_MEM, 0);
-	dispc->base = devm_ioremap_resource(&pdev->dev, dispc_mem);
+	dispc->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(dispc->base)) {
 		r = PTR_ERR(dispc->base);
 		goto err_free;
@@ -4844,7 +4864,7 @@ static int dispc_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static int dispc_runtime_suspend(struct device *dev)
+static __maybe_unused int dispc_runtime_suspend(struct device *dev)
 {
 	struct dispc_device *dispc = dev_get_drvdata(dev);
 
@@ -4859,7 +4879,7 @@ static int dispc_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int dispc_runtime_resume(struct device *dev)
+static __maybe_unused int dispc_runtime_resume(struct device *dev)
 {
 	struct dispc_device *dispc = dev_get_drvdata(dev);
 
@@ -4887,8 +4907,7 @@ static int dispc_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops dispc_pm_ops = {
-	.runtime_suspend = dispc_runtime_suspend,
-	.runtime_resume = dispc_runtime_resume,
+	SET_RUNTIME_PM_OPS(dispc_runtime_suspend, dispc_runtime_resume, NULL)
 	SET_LATE_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
 };
 

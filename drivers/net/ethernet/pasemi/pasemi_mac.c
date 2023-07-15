@@ -221,7 +221,7 @@ static int pasemi_mac_set_mac_addr(struct net_device *dev, void *p)
 	if (!is_valid_ether_addr(addr->sa_data))
 		return -EADDRNOTAVAIL;
 
-	memcpy(dev->dev_addr, addr->sa_data, dev->addr_len);
+	eth_hw_addr_set(dev, addr->sa_data);
 
 	adr0 = dev->dev_addr[2] << 24 |
 	       dev->dev_addr[3] << 16 |
@@ -1423,7 +1423,7 @@ static void pasemi_mac_queue_csdesc(const struct sk_buff *skb,
 	write_dma_reg(PAS_DMA_TXCHAN_INCR(txring->chan.chno), 2);
 }
 
-static int pasemi_mac_start_tx(struct sk_buff *skb, struct net_device *dev)
+static netdev_tx_t pasemi_mac_start_tx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct pasemi_mac * const mac = netdev_priv(dev);
 	struct pasemi_mac_txring * const txring = tx_ring(mac);
@@ -1697,7 +1697,7 @@ pasemi_mac_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	mac->pdev = pdev;
 	mac->netdev = dev;
 
-	netif_napi_add(dev, &mac->napi, pasemi_mac_poll, 64);
+	netif_napi_add(dev, &mac->napi, pasemi_mac_poll);
 
 	dev->features = NETIF_F_IP_CSUM | NETIF_F_LLTX | NETIF_F_SG |
 			NETIF_F_HIGHDMA | NETIF_F_GSO;
@@ -1722,7 +1722,7 @@ pasemi_mac_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		err = -ENODEV;
 		goto out;
 	}
-	memcpy(dev->dev_addr, mac->mac_addr, sizeof(mac->mac_addr));
+	eth_hw_addr_set(dev, mac->mac_addr);
 
 	ret = mac_to_intf(mac);
 	if (ret < 0) {

@@ -66,6 +66,7 @@ static const char version[] =
 #include <linux/isapnp.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
+#include <net/Space.h>
 
 #include <asm/io.h>
 #include <asm/irq.h>
@@ -204,6 +205,7 @@ static int __init ultra_probe1(struct net_device *dev, int ioaddr)
 {
 	int i, retval;
 	int checksum = 0;
+	u8 macaddr[ETH_ALEN];
 	const char *model_name;
 	unsigned char eeprom_irq = 0;
 	static unsigned version_printed;
@@ -239,7 +241,8 @@ static int __init ultra_probe1(struct net_device *dev, int ioaddr)
 	model_name = (idreg & 0xF0) == 0x20 ? "SMC Ultra" : "SMC EtherEZ";
 
 	for (i = 0; i < 6; i++)
-		dev->dev_addr[i] = inb(ioaddr + 8 + i);
+		macaddr[i] = inb(ioaddr + 8 + i);
+	eth_hw_addr_set(dev, macaddr);
 
 	netdev_info(dev, "%s at %#3x, %pM", model_name,
 		    ioaddr, dev->dev_addr);

@@ -327,7 +327,7 @@ static int ttusb_dec_send_command(struct ttusb_dec *dec, const u8 command,
 	result = mutex_lock_interruptible(&dec->usb_mutex);
 	if (result) {
 		printk("%s: Failed to lock usb mutex.\n", __func__);
-		goto err;
+		goto err_free;
 	}
 
 	b[0] = 0xaa;
@@ -349,7 +349,7 @@ static int ttusb_dec_send_command(struct ttusb_dec *dec, const u8 command,
 	if (result) {
 		printk("%s: command bulk message failed: error %d\n",
 		       __func__, result);
-		goto err;
+		goto err_mutex_unlock;
 	}
 
 	result = usb_bulk_msg(dec->udev, dec->result_pipe, b,
@@ -358,7 +358,7 @@ static int ttusb_dec_send_command(struct ttusb_dec *dec, const u8 command,
 	if (result) {
 		printk("%s: result bulk message failed: error %d\n",
 		       __func__, result);
-		goto err;
+		goto err_mutex_unlock;
 	} else {
 		if (debug) {
 			printk(KERN_DEBUG "%s: result: %*ph\n",
@@ -371,9 +371,9 @@ static int ttusb_dec_send_command(struct ttusb_dec *dec, const u8 command,
 			memcpy(cmd_result, &b[4], b[3]);
 	}
 
-err:
+err_mutex_unlock:
 	mutex_unlock(&dec->usb_mutex);
-
+err_free:
 	kfree(b);
 	return result;
 }
@@ -1544,8 +1544,7 @@ static void ttusb_dec_exit_dvb(struct ttusb_dec *dec)
 	dvb_dmx_release(&dec->demux);
 	if (dec->fe) {
 		dvb_unregister_frontend(dec->fe);
-		if (dec->fe->ops.release)
-			dec->fe->ops.release(dec->fe);
+		dvb_frontend_detach(dec->fe);
 	}
 	dvb_unregister_adapter(&dec->adapter);
 }

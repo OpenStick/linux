@@ -25,7 +25,6 @@ static struct snd_soc_acpi_mach sof_tng_machines[] = {
 	{
 		.id = "INT343A",
 		.drv_name = "edison",
-		.sof_fw_filename = "sof-byt.ri",
 		.sof_tplg_filename = "sof-byt.tplg",
 	},
 	{}
@@ -55,8 +54,17 @@ static int tangier_pci_probe(struct snd_sof_dev *sdev)
 	struct snd_sof_pdata *pdata = sdev->pdata;
 	const struct sof_dev_desc *desc = pdata->desc;
 	struct pci_dev *pci = to_pci_dev(sdev->dev);
+	const struct sof_intel_dsp_desc *chip;
 	u32 base, size;
 	int ret;
+
+	chip = get_chip_info(sdev->pdata);
+	if (!chip) {
+		dev_err(sdev->dev, "error: no such device supported\n");
+		return -EIO;
+	}
+
+	sdev->num_cores = chip->cores_num;
 
 	/* DSP DMA can only access low 31 bits of host memory */
 	ret = dma_coerce_mask_and_coherent(&pci->dev, DMA_BIT_MASK(31));
@@ -124,7 +132,7 @@ irq:
 	return ret;
 }
 
-const struct snd_sof_dsp_ops sof_tng_ops = {
+struct snd_sof_dsp_ops sof_tng_ops = {
 	/* device init */
 	.probe		= tangier_pci_probe,
 
@@ -132,15 +140,15 @@ const struct snd_sof_dsp_ops sof_tng_ops = {
 	.run		= atom_run,
 	.reset		= atom_reset,
 
-	/* Register IO */
-	.write		= sof_io_write,
-	.read		= sof_io_read,
-	.write64	= sof_io_write64,
-	.read64		= sof_io_read64,
+	/* Register IO uses direct mmio */
 
 	/* Block IO */
 	.block_read	= sof_block_read,
 	.block_write	= sof_block_write,
+
+	/* Mailbox IO */
+	.mailbox_read	= sof_mailbox_read,
+	.mailbox_write	= sof_mailbox_write,
 
 	/* doorbell */
 	.irq_handler	= atom_irq_handler,
@@ -148,12 +156,11 @@ const struct snd_sof_dsp_ops sof_tng_ops = {
 
 	/* ipc */
 	.send_msg	= atom_send_msg,
-	.fw_ready	= sof_fw_ready,
 	.get_mailbox_offset = atom_get_mailbox_offset,
 	.get_window_offset = atom_get_window_offset,
 
-	.ipc_msg_data	= intel_ipc_msg_data,
-	.ipc_pcm_params	= intel_ipc_pcm_params,
+	.ipc_msg_data	= sof_ipc_msg_data,
+	.set_stream_data_offset = sof_set_stream_data_offset,
 
 	/* machine driver */
 	.machine_select = atom_machine_select,
@@ -165,13 +172,11 @@ const struct snd_sof_dsp_ops sof_tng_ops = {
 	.debug_map	= tng_debugfs,
 	.debug_map_count	= ARRAY_SIZE(tng_debugfs),
 	.dbg_dump	= atom_dump,
+	.debugfs_add_region_item = snd_sof_debugfs_add_region_item_iomem,
 
 	/* stream callbacks */
-	.pcm_open	= intel_pcm_open,
-	.pcm_close	= intel_pcm_close,
-
-	/* module loading */
-	.load_module	= snd_sof_parse_module_memcpy,
+	.pcm_open	= sof_stream_pcm_open,
+	.pcm_close	= sof_stream_pcm_close,
 
 	/*Firmware loading */
 	.load_firmware	= snd_sof_load_firmware_memcpy,
@@ -187,12 +192,13 @@ const struct snd_sof_dsp_ops sof_tng_ops = {
 			SNDRV_PCM_INFO_PAUSE |
 			SNDRV_PCM_INFO_BATCH,
 
-	.arch_ops = &sof_xtensa_arch_ops,
+	.dsp_arch_ops = &sof_xtensa_arch_ops,
 };
 
 const struct sof_intel_dsp_desc tng_chip_info = {
 	.cores_num = 1,
 	.host_managed_cores_mask = 1,
+	.hw_ip_version = SOF_INTEL_TANGIER,
 };
 
 static const struct sof_dev_desc tng_desc = {
@@ -201,11 +207,18 @@ static const struct sof_dev_desc tng_desc = {
 	.resindex_pcicfg_base	= -1,
 	.resindex_imr_base	= 0,
 	.irqindex_host_ipc	= -1,
-	.resindex_dma_base	= -1,
 	.chip_info = &tng_chip_info,
-	.default_fw_path = "intel/sof",
-	.default_tplg_path = "intel/sof-tplg",
-	.default_fw_filename = "sof-byt.ri",
+	.ipc_supported_mask	= BIT(SOF_IPC),
+	.ipc_default		= SOF_IPC,
+	.default_fw_path = {
+		[SOF_IPC] = "intel/sof",
+	},
+	.default_tplg_path = {
+		[SOF_IPC] = "intel/sof-tplg",
+	},
+	.default_fw_filename = {
+		[SOF_IPC] = "sof-byt.ri",
+	},
 	.nocodec_tplg_filename = "sof-byt.tplg",
 	.ops = &sof_tng_ops,
 };

@@ -254,6 +254,15 @@ struct mvumi_cmd {
 	unsigned char cmd_status;
 };
 
+struct mvumi_cmd_priv {
+	struct mvumi_cmd *cmd_priv;
+};
+
+static inline struct mvumi_cmd_priv *mvumi_priv(struct scsi_cmnd *cmd)
+{
+	return scsi_cmd_priv(cmd);
+}
+
 /*
  * the function type of the in bound frame
  */
@@ -270,7 +279,7 @@ struct mvumi_msg_frame {
 	u16 request_id;
 	u16 reserved1;
 	u8 cdb[MAX_COMMAND_SIZE];
-	u32 payload[1];
+	u32 payload[];
 };
 
 /*
@@ -285,7 +294,7 @@ struct mvumi_rsp_frame {
 	u8 req_status;
 	u8 rsp_flag;	/* Indicates the type of Data_Payload.*/
 	u16 request_id;
-	u32 payload[1];
+	u32 payload[];
 };
 
 struct mvumi_ob_data {
@@ -371,7 +380,7 @@ struct mvumi_hs_header {
 	u8	page_code;
 	u8	checksum;
 	u16	frame_length;
-	u32	frame_content[1];
+	u32	frame_content[];
 };
 
 /*

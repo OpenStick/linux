@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (c) 2021 FIXME
+// Copyright (c) 2023 FIXME
 // Generated with linux-mdss-dsi-panel-driver-generator from vendor device tree:
 //   Copyright (c) 2013, The Linux Foundation. All rights reserved. (FIXME)
 
@@ -29,14 +29,6 @@ struct s6e88a0_ams427ap24 *to_s6e88a0_ams427ap24(struct drm_panel *panel)
 	return container_of(panel, struct s6e88a0_ams427ap24, panel);
 }
 
-#define dsi_dcs_write_seq(dsi, seq...) do {				\
-		static const u8 d[] = { seq };				\
-		int ret;						\
-		ret = mipi_dsi_dcs_write_buffer(dsi, d, ARRAY_SIZE(d));	\
-		if (ret < 0)						\
-			return ret;					\
-	} while (0)
-
 static void s6e88a0_ams427ap24_reset(struct s6e88a0_ams427ap24 *ctx)
 {
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
@@ -55,14 +47,14 @@ static int s6e88a0_ams427ap24_on(struct s6e88a0_ams427ap24 *ctx)
 
 	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 
-	dsi_dcs_write_seq(dsi, 0xf0, 0x5a, 0x5a);
-	dsi_dcs_write_seq(dsi, 0xfc, 0x5a, 0x5a);
-	dsi_dcs_write_seq(dsi, 0xb0, 0x11);
-	dsi_dcs_write_seq(dsi, 0xfd, 0x11);
-	dsi_dcs_write_seq(dsi, 0xb0, 0x13);
-	dsi_dcs_write_seq(dsi, 0xfd, 0x18);
-	dsi_dcs_write_seq(dsi, 0xb0, 0x02);
-	dsi_dcs_write_seq(dsi, 0xb8, 0x30);
+	mipi_dsi_dcs_write_seq(dsi, 0xf0, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq(dsi, 0xfc, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq(dsi, 0xb0, 0x11);
+	mipi_dsi_dcs_write_seq(dsi, 0xfd, 0x11);
+	mipi_dsi_dcs_write_seq(dsi, 0xb0, 0x13);
+	mipi_dsi_dcs_write_seq(dsi, 0xfd, 0x18);
+	mipi_dsi_dcs_write_seq(dsi, 0xb0, 0x02);
+	mipi_dsi_dcs_write_seq(dsi, 0xb8, 0x30);
 
 	ret = mipi_dsi_dcs_exit_sleep_mode(dsi);
 	if (ret < 0) {
@@ -71,21 +63,22 @@ static int s6e88a0_ams427ap24_on(struct s6e88a0_ams427ap24 *ctx)
 	}
 	msleep(20);
 
-	dsi_dcs_write_seq(dsi, 0xf1, 0x5a, 0x5a);
-	dsi_dcs_write_seq(dsi, 0xcc, 0x4c);
-	dsi_dcs_write_seq(dsi, 0xf2, 0x03, 0x0d);
-	dsi_dcs_write_seq(dsi, 0xf1, 0xa5, 0xa5);
-	dsi_dcs_write_seq(dsi, 0xca,
-			  0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x80, 0x80, 0x80,
-			  0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
-			  0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
-			  0x80, 0x80, 0x80, 0x00, 0x00, 0x00);
-	dsi_dcs_write_seq(dsi, 0xb2, 0x40, 0x08, 0x20, 0x00, 0x08);
-	dsi_dcs_write_seq(dsi, 0xb6, 0x28, 0x0b);
-	dsi_dcs_write_seq(dsi, 0xf7, 0x03);
-	dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_POWER_SAVE, 0x00);
-	dsi_dcs_write_seq(dsi, 0xf0, 0xa5, 0xa5);
-	dsi_dcs_write_seq(dsi, 0xfc, 0xa5, 0xa5);
+	mipi_dsi_dcs_write_seq(dsi, 0xf1, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq(dsi, 0xcc, 0x4c);
+	mipi_dsi_dcs_write_seq(dsi, 0xf2, 0x03, 0x0d);
+	mipi_dsi_dcs_write_seq(dsi, 0xf1, 0xa5, 0xa5);
+	mipi_dsi_dcs_write_seq(dsi, 0xca,
+			       0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x80, 0x80,
+			       0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+			       0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
+			       0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00, 0x00,
+			       0x00);
+	mipi_dsi_dcs_write_seq(dsi, 0xb2, 0x40, 0x08, 0x20, 0x00, 0x08);
+	mipi_dsi_dcs_write_seq(dsi, 0xb6, 0x28, 0x0b);
+	mipi_dsi_dcs_write_seq(dsi, 0xf7, 0x03);
+	mipi_dsi_dcs_write_seq(dsi, MIPI_DCS_WRITE_POWER_SAVE, 0x00);
+	mipi_dsi_dcs_write_seq(dsi, 0xf0, 0xa5, 0xa5);
+	mipi_dsi_dcs_write_seq(dsi, 0xfc, 0xa5, 0xa5);
 
 	ret = mipi_dsi_dcs_set_display_on(dsi);
 	if (ret < 0) {
@@ -253,7 +246,7 @@ static int s6e88a0_ams427ap24_probe(struct mipi_dsi_device *dsi)
 	return 0;
 }
 
-static int s6e88a0_ams427ap24_remove(struct mipi_dsi_device *dsi)
+static void s6e88a0_ams427ap24_remove(struct mipi_dsi_device *dsi)
 {
 	struct s6e88a0_ams427ap24 *ctx = mipi_dsi_get_drvdata(dsi);
 	int ret;
@@ -263,8 +256,6 @@ static int s6e88a0_ams427ap24_remove(struct mipi_dsi_device *dsi)
 		dev_err(&dsi->dev, "Failed to detach from DSI host: %d\n", ret);
 
 	drm_panel_remove(&ctx->panel);
-
-	return 0;
 }
 
 static const struct of_device_id s6e88a0_ams427ap24_of_match[] = {
@@ -285,4 +276,4 @@ module_mipi_dsi_driver(s6e88a0_ams427ap24_driver);
 
 MODULE_AUTHOR("linux-mdss-dsi-panel-driver-generator <fix@me>"); // FIXME
 MODULE_DESCRIPTION("DRM driver for ss_dsi_panel_S6E88A0_AMS427AP24_QHD");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

@@ -36,7 +36,7 @@
 #include <linux/mlx5/device.h>
 #include <linux/mlx5/driver.h>
 
-#define MLX5_INVALID_LKEY	0x100
+#define MLX5_TERMINATE_SCATTER_LIST_LKEY cpu_to_be32(0x100)
 /* UMR (3 WQE_BB's) + SIG (3 WQE_BB's) + PSV (mem) + PSV (wire) */
 #define MLX5_SIG_WQE_SIZE	(MLX5_SEND_WQE_BB * 8)
 #define MLX5_DIF_SIZE		8
@@ -162,6 +162,8 @@ enum {
 	MLX5_SEND_WQE_MAX_WQEBBS	= 16,
 };
 
+#define MLX5_SEND_WQE_MAX_SIZE (MLX5_SEND_WQE_MAX_WQEBBS * MLX5_SEND_WQE_BB)
+
 enum {
 	MLX5_WQE_FMR_PERM_LOCAL_READ	= 1 << 27,
 	MLX5_WQE_FMR_PERM_LOCAL_WRITE	= 1 << 28,
@@ -202,6 +204,9 @@ struct mlx5_wqe_fmr_seg {
 struct mlx5_wqe_ctrl_seg {
 	__be32			opmod_idx_opcode;
 	__be32			qpn_ds;
+
+	struct_group(trailer,
+
 	u8			signature;
 	u8			rsvd[2];
 	u8			fm_ce_se;
@@ -211,6 +216,8 @@ struct mlx5_wqe_ctrl_seg {
 		__be32		umr_mkey;
 		__be32		tis_tir_num;
 	};
+
+	); /* end of trailer group */
 };
 
 #define MLX5_WQE_CTRL_DS_MASK 0x3f
@@ -247,6 +254,7 @@ enum {
 
 enum {
 	MLX5_ETH_WQE_FT_META_IPSEC = BIT(0),
+	MLX5_ETH_WQE_FT_META_MACSEC = BIT(1),
 };
 
 struct mlx5_wqe_eth_seg {
@@ -470,6 +478,12 @@ struct mlx5_klm {
 	__be64		va;
 };
 
+struct mlx5_ksm {
+	__be32		reserved;
+	__be32		key;
+	__be64		va;
+};
+
 struct mlx5_stride_block_entry {
 	__be16		stride;
 	__be16		bcount;
@@ -483,6 +497,16 @@ struct mlx5_stride_block_ctrl_seg {
 	__be32		repeat_count;
 	u16		rsvd;
 	__be16		num_entries;
+};
+
+struct mlx5_wqe_flow_update_ctrl_seg {
+	__be32		flow_idx_update;
+	__be32		dest_handle;
+	u8		reserved0[40];
+};
+
+struct mlx5_wqe_header_modify_argument_update_seg {
+	u8		argument_list[64];
 };
 
 struct mlx5_core_qp {

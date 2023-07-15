@@ -31,32 +31,23 @@
 
 #define pr_fmt(fmt) "[TTM] " fmt
 
-#include <drm/ttm/ttm_bo_driver.h>
+#include <drm/ttm/ttm_bo.h>
 #include <drm/ttm/ttm_placement.h>
-#include <drm/drm_vma_manager.h>
+#include <drm/ttm/ttm_tt.h>
+
 #include <drm/drm_drv.h>
 #include <drm/drm_managed.h>
-#include <linux/mm.h>
-#include <linux/pfn_t.h>
-#include <linux/rbtree.h>
-#include <linux/module.h>
-#include <linux/uaccess.h>
-#include <linux/mem_encrypt.h>
 
 static vm_fault_t ttm_bo_vm_fault_idle(struct ttm_buffer_object *bo,
 				struct vm_fault *vmf)
 {
-	vm_fault_t ret = 0;
-	int err = 0;
-
-	if (likely(!bo->moving))
-		goto out_unlock;
+	long err = 0;
 
 	/*
 	 * Quick non-stalling check for idle.
 	 */
-	if (dma_fence_is_signaled(bo->moving))
-		goto out_clear;
+	if (dma_resv_test_signaled(bo->base.resv, DMA_RESV_USAGE_KERNEL))
+		return 0;
 
 	/*
 	 * If possible, avoid waiting for GPU with mmap_lock
@@ -64,34 +55,30 @@ static vm_fault_t ttm_bo_vm_fault_idle(struct ttm_buffer_object *bo,
 	 * is the first attempt.
 	 */
 	if (fault_flag_allow_retry_first(vmf->flags)) {
-		ret = VM_FAULT_RETRY;
 		if (vmf->flags & FAULT_FLAG_RETRY_NOWAIT)
-			goto out_unlock;
+			return VM_FAULT_RETRY;
 
 		ttm_bo_get(bo);
 		mmap_read_unlock(vmf->vma->vm_mm);
-		(void) dma_fence_wait(bo->moving, true);
+		(void)dma_resv_wait_timeout(bo->base.resv,
+					    DMA_RESV_USAGE_KERNEL, true,
+					    MAX_SCHEDULE_TIMEOUT);
 		dma_resv_unlock(bo->base.resv);
 		ttm_bo_put(bo);
-		goto out_unlock;
+		return VM_FAULT_RETRY;
 	}
 
 	/*
 	 * Ordinary wait.
 	 */
-	err = dma_fence_wait(bo->moving, true);
-	if (unlikely(err != 0)) {
-		ret = (err != -ERESTARTSYS) ? VM_FAULT_SIGBUS :
+	err = dma_resv_wait_timeout(bo->base.resv, DMA_RESV_USAGE_KERNEL, true,
+				    MAX_SCHEDULE_TIMEOUT);
+	if (unlikely(err < 0)) {
+		return (err != -ERESTARTSYS) ? VM_FAULT_SIGBUS :
 			VM_FAULT_NOPAGE;
-		goto out_unlock;
 	}
 
-out_clear:
-	dma_fence_put(bo->moving);
-	bo->moving = NULL;
-
-out_unlock:
-	return ret;
+	return 0;
 }
 
 static unsigned long ttm_bo_io_mem_pfn(struct ttm_buffer_object *bo,
@@ -110,7 +97,7 @@ static unsigned long ttm_bo_io_mem_pfn(struct ttm_buffer_object *bo,
  * @bo: The buffer object
  * @vmf: The fault structure handed to the callback
  *
- * vm callbacks like fault() and *_mkwrite() allow for the mm_sem to be dropped
+ * vm callbacks like fault() and *_mkwrite() allow for the mmap_lock to be dropped
  * during long waits, and after the wait the callback will be restarted. This
  * is to allow other threads using the same virtual memory space concurrent
  * access to map(), unmap() completely unrelated buffer objects. TTM buffer
@@ -162,97 +149,16 @@ vm_fault_t ttm_bo_vm_reserve(struct ttm_buffer_object *bo,
 	 * Refuse to fault imported pages. This should be handled
 	 * (if at all) by redirecting mmap to the exporter.
 	 */
-	if (bo->ttm && (bo->ttm->page_flags & TTM_PAGE_FLAG_SG)) {
-		dma_resv_unlock(bo->base.resv);
-		return VM_FAULT_SIGBUS;
+	if (bo->ttm && (bo->ttm->page_flags & TTM_TT_FLAG_EXTERNAL)) {
+		if (!(bo->ttm->page_flags & TTM_TT_FLAG_EXTERNAL_MAPPABLE)) {
+			dma_resv_unlock(bo->base.resv);
+			return VM_FAULT_SIGBUS;
+		}
 	}
 
 	return 0;
 }
 EXPORT_SYMBOL(ttm_bo_vm_reserve);
-
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
-/**
- * ttm_bo_vm_insert_huge - Insert a pfn for PUD or PMD faults
- * @vmf: Fault data
- * @bo: The buffer object
- * @page_offset: Page offset from bo start
- * @fault_page_size: The size of the fault in pages.
- * @pgprot: The page protections.
- * Does additional checking whether it's possible to insert a PUD or PMD
- * pfn and performs the insertion.
- *
- * Return: VM_FAULT_NOPAGE on successful insertion, VM_FAULT_FALLBACK if
- * a huge fault was not possible, or on insertion error.
- */
-static vm_fault_t ttm_bo_vm_insert_huge(struct vm_fault *vmf,
-					struct ttm_buffer_object *bo,
-					pgoff_t page_offset,
-					pgoff_t fault_page_size,
-					pgprot_t pgprot)
-{
-	pgoff_t i;
-	vm_fault_t ret;
-	unsigned long pfn;
-	pfn_t pfnt;
-	struct ttm_tt *ttm = bo->ttm;
-	bool write = vmf->flags & FAULT_FLAG_WRITE;
-
-	/* Fault should not cross bo boundary. */
-	page_offset &= ~(fault_page_size - 1);
-	if (page_offset + fault_page_size > bo->resource->num_pages)
-		goto out_fallback;
-
-	if (bo->resource->bus.is_iomem)
-		pfn = ttm_bo_io_mem_pfn(bo, page_offset);
-	else
-		pfn = page_to_pfn(ttm->pages[page_offset]);
-
-	/* pfn must be fault_page_size aligned. */
-	if ((pfn & (fault_page_size - 1)) != 0)
-		goto out_fallback;
-
-	/* Check that memory is contiguous. */
-	if (!bo->resource->bus.is_iomem) {
-		for (i = 1; i < fault_page_size; ++i) {
-			if (page_to_pfn(ttm->pages[page_offset + i]) != pfn + i)
-				goto out_fallback;
-		}
-	} else if (bo->bdev->funcs->io_mem_pfn) {
-		for (i = 1; i < fault_page_size; ++i) {
-			if (ttm_bo_io_mem_pfn(bo, page_offset + i) != pfn + i)
-				goto out_fallback;
-		}
-	}
-
-	pfnt = __pfn_to_pfn_t(pfn, PFN_DEV);
-	if (fault_page_size == (HPAGE_PMD_SIZE >> PAGE_SHIFT))
-		ret = vmf_insert_pfn_pmd_prot(vmf, pfnt, pgprot, write);
-#ifdef CONFIG_HAVE_ARCH_TRANSPARENT_HUGEPAGE_PUD
-	else if (fault_page_size == (HPAGE_PUD_SIZE >> PAGE_SHIFT))
-		ret = vmf_insert_pfn_pud_prot(vmf, pfnt, pgprot, write);
-#endif
-	else
-		WARN_ON_ONCE(ret = VM_FAULT_FALLBACK);
-
-	if (ret != VM_FAULT_NOPAGE)
-		goto out_fallback;
-
-	return VM_FAULT_NOPAGE;
-out_fallback:
-	count_vm_event(THP_FAULT_FALLBACK);
-	return VM_FAULT_FALLBACK;
-}
-#else
-static vm_fault_t ttm_bo_vm_insert_huge(struct vm_fault *vmf,
-					struct ttm_buffer_object *bo,
-					pgoff_t page_offset,
-					pgoff_t fault_page_size,
-					pgprot_t pgprot)
-{
-	return VM_FAULT_FALLBACK;
-}
-#endif
 
 /**
  * ttm_bo_vm_fault_reserved - TTM fault helper
@@ -261,7 +167,6 @@ static vm_fault_t ttm_bo_vm_insert_huge(struct vm_fault *vmf,
  * @num_prefault: Maximum number of prefault pages. The caller may want to
  * specify this based on madvice settings and the size of the GPU object
  * backed by the memory.
- * @fault_page_size: The size of the fault in pages.
  *
  * This function inserts one or more page table entries pointing to the
  * memory backing the buffer object, and then returns a return code
@@ -275,8 +180,7 @@ static vm_fault_t ttm_bo_vm_insert_huge(struct vm_fault *vmf,
  */
 vm_fault_t ttm_bo_vm_fault_reserved(struct vm_fault *vmf,
 				    pgprot_t prot,
-				    pgoff_t num_prefault,
-				    pgoff_t fault_page_size)
+				    pgoff_t num_prefault)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	struct ttm_buffer_object *bo = vma->vm_private_data;
@@ -308,29 +212,31 @@ vm_fault_t ttm_bo_vm_fault_reserved(struct vm_fault *vmf,
 	page_last = vma_pages(vma) + vma->vm_pgoff -
 		drm_vma_node_start(&bo->base.vma_node);
 
-	if (unlikely(page_offset >= bo->resource->num_pages))
+	if (unlikely(page_offset >= PFN_UP(bo->base.size)))
 		return VM_FAULT_SIGBUS;
 
 	prot = ttm_io_prot(bo, bo->resource, prot);
 	if (!bo->resource->bus.is_iomem) {
 		struct ttm_operation_ctx ctx = {
-			.interruptible = false,
+			.interruptible = true,
 			.no_wait_gpu = false,
 			.force_alloc = true
 		};
 
 		ttm = bo->ttm;
-		if (ttm_tt_populate(bdev, bo->ttm, &ctx))
-			return VM_FAULT_OOM;
+		err = ttm_tt_populate(bdev, bo->ttm, &ctx);
+		if (err) {
+			if (err == -EINTR || err == -ERESTARTSYS ||
+			    err == -EAGAIN)
+				return VM_FAULT_NOPAGE;
+
+			pr_debug("TTM fault hit %pe.\n", ERR_PTR(err));
+			return VM_FAULT_SIGBUS;
+		}
 	} else {
 		/* Iomem should not be marked encrypted */
 		prot = pgprot_decrypted(prot);
 	}
-
-	/* We don't prefault on huge faults. Yet. */
-	if (IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE) && fault_page_size != 1)
-		return ttm_bo_vm_insert_huge(vmf, bo, page_offset,
-					     fault_page_size, prot);
 
 	/*
 	 * Speculatively prefault a number of pages. Only error on
@@ -346,8 +252,6 @@ vm_fault_t ttm_bo_vm_fault_reserved(struct vm_fault *vmf,
 			} else if (unlikely(!page)) {
 				break;
 			}
-			page->index = drm_vma_node_start(&bo->base.vma_node) +
-				page_offset;
 			pfn = page_to_pfn(page);
 		}
 
@@ -357,7 +261,7 @@ vm_fault_t ttm_bo_vm_fault_reserved(struct vm_fault *vmf,
 		 * encryption bits. This is because the exact location of the
 		 * data may not be known at mmap() time and may also change
 		 * at arbitrary times while the data is mmap'ed.
-		 * See vmf_insert_mixed_prot() for a discussion.
+		 * See vmf_insert_pfn_prot() for a discussion.
 		 */
 		ret = vmf_insert_pfn_prot(vma, address, pfn, prot);
 
@@ -429,7 +333,7 @@ vm_fault_t ttm_bo_vm_fault(struct vm_fault *vmf)
 
 	prot = vma->vm_page_prot;
 	if (drm_dev_enter(ddev, &idx)) {
-		ret = ttm_bo_vm_fault_reserved(vmf, prot, TTM_BO_VM_NUM_PREFAULT, 1);
+		ret = ttm_bo_vm_fault_reserved(vmf, prot, TTM_BO_VM_NUM_PREFAULT);
 		drm_dev_exit(idx);
 	} else {
 		ret = ttm_bo_vm_dummy_page(vmf, prot);
@@ -510,7 +414,7 @@ int ttm_bo_vm_access(struct vm_area_struct *vma, unsigned long addr,
 		 << PAGE_SHIFT);
 	int ret;
 
-	if (len < 1 || (offset + len) >> PAGE_SHIFT > bo->resource->num_pages)
+	if (len < 1 || (offset + len) > bo->base.size)
 		return -EIO;
 
 	ret = ttm_bo_reserve(bo, true, false, NULL);
@@ -519,11 +423,6 @@ int ttm_bo_vm_access(struct vm_area_struct *vma, unsigned long addr,
 
 	switch (bo->resource->mem_type) {
 	case TTM_PL_SYSTEM:
-		if (unlikely(bo->ttm->page_flags & TTM_PAGE_FLAG_SWAPPED)) {
-			ret = ttm_tt_swapin(bo->ttm);
-			if (unlikely(ret != 0))
-				return ret;
-		}
 		fallthrough;
 	case TTM_PL_TT:
 		ret = ttm_bo_vm_access_kmap(bo, offset, buf, len, write);
@@ -549,6 +448,14 @@ static const struct vm_operations_struct ttm_bo_vm_ops = {
 	.access = ttm_bo_vm_access,
 };
 
+/**
+ * ttm_bo_mmap_obj - mmap memory backed by a ttm buffer object.
+ *
+ * @vma:       vma as input from the fbdev mmap method.
+ * @bo:        The bo backing the address space.
+ *
+ * Maps a buffer object.
+ */
 int ttm_bo_mmap_obj(struct vm_area_struct *vma, struct ttm_buffer_object *bo)
 {
 	/* Enforce no COW since would have really strange behavior with it. */
@@ -571,8 +478,7 @@ int ttm_bo_mmap_obj(struct vm_area_struct *vma, struct ttm_buffer_object *bo)
 
 	vma->vm_private_data = bo;
 
-	vma->vm_flags |= VM_PFNMAP;
-	vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
+	vm_flags_set(vma, VM_PFNMAP | VM_IO | VM_DONTEXPAND | VM_DONTDUMP);
 	return 0;
 }
 EXPORT_SYMBOL(ttm_bo_mmap_obj);

@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0
+
+obj-$(CONFIG_APERTURE_HELPERS)    += aperture.o
 obj-$(CONFIG_VGASTATE)            += vgastate.o
+obj-$(CONFIG_VIDEO_CMDLINE)       += cmdline.o
+obj-$(CONFIG_VIDEO_NOMODESET)     += nomodeset.o
 obj-$(CONFIG_HDMI)                += hdmi.o
 
 obj-$(CONFIG_VT)		  += console/
